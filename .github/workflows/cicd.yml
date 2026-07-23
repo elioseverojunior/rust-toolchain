@@ -1,0 +1,556 @@
+name: CICD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: read-all
+
+concurrency:
+  group: cicd-${{ github.ref_name }}
+  cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch }}
+
+env:
+  GITVERSION_SPEC: ${{ vars.GITVERSION_SPEC || '6.x' }}
+
+jobs:
+  # ──────────────────────────────────────────────
+  #  1.  Setup — shared bootstrap for all jobs
+  # ──────────────────────────────────────────────
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: "recursive"
+          fetch-depth: 0
+          fetch-tags: "true"
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup
+
+  # ──────────────────────────────────────────────
+  #  2.  Lint — HK project lints
+  # ──────────────────────────────────────────────
+  lint:
+    name: Lint
+    needs: [setup]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: "recursive"
+          fetch-depth: 0
+          fetch-tags: "true"
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup
+
+      - name: Run HK Lints
+        run: hk check --all
+
+  # ──────────────────────────────────────────────
+  #  3a. Test
+  # ──────────────────────────────────────────────
+  test:
+    name: Test
+    needs: [lint]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: "recursive"
+          fetch-depth: 0
+          fetch-tags: "true"
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup
+
+      - name: Run Tests
+        run: bun run test:coverage
+
+  # ──────────────────────────────────────────────
+  #  3b. SAST — CodeQL static analysis
+  # ──────────────────────────────────────────────
+  sast:
+    name: SAST
+    needs: [lint]
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: "recursive"
+          fetch-depth: 0
+          fetch-tags: "true"
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+        with:
+          languages: javascript-typescript
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+
+  # ──────────────────────────────────────────────
+  #  4.  Build
+  # ──────────────────────────────────────────────
+  build:
+    name: Build
+    needs: [test, sast]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: "recursive"
+          fetch-depth: 0
+          fetch-tags: "true"
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup
+
+      - name: Build
+        shell: bash -l {0}
+        run: |
+          set -eo pipefail
+
+          echo "::group::Building"
+          bun run build
+          echo "::endgroup::"
+
+      - name: Assert dist is up-to-date
+        shell: bash -l {0}
+        run: |
+          set -eo pipefail
+
+          echo "::group::Git Diff"
+          if ! git diff --exit-code --quiet dist/; then
+            echo "::error::dist/index.js is stale — run 'bun run build' locally and commit the result"
+            git diff dist/
+            exit 1
+          fi
+          echo "::endgroup::"
+
+  # ──────────────────────────────────────────────
+  #  5.  Release — only on push to default branch
+  # ──────────────────────────────────────────────
+  release:
+    name: Release
+    needs: [build]
+    if: >
+      github.ref_name == github.event.repository.default_branch
+      && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: "recursive"
+          fetch-depth: 0
+          fetch-tags: "true"
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup
+
+      - name: Cache GitVersion Tool
+        id: cache-gitversion
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /opt/hostedtoolcache/GitVersion.Tool
+            ~/.dotnet/tools
+          key: gitversion-${{ runner.os }}-${{ runner.arch }}-${{ env.GITVERSION_SPEC }}
+          restore-keys: |
+            gitversion-${{ runner.os }}-${{ runner.arch }}-
+            gitversion-${{ runner.os }}-
+
+      - name: Install GitVersion
+        id: install-gitversion
+        uses: gittools/actions/gitversion/setup@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
+        with:
+          versionSpec: ${{ env.GITVERSION_SPEC }}
+          preferLatestVersion: true
+
+      - name: Determine Version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
+
+      - name: Determine Working Branch
+        id: working-branch
+        shell: bash
+        run: |
+          set -eo pipefail
+          if [[ "${{ github.ref_name }}" == "${{ github.event.repository.default_branch }}" ]]; then
+            WORKING_BRANCH="release/v${{ steps.gitversion.outputs.semVer }}"
+          else
+            WORKING_BRANCH="prerelease/v${{ steps.gitversion.outputs.semVer }}"
+          fi
+          echo "branch=${WORKING_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "Working Branch: ${WORKING_BRANCH}"
+
+      - name: Skip prerelease versions
+        if: steps.gitversion.outputs.PreReleaseLabel != ''
+        run: |
+          echo "Skipping release for prerelease version: ${{ steps.gitversion.outputs.semVer }}"
+          exit 0
+
+      - name: Update Workflow Files With New Version
+        id: update-workflows
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eo pipefail
+
+          echo "Creating/Updating Working branch: ${{ steps.working-branch.outputs.branch }}"
+          git checkout -B "${{ steps.working-branch.outputs.branch }}"
+
+          echo "Updating Workflow files to version v${{ steps.gitversion.outputs.semVer }}"
+
+          REPO_OWNER="${{ github.repository_owner }}"
+          REPO_NAME="${{ github.event.repository.name }}"
+          NEW_VERSION="v${{ steps.gitversion.outputs.semVer }}"
+
+          find .github -type f \( -name "*.yml" -o -name "*.yaml" \) ! -name "_release.yml" \
+            | while read -r file; do
+            sed -i -E "s#(${REPO_OWNER}/${REPO_NAME}/.+)@(main|v[0-9]+(\.[0-9]+)*(-[a-zA-Z0-9.]+)?)#\1@${NEW_VERSION}#g" "$file"
+          done
+
+          git add .github
+          git commit -m "chore: Update action references to v${{ steps.gitversion.outputs.semVer }} [skip ci]" \
+            || echo "No changes to commit"
+          git push -u origin "${{ steps.working-branch.outputs.branch }}" --force
+
+      - name: Tag
+        id: tag
+        shell: bash -l {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "::group::Tag Information"
+          echo "::group::Tagger Function"
+          function tagger() {
+            VERSION="$1"
+            echo "Releasing Version: ${VERSION}"
+            TAG_EXISTS=$(git ls-remote -q --tags | grep -q "refs/tags/${VERSION}$" && echo true || echo false)
+            if [[ "${TAG_EXISTS}" = true ]];
+            then
+              HAS_RELEASE=$(gh release list --json tagName -q '.[].tagName' | grep -E "^(${VERSION})$" && echo true || echo false)
+              if [[ "${HAS_RELEASE}" == true ]];
+              then
+                gh release delete --yes "${VERSION}"
+              fi
+              git push origin --delete "${VERSION}"
+              git tag -d "${VERSION}"
+            fi
+
+            echo "::group::Tagging Version ${VERSION}"
+            git tag -a "${VERSION}" -m "chore: Release Version ${VERSION}"
+            git push -f --tags --follow-tags
+            # NOTE: no `git push --set-upstream origin <ref>` here. On
+            # pull_request events github.ref_name is the virtual merge
+            # ref like 9/merge, which isn't a pushable branch — push
+            # fails with "src refspec 9/merge does not match any" and
+            # leaks an error into the CI log. Tags are already pushed
+            # above via --follow-tags; set-upstream was redundant on
+            # main pushes and broken on PR events.
+            echo "::endgroup::"
+          }
+          echo "::endgroup::"
+
+          echo "::group::Tagging Version v${{ steps.gitversion.outputs.semVer }}"
+          tagger "v${{ steps.gitversion.outputs.semVer }}"
+          echo "::endgroup::"
+
+          if [[ "${{ github.ref_name  }}" == "${{ github.event.repository.default_branch }}" && "${{ github.event_name }}" != "pull_request" ]];
+          then
+            echo "::group::Tagging Version v${{ steps.gitversion.outputs.majorMinorPatch }}"
+            tagger "v${{ steps.gitversion.outputs.majorMinorPatch }}"
+            echo "::endgroup::"
+
+            echo "::group::Tagging Version v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}"
+            tagger "v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}"
+            echo "::endgroup::"
+
+            echo "::group::Tagging Version v${{ steps.gitversion.outputs.major }}"
+            tagger "v${{ steps.gitversion.outputs.major }}"
+            echo "::endgroup::"
+          fi
+          echo "::endgroup::"
+
+      - name: Versions
+        id: versions
+        shell: bash -l {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "::group::Latest Released Tags Output"
+          # Latest GitHub release — the full-semver entry created by
+          # the `gh release create` step on previous runs. `gh release
+          # view` (no arg) resolves to the latest release by published
+          # date. Exits non-zero when there are no releases yet; the
+          # `|| true` fallback keeps the variable empty without failing
+          # the step. On first-ever release, both variables below stay
+          # empty strings — the Build Changelog step's `fromTag` input
+          # accepts empty (action auto-detects or uses empty_template).
+          RELEASED_RELEASE_DESC=$(
+            gh release view \
+              --json tagName,isPrerelease,publishedAt \
+              --jq '"\(.tagName) [\(if .isPrerelease then "prerelease" else "stable" end), \(.publishedAt)]"' \
+              2>/dev/null || echo "(no releases yet)"
+          )
+          echo "Latest GitHub release: ${RELEASED_RELEASE_DESC}"
+
+          echo ""
+          # Rolling umbrella tags are force-pushed on every release by
+          # the Tag step. They exist as git tags WITHOUT corresponding
+          # `gh release` entries, so we enumerate them via `git tag -l`
+          # + semver-pattern filters. Tags were fetched during Checkout
+          # (`fetch-tags: true`).
+          echo "Rolling umbrella tags (git-only, no GitHub release):"
+          ALL_TAGS=$(git tag -l 'v*' --sort=-v:refname 2>/dev/null || true)
+          RELEASED_SEMVER_GIT=$(printf '%s\n' "${ALL_TAGS}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$' | head -1)
+          RELEASED_MMP=$(printf '%s\n' "${ALL_TAGS}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          RELEASED_MM=$(printf  '%s\n' "${ALL_TAGS}" | grep -E '^v[0-9]+\.[0-9]+$' | head -1)
+          RELEASED_M=$(printf   '%s\n' "${ALL_TAGS}" | grep -E '^v[0-9]+$' | head -1)
+          echo "  SemVer:          ${RELEASED_SEMVER_GIT:-none}"
+          echo "  MajorMinorPatch: ${RELEASED_MMP:-none}"
+          echo "  MajorMinor:      ${RELEASED_MM:-none}"
+          echo "  Major:           ${RELEASED_M:-none}"
+          echo "::endgroup::"
+
+          echo "::group::GitVersion Tags Output"
+          LATEST_SEMVER="v${{ steps.gitversion.outputs.semVer }}"
+          LATEST_MMP="v${{ steps.gitversion.outputs.majorMinorPatch }}"
+          LATEST_MM="v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}"
+          LATEST_M="v${{ steps.gitversion.outputs.major }}"
+
+          echo ""
+          echo "  SemVer:          ${LATEST_SEMVER:-none}"
+          echo "  MajorMinorPatch: ${LATEST_MMP:-none}"
+          echo "  MajorMinor:      ${LATEST_MM:-none}"
+          echo "  Major:           ${LATEST_M:-none}"
+          echo "::endgroup::"
+
+          echo "::group::Relased Configuration"
+          # Step outputs consumed by subsequent steps (Build Changelog
+          # uses released-semver for fromTag, next-semver for toTag).
+          # On first-ever release, released-semver is empty — callers
+          # must handle that (mikepenz/release-changelog-builder-action
+          # treats empty fromTag as "auto-detect" and falls back to
+          # the config's empty_template if no PRs are found).
+          # We use the git tag (RELEASED_SEMVER_GIT) rather than the
+          # GitHub release tag (RELEASED_SEMVER_TAG) so that releases
+          # work even before the first gh release create succeeds.
+          IS_FIRST_RELEASE="false"
+          if [[ -z "${RELEASED_SEMVER_GIT}" ]]; then
+            IS_FIRST_RELEASE="true"
+          fi
+          {
+            echo "released-semver=${RELEASED_SEMVER_GIT:-}"
+            echo "next-semver=v${{ steps.gitversion.outputs.semVer }}"
+            echo "is-first-release=${IS_FIRST_RELEASE}"
+          } >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+
+      - name: Build Changelog
+        id: changelog
+        if: ${{ github.ref_name == github.event.repository.default_branch && steps.versions.outputs.is-first-release != 'true' }}
+        uses: mikepenz/release-changelog-builder-action@c9bcd8238b6f41e05561348339429d360b1c0247 # v6.2.3
+        with:
+          configuration: changelog-configuration.json
+          # `fromTag` is the git tag of the PREVIOUS semver release (computed
+          # from `git tag -l` in the Versions step). On the first-ever release
+          # this is empty — the action treats an empty fromTag as "no lower
+          # bound" and falls back to the config's `empty_template` when no
+          # PRs are found. Using the git tag (not the GitHub release tag)
+          # works even before the first `gh release create` succeeds.
+          fromTag: ${{ steps.versions.outputs.released-semver }}
+          toTag: ${{ steps.versions.outputs.next-semver }}
+          # Include pre-releases in the changelog range. Pre-release
+          # entries (e.g. v1.2.3-beta.1) count as "released" for the
+          # purpose of computing the diff from the previous release.
+          ignorePreReleases: "false"
+          # HYBRID mode: fetch merged PRs for their rich metadata
+          # (number, title, labels, author) AND include raw commits
+          # between tags that didn't land via PR. Matters for this
+          # repo because historical commits on main include direct
+          # pushes the default PR mode misses entirely — see run
+          # 24697992060, which emitted "No pull requests found"
+          # against a range of 8 real commits. With HYBRID, those
+          # commits appear as entries via their commit title (the
+          # same `label_extractor` regexes apply: feat:, fix:, chore:,
+          # test:, docs:, deps:), while future PR merges still get
+          # their PR-link template applied. Per upstream docs:
+          # "Hybrid mode treats commits like pull requests" —
+          # acceptable for this repo because we control the template
+          # and category mapping via changelog-configuration.json.
+          mode: "HYBRID"
+          # Use the GitHub App token (same identity that creates the
+          # release) so the action's PR lookups inherit the App's
+          # pulls:read permission and rate limit.
+          token: ${{ github.token }}
+          # Write the rendered changelog to a file at the repo root
+          # (relative to the checkout dir, per the action's docs).
+          # The Release step consumes it via `gh release create -F <file>`
+          # rather than piping through a multi-line env var — avoids
+          # both shell-escaping gotchas with the 4 KB+ markdown body
+          # AND GitHub Actions' 1 MB limit on `outputs.*` values when
+          # the changelog grows large. File is .gitignore'd.
+          outputFile: RELEASE_NOTES.md
+          # Keep failing on resolution errors (malformed config,
+          # unreachable tags, etc.) — the first-release empty-range
+          # case is handled by the config's empty_template, not by
+          # swallowing errors here.
+          failOnError: true
+
+      - name: Generate First Release Notes
+        id: first-release-notes
+        if: ${{ github.ref_name == github.event.repository.default_branch && steps.versions.outputs.is-first-release == 'true' }}
+        run: |
+          # For the very first release, there's no previous tag to diff
+          # against. The changelog action would auto-detect the initial
+          # commit and compare it to itself (same SHA), causing a 404.
+          # Instead, write the configured empty_template directly.
+          echo "No changes in this release" > RELEASE_NOTES.md
+
+      - name: Find Associated PR
+        id: find-pr
+        if: ${{ github.ref_name != github.event.repository.default_branch }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eo pipefail
+          PR_NUMBER=""
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          else
+            PR_NUMBER=$(gh pr list \
+              --head "${{ github.ref_name }}" \
+              --state open \
+              --json number \
+              --jq '.[0].number // empty')
+          fi
+          echo "number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Add PR Comment With Tag Link
+        if: ${{ steps.find-pr.outputs.number != '' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const semVer = `v${{ steps.gitversion.outputs.semVer }}`;
+            const major = `${{ steps.gitversion.outputs.Major }}`;
+            const minor = `${{ steps.gitversion.outputs.Minor }}`;
+            const patch = `${{ steps.gitversion.outputs.Patch }}`;
+            const shortSha = `${{ steps.gitversion.outputs.ShortSha }}`;
+            const branch = `${{ steps.working-branch.outputs.branch }}`;
+            const tagUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/tree/${semVer}`;
+
+            const actor = `${{ github.actor }}`;
+            const actorUrl = `${context.serverUrl}/${actor}`;
+            const sender = `${{ github.event.pull_request.head.user.login || github.event.sender.login }}`;
+            const senderUrl = `${context.serverUrl}/${sender}`;
+
+            const body = [
+              `## 🏷️ Pre-release Tag Created`,
+              ``,
+              `| | |`,
+              `|---|---|`,
+              `| **Tag** | [\`${semVer}\`](${tagUrl}) |`,
+              `| **Version** | \`${major}.${minor}.${patch}\` |`,
+              `| **Branch** | \`${branch}\` |`,
+              `| **Commit** | \`${shortSha}\` |`,
+              `| **Actor** | [@${actor}](${actorUrl}) |`,
+              `| **Author** | [@${sender}](${senderUrl}) |`,
+              ``,
+              `> 📦 To test the Rust Toolchain action from this PR:`,
+              `> \`\`\`yaml`,
+              `> - uses: ${context.repo.owner}/${context.repo.repo}@${semVer}`,
+              `> \`\`\``,
+            ].join('\n');
+
+            const issueNumber = ${{ steps.find-pr.outputs.number }};
+            const { data: comments } = await github.rest.issues.listComments({
+              issue_number: issueNumber,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            const existing = comments
+              .filter(c => c.user?.type === 'Bot'
+                && c.body?.includes('## 🏷️ Pre-release Tag Created'))
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+            for (const dup of existing.slice(1)) {
+              await github.rest.issues.deleteComment({
+                comment_id: dup.id,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+              });
+            }
+
+            if (existing.length > 0) {
+              await github.rest.issues.updateComment({
+                comment_id: existing[0].id,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: issueNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body
+              });
+            }
+
+      - name: Create GitHub Release
+        if: ${{ github.ref_name == github.event.repository.default_branch }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eo pipefail
+
+          # Clean up draft releases
+          gh release list \
+            --json tagName,isDraft \
+            -q '.[] | select(.isDraft) | .tagName' \
+            | while read -r draft; do
+            echo "Removing Draft Release: ${draft}"
+            gh release delete --yes "${draft}"
+          done
+
+          # Create release targeting the working branch
+          gh release create "v${{ steps.gitversion.outputs.semVer }}" \
+            --target "${{ steps.working-branch.outputs.branch }}" \
+            --generate-notes \
+            --verify-tag \
+            --latest

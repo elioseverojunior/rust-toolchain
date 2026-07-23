@@ -1,0 +1,232 @@
+name: act
+
+on: push
+
+jobs:
+  test-action:
+    name: Test Action ${{ matrix.name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+
+      matrix:
+        include:
+          - name: "stable with wasm target"
+            toolchain: "stable"
+            targets: "wasm32-unknown-unknown"
+            components: "clippy"
+            profile: ""
+            toml: "none"
+            expected: "stable"
+
+          - name: "stable with toml config"
+            toolchain: ""
+            targets: ""
+            components: ""
+            profile: ""
+            toml: "stable"
+            expected: "stable"
+
+          - name: "nightly with toml and overrides"
+            toolchain: "nightly"
+            targets: "wasm32-unknown-unknown"
+            components: "rustfmt"
+            profile: "default"
+            toml: "stable"
+            expected: "nightly"
+
+          - name: "versioned channel with toml"
+            toolchain: "1.85.0"
+            targets: ""
+            components: ""
+            profile: ""
+            toml: "stable"
+            expected: "1.85.0"
+
+          - name: "1.97 with toml config"
+            toolchain: ""
+            targets: ""
+            components: ""
+            profile: ""
+            toml: "1.97"
+            # A <major.minor> channel is passed through to rustup, which
+            # resolves it to the newest patch in the 1.97 series.
+            expected: "1.97"
+
+          - name: "profile minimal via input"
+            toolchain: "stable"
+            targets: ""
+            components: ""
+            profile: "minimal"
+            toml: "none"
+            expected: "stable"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: "true"
+          submodules: "recursive"
+
+      - name: Prepare Isolated Rustup Home
+        shell: bash
+        run: |
+          # Keep rustup off the container image's read-only lower layer.
+          #
+          # Docker/act images ship a pre-installed toolchain under
+          # /home/runner/.rustup. Mutating it fails on overlayfs: rustup renames
+          # a component's *directory* into $RUSTUP_HOME/tmp before replacing it,
+          # and overlayfs answers EXDEV ("Invalid cross-device link") for any
+          # directory rename whose source still lives in a lower image layer.
+          # Files are copied up on demand; directories are not (absent
+          # redirect_dir=on).
+          #
+          # A RUSTUP_HOME created at run time puts every toolchain in the
+          # writable upper layer, so renames stay within one layer and
+          # stable/nightly behave exactly as they do on hosted runners.
+          # CARGO_HOME is deliberately left alone so the rustup binary and its
+          # proxies stay on PATH; they honour RUSTUP_HOME from the environment.
+          #
+          # Set here rather than in job-level `env:` because the `runner`
+          # context is not available there.
+          rustup_home="${RUNNER_TEMP:-/tmp}/rustup"
+          mkdir -p "$rustup_home"
+          echo "RUSTUP_HOME=$rustup_home" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$rustup_home"
+
+      - name: Write rust-toolchain.toml
+        if: matrix.toml != 'none'
+        shell: bash
+        run: |
+          cat > rust-toolchain.toml << 'EOF'
+          [toolchain]
+          channel = "${{ matrix.toml }}"
+          EOF
+          cat rust-toolchain.toml
+
+      - name: Setup Rust Toolchain
+        id: rust-toolchain
+        uses: ./
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          targets: ${{ matrix.targets }}
+          components: ${{ matrix.components }}
+          profile: ${{ matrix.profile }}
+
+      - name: Verify Cachekey Output
+        shell: bash
+        run: |
+          echo "cachekey: ${{ steps.rust-toolchain.outputs.cachekey }}"
+          echo "name: ${{ steps.rust-toolchain.outputs.name }}"
+          if [[ -z "${{ steps.rust-toolchain.outputs.cachekey }}" ]]; then
+            echo "cachekey is empty"
+            exit 1
+          fi
+          if [[ -z "${{ steps.rust-toolchain.outputs.name }}" ]]; then
+            echo "name is empty"
+            exit 1
+          fi
+
+      - name: Verify Isolated Rustup Home Was Used
+        shell: bash
+        run: |
+          actual=$(rustup show home)
+          echo "rustup home: $actual"
+          if [[ "$actual" != "$RUSTUP_HOME" ]]; then
+            echo "expected rustup home $RUSTUP_HOME, got $actual"
+            exit 1
+          fi
+
+      - name: Verify Effective Toolchain
+        shell: bash
+        run: |
+          # The action exports RUSTUP_TOOLCHAIN so its resolved channel wins
+          # over any rust-toolchain.toml in the workspace. Without it the action
+          # would install one toolchain and later steps would silently run a
+          # different one ("inputs override the toml" holding at install time
+          # but not at use time).
+          expected="${{ matrix.expected }}"
+          echo "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-<unset>}"
+          if [[ -z "${RUSTUP_TOOLCHAIN:-}" ]]; then
+            echo "RUSTUP_TOOLCHAIN was not exported"
+            exit 1
+          fi
+
+          active=$(rustup show active-toolchain)
+          echo "active toolchain: $active (expected prefix: $expected)"
+          if [[ "$active" != "$expected"-* ]]; then
+            echo "active toolchain is not $expected"
+            exit 1
+          fi
+
+          # For a pinned version the effective rustc must report that exact
+          # version — this is the assertion a toml override would break.
+          version=$(rustc --version)
+          echo "rustc: $version"
+          if [[ "$expected" =~ ^[0-9] ]]; then
+            if [[ "$version" != *"$expected"* ]]; then
+                echo "rustc is not $expected"
+                exit 1
+              fi
+          fi
+
+      - name: Verify Rust Installed
+        shell: bash
+        run: |
+          rustc --version
+          rustup target list --installed
+          rustup component list --installed
+
+      - name: Verify Expected Target
+        if: matrix.targets != ''
+        shell: bash
+        run: |
+          targets="${{ matrix.targets }}"
+          for target in $(echo "$targets" | tr ',' '\n'); do
+            target=$(echo "$target" | xargs)
+            if ! rustup target list --installed | grep -q "$target"; then
+                echo "target $target not installed"
+                exit 1
+              fi
+          done
+
+      - name: Verify Expected Component
+        if: matrix.components != ''
+        shell: bash
+        run: |
+          comps="${{ matrix.components }}"
+          for comp in $(echo "$comps" | tr ',' '\n'); do
+            comp=$(echo "$comp" | xargs)
+            if ! rustup component list --installed | grep -q "$comp"; then
+                echo "component $comp not installed"
+                exit 1
+              fi
+          done
+
+      - name: Verify Minimal Profile Omits Docs
+        if: matrix.profile == 'minimal'
+        shell: bash
+        run: |
+          # rustup exposes no per-toolchain profile query (`rustup show profile`
+          # reports the global default), so assert the profile's observable
+          # effect instead: `minimal` installs no rust-docs.
+          installed=$(rustup component list --installed)
+          echo "$installed"
+          if echo "$installed" | grep -q '^rust-docs'; then
+            echo "rust-docs present under minimal profile"
+            exit 1
+          fi
+
+      - name: Verify Default Toolchain
+        shell: bash
+        run: |
+          expected="${{ matrix.expected }}"
+          actual=$(rustup default) || { echo "rustup default failed"; exit 1; }
+          echo "default toolchain: $actual (expected prefix: $expected)"
+          if [[ "$actual" != "$expected"-* ]]; then
+            echo "default toolchain is not $expected"
+            exit 1
+          fi

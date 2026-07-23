@@ -1,0 +1,512 @@
+# mise.toml - Task runner and tool version manager
+# https://mise.jdx.dev/
+# This replaces package.json scripts with mise tasks for better tool version management
+[settings]
+color = true
+experimental = true
+idiomatic_version_file = true
+# Let mise read the Node version from package.json's engines field
+idiomatic_version_file_enable_tools = ["node"]
+python.uv_venv_auto = "create|source"
+legacy_version_file = false
+lockfile = true
+not_found_auto_install = true
+quiet = true
+### Debug
+#verbose = true
+#log_level = "debug"
+
+[tools]
+# Node version is read from package.json engines field via idiomatic_version_file
+# bun and gh are provisioned by mise directly
+actionlint = { version = "latest" }
+bun = { version = "1.3" }
+gh = { version = "latest" }
+gitleaks = { version = "latest" }
+
+# Cargo Tools
+"cargo:yamllint-rs" = "latest"
+"aqua:hk" = { version = "latest", os = [
+    "linux",
+    "windows",
+    "macos/arm64",
+], arch = [
+    "arm64",
+    "x64",
+], locked = false }
+
+[env]
+ARCH = "{{exec(command='uname -m')}}"
+GITHUB_TOKEN = "{{env.GITHUB_TOKEN | default(value='')}}"
+PROJECT_NAME = "{{exec(command='basename $PWD')}}"
+
+[hooks]
+enter = { task = "setup" }
+postinstall = '''
+echo "Installed: $MISE_INSTALLED_TOOLS"
+'''
+
+[deps.bun]
+auto = true
+
+[deps.cargo]
+auto = true
+
+[deps.gh]
+auto = true
+
+[tasks.act]
+description = "Test Workflow with Nektos/ACT Locally"
+usage = '''
+flag "-t --test <test>" {
+  choices "act" "act-matrix"
+  default "act"
+  help "Test Case Workflow"
+  env "ACT_TEST"
+}
+'''
+run = '''
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+[ ! -d ".act" ] && mkdir -p .act/
+[ ! -f ".act/.vars" ] && touch .act/.vars
+[ ! -f ".act/.env" ] && touch .act/.env
+[ ! -f ".act/event.json" ] && echo "{}" > .act/event.json
+echo "Generating GitHub Token"
+export GITHUB_TOKEN=$(gh auth token)
+echo "GITHUB_TOKEN=$GITHUB_TOKEN" > .act/.secrets
+act -W .github/workflows/tests/${usage_test?}.yml
+unset GITHUB_TOKEN
+'''
+
+[tasks."act:matrix"]
+description = "Test Workflow with Nektos/ACT using Matrix Locally"
+run = '''
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+mise run act -t act-matrix
+'''
+
+[tasks.gitignore]
+description = "Git Ignore Check"
+hide = true
+run = '''
+git check-ignore -v .act/.secrets .act/.vars .act/.env .act/event.json .act/README.md
+'''
+
+# === Tool Installation ===
+[tasks.setup]
+alias = ["install", "dev:setup", "dev:up", "dev"]
+description = "Install all mise-managed tools"
+depends = []
+depends_post = []
+shell = "bash -c"
+run = '''
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+echo "Listing mise tools..."
+mise ls
+
+echo "Installing mise tools..."
+mise lock
+mise install
+mise deps
+bun install --lockfile-only
+echo "Done, mise tools are installed/synced...."
+'''
+
+[tasks.update-actions-pins]
+alias = ["update-actions", "uap"]
+description = "Update SHA pins for GitHub Actions to latest release"
+depends = []
+depends_post = []
+shell = "bash -c"
+run = '''
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+export GITHUB_TOKEN=$(gh auth token)
+echo "Updating All GitHub Actions workflows...."
+python3 scripts/update-actions-pins.py "${@}"
+unset GITHUB_TOKEN
+'''
+
+[tasks."update-actions-pins:write"]
+alias = ["update-actions:write", "uapw"]
+description = "Update SHA pins for GitHub Actions and write changes"
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "mise run update-actions-pins --write"
+
+[tasks."update-actions-pins:major"]
+alias = ["update-actions:major", "uapm"]
+description = "Update SHA pins and apply major version bumps"
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "mise run update-actions-pins --write --apply-major"
+
+[tasks.install-additional-deps]
+description = "Install Project Dependencies"
+depends_post = []
+run = '''
+echo "installing project '$PROJECT_NAME' dependencies for architecture '$ARCH'"
+'''
+
+# === Testing ===
+[tasks."test:watch"]
+description = "Run the test suite in watch mode"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "bun test --watch"
+
+# === Building ===
+[tasks.build]
+description = "Build both CLI and GitHub Action bundles"
+alias = []
+depends = ["build:action"]
+depends_post = []
+shell = "bash -c"
+run = "true"
+
+[tasks."build:action"]
+description = "Build GitHub Action bundle for node20 runtime"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "bun run build"
+
+# === Linting & Formatting ===
+[tasks.lint]
+description = "Run all linting (ESLint + Prettier check)"
+alias = []
+depends = ["eslint:lint", "prettier:format"]
+depends_post = []
+shell = "bash -c"
+run = "true"
+
+[tasks."lint:fix"]
+description = "Fix all linting issues (ESLint fix + Prettier write)"
+alias = []
+depends = ["eslint:lint:fix", "prettier:format:fix"]
+depends_post = []
+shell = "bash -c"
+run = "true"
+
+[tasks."eslint:lint"]
+description = "Run ESLint with zero warnings allowed"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "eslint --max-warnings 0 --ignore-pattern dist/ ."
+
+[tasks."eslint:lint:fix"]
+description = "Run ESLint with auto-fix"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "eslint --fix --max-warnings 0 --ignore-pattern dist/ ."
+
+[tasks."prettier:format"]
+description = "Check code formatting with Prettier"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "prettier --check ."
+
+[tasks."prettier:format:fix"]
+description = "Format code with Prettier (write changes)"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "prettier --write ."
+
+[tasks."fix:all"]
+description = "Run all auto-fixes (ESLint + Prettier)"
+alias = []
+depends = ["eslint:lint:fix", "prettier:format:fix"]
+depends_post = []
+shell = "bash -c"
+run = "true"
+
+[tasks.actionlint]
+alias = "al"
+description = "Lint GitHub Actions workflows with actionlint (config in .github/actionlint.yaml); pass paths (e.g. lefthook {staged_files}) or default to all workflows"
+run = '''
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+# actionlint auto-discovers .github/actionlint.yaml. With no paths it lints
+# every workflow under .github/workflows; forward staged paths when given.
+# Variadic args arrive shell-escaped — eval into an array so paths survive.
+eval "paths=(${usage_paths:-})"
+actionlint "${paths[@]}"
+'''
+shell = "bash -c"
+usage = 'arg "[paths]" var=#true help="workflow files to lint; defaults to every workflow under .github/workflows when omitted"'
+
+[tasks.markdownlint]
+alias = ["mdlint", "rumdl"]
+description = "Lint Markdown files with rumdl"
+depends = []
+depends_post = []
+shell = "bash -c"
+run = '''
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+npx rumdl check "$@"
+'''
+
+[tasks."markdownlint:fix"]
+alias = ["mdlint:fix", "rumdl:fix"]
+description = "Fix Markdown files with rumdl"
+depends = []
+depends_post = []
+shell = "bash -c"
+run = '''
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+rumdl fmt "$@"
+'''
+
+[tasks.yamllint]
+alias = ["yl"]
+description = "Lint YAML with yamllint; pass paths (e.g. lefthook {staged_files}) or default to the whole repo"
+run = '''
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+# Variadic args arrive as a shell-escaped string; eval into an array so paths
+# with spaces survive. Fall back to the whole repo when no paths are passed.
+eval "paths=(${usage_paths:-.})"
+yamllint "${paths[@]}"
+'''
+shell = "bash -c"
+usage = 'arg "[paths]" var=#true help="Paths to lint; defaults to the whole repo when omitted"'
+
+[tasks."yamllint:fix"]
+alias = ["ylf"]
+description = "Lint YAML with yamllint-rs; pass paths (e.g. lefthook {staged_files}) or default to the whole repo"
+run = '''
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+# Safely check if the usage_paths variable is set and non-empty.
+# ${usage_paths:-} prevents "unbound variable" errors under set -u.
+if [ -n "${usage_paths:-}" ]; then
+  # Note: To handle paths with spaces safely when using 'var=true',
+  # mise recommends using eval to parse the shell-escaped string into an array.
+  eval "paths=($usage_paths:-.)"
+else
+  mapfile -t paths < <(yamllint --list-files .)
+fi
+
+npx prettier --write "${paths[@]}"
+
+# Run the linter
+yamllint-rs --config .yamllint.yml --fix "${paths[@]}"
+'''
+shell = "bash -c"
+usage = 'arg "[paths]" var=#true help="Paths to lint; defaults to the whole repo when omitted"'
+
+# === Type Checking ===
+[tasks.typecheck]
+description = "Run TypeScript type checking"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "tsc -p tsconfig.test.json --noEmit"
+
+[tasks."typecheck:watch"]
+description = "Run TypeScript type checking in watch mode"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "tsc -p tsconfig.test.json --noEmit --watch"
+
+# === Dependencies ===
+[tasks.deps]
+description = "Update dependencies and reinstall"
+alias = []
+depends = ["deps:update"]
+depends_post = []
+shell = "bash -c"
+run = "bun install"
+
+[tasks."deps:update"]
+description = "Update dependencies to latest minor versions"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "bunx --bun npm-check-updates -u --target minor"
+
+[tasks."deps:check"]
+description = "Check for available dependency updates"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "bunx --bun npm-check-updates --target minor"
+
+[tasks."deps:latest"]
+description = "Update dependencies to latest versions"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "bunx --bun npm-check-updates -u --target latest && bun install"
+
+# === Config & Release ===
+[tasks.release]
+description = "Publish new release via changesets"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "changeset publish"
+
+[tasks.version]
+description = "Version packages via changesets"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "changeset version"
+
+# === Documentation ===
+[tasks.readme]
+description = "Regenerate README.md from action.yml using action-docs"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "bunx action-docs --no-banner --update-readme README.md"
+
+# === CI / Development ===
+[tasks.dev]
+description = "Run development checks (test + lint + typecheck)"
+alias = []
+depends = ["lint", "typecheck"]
+depends_post = []
+shell = "bash -c"
+run = "true"
+
+[tasks.ci]
+description = "Run full CI pipeline"
+alias = []
+depends = ["lint", "typecheck", "build"]
+depends_post = []
+shell = "bash -c"
+run = "true"
+
+# === GitHub Token Helpers ===
+[tasks."gh:token"]
+description = "Get GitHub token from gh auth"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "gh auth token"
+
+[tasks."gh:token:set"]
+description = "Set GITHUB_TOKEN from gh auth for current shell"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "export GITHUB_TOKEN=$(gh auth token) && echo 'GITHUB_TOKEN set from gh auth'"
+
+# === Doctor / Diagnostics ===
+[tasks.doctor]
+description = "Diagnose toolchain and project state"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = """
+#!/usr/bin/env bash
+set -eo pipefail
+
+echo "=== Platform: $(uname -s) ($(uname -m)) ==="
+
+echo "-- Node toolchain (package.json engines) --"
+v() {
+    label="$1"
+    shift
+    out="$("$@" 2>/dev/null | head -1)"
+    printf "  %-20s : %s\n" "$label" "${out:-MISSING}"
+}
+
+v node node --version
+v bun bun --version
+v npm npm --version
+
+echo "-- GitHub CLI --"
+v gh gh --version
+
+echo "-- Mise --"
+v mise mise --version
+
+echo "-- Project state --"
+printf "  %-20s : %s\n" "GITHUB_TOKEN" "${GITHUB_TOKEN:-NOT SET (run 'mise run gh:token:set')}"
+"""
+
+# === Commitlint ===
+[tasks.commitlint]
+description = "Lint commit message against conventional commits"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = """
+#!/usr/bin/env bash
+set -eo pipefail
+
+# Check if commitlint is installed
+if ! command -v commitlint &> /dev/null; then
+    echo "commitlint not found. Installing..."
+    bunx --bun npm install -g @commitlint/cli @commitlint/config-conventional
+fi
+
+# If commit message file is provided as arg, use it
+if [ $# -gt 0 ]; then
+    commitlint --edit "$1"
+else
+    # Read from stdin (for git commit-msg hook)
+    cat | commitlint
+fi
+"""
+
+# === Commitlint Config ===
+[tasks."commitlint:config"]
+description = "Generate commitlint config from commit-types.toml"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "npx @commitlint/config-conventional > commitlint.config.js"

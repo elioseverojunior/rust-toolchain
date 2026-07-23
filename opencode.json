@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["AGENTS.md", "CLAUDE.md"],
+  "permission": {
+    "git commit *": "deny",
+    "git push *": "deny",
+    "gh pr create": "deny",
+    "gh pr comment": "deny",
+    "gh issue create": "deny",
+    "gh pr merge": "deny",
+    "rm *": "allow",
+    "git *": "ask",
+    "gh *": "ask",
+    "*": "allow"
+  }
+}

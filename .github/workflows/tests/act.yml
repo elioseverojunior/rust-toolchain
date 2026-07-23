@@ -1,0 +1,166 @@
+name: act
+
+on: push
+
+jobs:
+  test-action:
+    name: Test Action
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Limits execution to 1 job at a time (sequential execution)
+      max-parallel: 1
+
+      # Optional: Stops the rest of the sequence if a job fails
+      fail-fast: true
+
+      matrix:
+        include:
+          - name: "1.97 with toml config"
+            toolchain: ""
+            targets: ""
+            components: ""
+            profile: ""
+            # A <major.minor> channel is passed through to rustup, which
+            # resolves it to the newest patch in the 1.97 series.
+            expected: "1.97"
+            toml: |
+              [toolchain]
+              channel = "1.97"
+              targets = []
+              components = []
+              profile = "default"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: "true"
+          submodules: "recursive"
+
+      - name: Prepare Isolated Rustup Home
+        shell: bash
+        run: |
+          # See act-matrix.yml for the full rationale: mutating the image's
+          # pre-installed toolchain fails on overlayfs with EXDEV, because a
+          # directory rename cannot cross from a lower image layer to the upper
+          # one. A run-time-created RUSTUP_HOME keeps every rename in one layer.
+          rustup_home="${RUNNER_TEMP:-/tmp}/rustup"
+          mkdir -p "$rustup_home"
+          echo "RUSTUP_HOME=$rustup_home" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$rustup_home"
+
+      - name: Write rust-toolchain.toml
+        if: matrix.toml != 'none'
+        shell: bash
+        run: |
+          cat > rust-toolchain.toml << 'EOF'
+          ${{ matrix.toml }}
+          EOF
+          cat rust-toolchain.toml
+
+      - name: Setup Rust Toolchain
+        id: rust-toolchain
+        uses: ./
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          targets: ${{ matrix.targets }}
+          components: ${{ matrix.components }}
+          profile: ${{ matrix.profile }}
+
+      - name: Verify Cachekey Output
+        shell: bash
+        run: |
+          echo "cachekey: ${{ steps.rust-toolchain.outputs.cachekey }}"
+          echo "name: ${{ steps.rust-toolchain.outputs.name }}"
+          if [[ -z "${{ steps.rust-toolchain.outputs.cachekey }}" ]]; then
+            echo "cachekey is empty"
+            exit 1
+          fi
+          if [[ -z "${{ steps.rust-toolchain.outputs.name }}" ]]; then
+            echo "name is empty"
+            exit 1
+          fi
+
+      - name: Verify Isolated Rustup Home Was Used
+        shell: bash
+        run: |
+          actual=$(rustup show home)
+          echo "rustup home: $actual"
+          if [[ "$actual" != "$RUSTUP_HOME" ]]; then
+            echo "expected rustup home $RUSTUP_HOME, got $actual"
+            exit 1
+          fi
+
+      - name: Verify Effective Toolchain
+        shell: bash
+        run: |
+          # RUSTUP_TOOLCHAIN outranks rust-toolchain.toml, so the action's
+          # resolved channel is what later steps actually run.
+          expected="${{ matrix.expected }}"
+          echo "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-<unset>}"
+          if [[ -z "${RUSTUP_TOOLCHAIN:-}" ]]; then
+            echo "RUSTUP_TOOLCHAIN was not exported"
+            exit 1
+          fi
+
+          active=$(rustup show active-toolchain)
+          echo "active toolchain: $active (expected prefix: $expected)"
+          if [[ "$active" != "$expected"-* ]]; then
+            echo "active toolchain is not $expected"
+            exit 1
+          fi
+
+          version=$(rustc --version)
+          echo "rustc: $version"
+          if [[ "$expected" =~ ^[0-9] ]]; then
+            if [[ "$version" != *"$expected"* ]]; then
+                echo "rustc is not $expected"
+                exit 1
+              fi
+          fi
+
+      - name: Verify Rust Installed
+        shell: bash
+        run: |
+          rustc --version
+          rustup target list --installed
+          rustup component list --installed
+
+      - name: Verify Expected Target
+        if: matrix.targets != ''
+        shell: bash
+        run: |
+          targets="${{ matrix.targets }}"
+          for target in $(echo "$targets" | tr ',' '\n'); do
+            target=$(echo "$target" | xargs)
+            if ! rustup target list --installed | grep -q "$target"; then
+                echo "target $target not installed"
+                exit 1
+              fi
+          done
+
+      - name: Verify Expected Component
+        if: matrix.components != ''
+        shell: bash
+        run: |
+          comps="${{ matrix.components }}"
+          for comp in $(echo "$comps" | tr ',' '\n'); do
+            comp=$(echo "$comp" | xargs)
+            if ! rustup component list --installed | grep -q "$comp"; then
+                echo "component $comp not installed"
+                exit 1
+              fi
+          done
+
+      - name: Verify Default Toolchain
+        shell: bash
+        run: |
+          expected="${{ matrix.expected }}"
+          actual=$(rustup default) || { echo "rustup default failed"; exit 1; }
+          echo "default toolchain: $actual (expected prefix: $expected)"
+          if [[ "$actual" != "$expected"-* ]]; then
+            echo "default toolchain is not $expected"
+            exit 1
+          fi

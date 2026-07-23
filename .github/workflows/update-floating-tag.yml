@@ -1,0 +1,76 @@
+name: Update Floating Tags
+
+concurrency:
+  group: update-floating-tags-${{ github.ref_name }}
+  cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Floating tag to move (e.g. v1 or v1.2)"
+        required: true
+        type: string
+      sha:
+        description: "Commit SHA to point the tag at (defaults to the latest matching semver tag)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    name: update
+    runs-on: ${{ vars.RUNS_ON_ARM64 || vars.RUNS_ON || 'ubuntu-latest' }}
+    steps:
+      - name: Checkout as bot
+        uses: elioetibr/composite-actions/checkout-as-bot@1b37959d2bdceb933e2b1f8206cbc8b7220a70e0 # v0.0.1-1
+        with:
+          client-id: ${{ vars.CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          submodules: "true"
+
+      - name: Resolve target commit
+        id: resolve
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -eo pipefail
+          if [[ -n "${SHA}" ]]; then
+            echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "${TAG}" =~ ^v([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            pattern="v${major}.*.*"
+          elif [[ "${TAG}" =~ ^v([0-9]+)\.([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            pattern="v${major}.${minor}.*"
+          else
+            echo "::error::Tag must look like 'vN' or 'vN.M' (e.g. v1 or v1.2) when no sha is provided. Got: ${TAG}"
+            exit 1
+          fi
+          latest="$(git tag --list "${pattern}" --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)"
+          if [[ -z "${latest}" ]]; then
+            echo "::error::No semver tag found matching pattern ${pattern}"
+            exit 1
+          fi
+          sha="$(git rev-list -n1 "${latest}")"
+          echo "Latest semver matching ${pattern} is ${latest} (${sha})"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+      - name: Move tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -eo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "${TAG}" "${SHA}"
+          git push --force origin "refs/tags/${TAG}"
+          echo "Moved ${TAG} -> ${SHA}"

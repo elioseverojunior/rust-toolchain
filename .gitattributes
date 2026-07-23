@@ -1,0 +1,39 @@
+# Text-file line-ending normalization.
+#
+# We use `text=auto` (not `text=auto eol=lf`) because handwritten source
+# files are the only thing we want normalized: CRLF written by a Windows
+# IDE → LF in the blob. Consumers on any platform get appropriate local
+# line endings on checkout via their `core.autocrlf` setting.
+* text=auto
+
+# Explicit binary types — no line-ending conversion, no text diffs.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar.gz binary
+
+# Source maps are text but huge and rarely worth diffing line-by-line.
+*.map linguist-generated=true
+
+# Generated bundle — treat as binary so git preserves the exact bytes
+# ncc produced (including any CRLF from CRLF-bearing bundled deps like
+# tslib). This is the canonical fix from
+# https://www.aleksandrhovhannisyan.com/blog/crlf-vs-lf-normalizing-line-endings-in-git/
+# for "artifacts that should be committed with their tool-produced line
+# endings unchanged":
+#   - `-text` disables text conversion: no CRLF↔LF rewriting on add or
+#     checkout. Bytes stored = bytes on disk, byte-identical across all
+#     platforms (macOS dev, Linux CI ARM64, Linux CI x86-64).
+#   - `linguist-generated=true` keeps GitHub's PR viewer collapsing the
+#     dist/ diff so reviewers aren't walked through 3+ MB of bundle.
+# Why this fixes the CI dist-freshness gate: previously, macOS `git add`
+# normalized working-tree CRLF to LF in the blob, then CI's rebuild
+# produced CRLF bytes again, and `git diff dist/` against the LF blob
+# showed 2 "uncommitted changes" (reflected in GitVersion_UncommittedChanges).
+# With `-text`, the blob retains CRLF, CI rebuild produces the same CRLF,
+# and the diff is empty — no filter asymmetry between local add and CI diff.
+dist/** -text linguist-generated=true

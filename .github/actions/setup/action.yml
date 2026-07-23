@@ -1,0 +1,87 @@
+name: Setup
+description: >
+  Install mise tools, cache and install bun dependencies.
+  Intended as the first step in every CI job to reduce duplication.
+
+runs:
+  using: composite
+  steps:
+    - name: GitHub Actions Bot Configuration
+      id: bot-config
+      env:
+        GITHUB_BOT_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
+        GITHUB_BOT_USERNAME: "github-actions[bot]"
+      shell: bash -l {0}
+      run: |
+        #!/usr/bin/env bash
+
+        set -eo pipefail
+
+        echo "GITHUB_BOT_EMAIL=${{ env.GITHUB_BOT_EMAIL }}" >> "$GITHUB_ENV"
+        echo "GITHUB_BOT_USERNAME=${{ env.GITHUB_BOT_USERNAME }}" >> "$GITHUB_ENV"
+
+        git config --global core.autocrlf input
+        git config --global init.defaultBranch ${{ github.event.repository.default_branch }}
+        git config --global pull.ff only
+        git config --global pull.rebase true
+        git config --global push.autosetupremote true
+        git config --global push.followTags true
+        git config --global author.email "${{ env.GITHUB_BOT_EMAIL }}"
+        git config --global author.name "${{ env.GITHUB_BOT_USERNAME }}"
+        git config --global committer.email "${{ env.GITHUB_BOT_EMAIL }}"
+        git config --global committer.name "${{ env.GITHUB_BOT_USERNAME }}"
+        git config --global user.email "${{ env.GITHUB_BOT_EMAIL }}"
+        git config --global user.name "${{ env.GITHUB_BOT_USERNAME }}"
+
+        echo "bot-email=${{ env.GITHUB_BOT_EMAIL }}" >> "$GITHUB_OUTPUT"
+        echo "bot-user=${{ env.GITHUB_BOT_USERNAME }}" >> "$GITHUB_OUTPUT"
+
+    - name: Setup mise
+      uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
+      with:
+        cache_key_prefix: mise
+        cache_key: mise-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock') || hashFiles('mise.toml') }}
+
+    - name: Cache bun dependencies
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.bun/install/cache
+          node_modules
+        key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          bun-${{ runner.os }}-${{ runner.arch }}-
+          bun-${{ runner.os }}-
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+    - name: Install Deps
+      shell: bash -l {0}
+      run: |
+        set -eo pipefail
+        echo "::group::Installing Dependencies"
+        bun install --frozen-lockfile
+        echo "::endgroup::"
+
+    - name: Audit Untrusted Post-installs
+      shell: bash -l {0}
+      run: |
+        #!/usr/bin/env bash
+        set -eo pipefail
+        # Supply-chain guard: `bun pm untrusted` lists any package with
+        # blocked post-install scripts. Clean repo emits no `./node_modules/`
+        # lines. Any appearance means a new dep landed with a post-install
+        # that hasn't been audited + added to package.json
+        # `trustedDependencies`. Fail the PR so the audit happens at review
+        # time, not on a contributor's first `bun install`. No user input
+        # is interpolated here — only local tool output is processed.
+        echo "::group::Untrusted Post-install Audit"
+        untrusted=$(bun pm untrusted 2>&1 | grep -E '^\./node_modules/' || true)
+        if [[ -n "$untrusted" ]]; then
+          echo "::error::Untrusted post-install scripts detected. Audit each, then add to package.json trustedDependencies:"
+          echo "$untrusted"
+          exit 1
+        fi
+        echo "✓ no untrusted post-install scripts"
+        echo "::endgroup::"

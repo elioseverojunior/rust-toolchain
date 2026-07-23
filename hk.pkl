@@ -1,0 +1,119 @@
+amends "package://github.com/jdx/hk/releases/download/v1.50.0/hk@1.50.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.50.0/hk@1.50.0#/Builtins.pkl"
+
+local linters = new Mapping<String, Step> {
+    ["check-added-large-files"] = new Step {
+        glob = "**"
+        exclude = "dist/**"
+        check = "hk util check-added-large-files {{ files }}"
+    }
+    ["check-merge-conflict"] = new Step {
+        glob = "**"
+        check = "hk util check-merge-conflict {{ files }}"
+    }
+    ["check-case-conflict"] = new Step {
+        glob = "**"
+        check = "hk util check-case-conflict {{ files }}"
+    }
+    ["check-symlinks"] = new Step {
+        glob = "**"
+        check = "hk util check-symlinks {{ files }}"
+    }
+    ["check-executables-have-shebangs"] = new Step {
+        glob = "**"
+        check = "hk util check-executables-have-shebangs {{ files }}"
+    }
+    ["check-byte-order-marker"] = new Step {
+        glob = "**"
+        check = "hk util check-byte-order-marker {{ files }}"
+    }
+    ["trailing-whitespace-fixer"] = new Step {
+        glob = "**"
+        check = "hk util trailing-whitespace --diff {{ files }}"
+        fix = "hk util trailing-whitespace {{ files }}"
+    }
+    ["end-of-file-fixer"] = new Step {
+        glob = "**"
+        check = "hk util end-of-file-fixer --diff {{ files }}"
+        fix = "hk util end-of-file-fixer {{ files }}"
+    }
+    ["mixed-line-ending-fixer"] = new Step {
+        glob = "**"
+        check = "hk util mixed-line-ending --diff {{ files }}"
+        fix = "hk util mixed-line-ending {{ files }}"
+    }
+
+    ["gitleaks"] = Builtins.gitleaks
+
+    ["eslint"] = new Step {
+        glob = "*.ts"
+        check = "bun run eslint:lint"
+        fix = "bun run eslint:lint:fix"
+    }
+    ["prettier"] = new Step {
+        glob = "*.{ts,yml,yaml,json,md,toml}"
+        check = "bun run prettier:format"
+        fix = "bun run prettier:format:fix"
+    }
+    ["typecheck"] = new Step {
+        glob = "*.ts"
+        check = "bun run typecheck"
+    }
+    ["actionlint"] = new Step {
+        glob = ".github/workflows/*.{yml,yaml}"
+        check = "actionlint"
+    }
+    ["markdownlint"] = new Step {
+        glob = "*.md"
+        check = "mise run markdownlint {{ files }}"
+        fix = "mise run markdownlint:fix {{ files }}"
+    }
+}
+
+local tests = new Mapping<String, Step> {
+    ["test"] = new Step {
+        glob = "*.ts"
+        check = "bun run test"
+    }
+}
+
+local builds = new Mapping<String, Step> {
+    ["build"] = new Step {
+        glob = "*.ts"
+        check = "bun run build"
+    }
+}
+
+local complete = (linters.toMap() + tests.toMap()).toMapping()
+
+hooks {
+    ["pre-commit"] {
+        fix = true
+        stash = "git"
+        steps = linters
+    }
+    ["pre-commit:all"] {
+        fix = true
+        stash = "git"
+        steps = complete
+    }
+    ["check"] {
+        steps = linters
+    }
+    ["fix"] {
+        fix = true
+        steps = complete
+    }
+    ["build"] {
+        fix = true
+        stash = "git"
+        steps = builds
+    }
+    ["commit-msg"] {
+        steps {
+            ["commit-lint"] = new {
+                check = "bunx commitlint --edit {{ files }}"
+            }
+        }
+    }
+}

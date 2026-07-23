@@ -1,0 +1,63 @@
+name: "Rust Toolchain"
+description: >
+  Install a Rust toolchain using rustup, reading rust-toolchain.toml by default
+  with action input overrides. Inspired by dtolnay/rust-toolchain with extended
+  channel resolution and profile support.
+
+author: "elioseverojunior@gmail.com"
+
+branding:
+  icon: "terminal"
+  color: "orange"
+
+inputs:
+  toolchain:
+    description: >
+      Rust toolchain channel. Supports literal channels (stable, nightly, beta),
+      versioned channels (1.89.0), expressive formats (stable 6 months ago,
+      stable minus 3 releases), and <major.minor> series (1.62), which rustup
+      resolves to the newest patch in that series.
+      When omitted, reads from rust-toolchain.toml.
+    required: false
+
+  targets:
+    description: >
+      Comma, space, or newline-separated list of target triples to install
+      (e.g., wasm32-unknown-unknown, aarch64-apple-darwin). Merged with
+      rust-toolchain.toml targets.
+    required: false
+
+  target:
+    description: >
+      Single target triple (alias for targets). Useful when only one target
+      is needed.
+    required: false
+
+  components:
+    description: >
+      Comma, space, or newline-separated list of components to install (e.g.,
+      clippy, rustfmt). Accepts multiline YAML for readability. Merged with
+      rust-toolchain.toml components.
+    required: false
+
+  profile:
+    description: >
+      Rust profile to use (e.g., minimal, default, complete). Overrides
+      rust-toolchain.toml profile.
+    required: false
+
+outputs:
+  cachekey:
+    description: >
+      12-character cache key derived from rustc version date and commit hash,
+      compatible with dtolnay/rust-toolchain's cachekey output for seamless
+      cache interoperability.
+
+  name:
+    description: >
+      Resolved Rust toolchain channel name (e.g., stable, nightly-2025-01-01,
+      1.89.0).
+
+runs:
+  using: "node24"
+  main: "dist/index.js"

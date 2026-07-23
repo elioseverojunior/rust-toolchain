@@ -1,0 +1,56 @@
+# Configuration for actions/labeler
+# https://github.com/actions/labeler
+
+# Label based on file paths
+source:
+  - changed-files:
+      - any-glob-to-any-file: "src/**/*"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.test.ts"
+          - "**/*.spec.ts"
+          - "__tests__/**/*"
+          - "__mocks__/**/*"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "*.md"
+          - "docs/**/*"
+          - "examples/**/*"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**/*"
+          - "cliff.toml"
+          - "GitVersion.yml"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "package.json"
+          - "bun.lock"
+
+config:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "tsconfig*.json"
+          - "eslint.config.js"
+          - ".prettierrc"
+          - "action.yml"
+          - "mise.toml"
+          - "hk.pkl"
+
+build:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "dist/**/*"
+
+github-actions:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "action.yml"
+          - ".github/**/*"
