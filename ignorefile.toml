@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+version = 1
+
+[[gitignore.section]]
+level = 1
+name = "SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors"
+note = """
+
+SPDX-License-Identifier: MIT OR Apache-2.0"""
+
+[[gitignore.section.rule]]
+ignore = ["node_modules"]
+note = "dependencies (bun install)"
+
+[[gitignore.section.rule]]
+ignore = ["out", "*.tgz"]
+note = "output"
+
+[[gitignore.section.rule]]
+ignore = ["coverage", "*.lcov"]
+note = "code coverage"
+
+[[gitignore.section.rule]]
+ignore = ["logs", "_.log", "report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json", "/scorecard.json"]
+note = "logs"
+
+[[gitignore.section.rule]]
+ignore = [".env", ".env.development.local", ".env.test.local", ".env.production.local", ".env.local"]
+note = "dotenv environment variable files"
+
+[[gitignore.section.rule]]
+ignore = [".eslintcache", ".cache", "*.tsbuildinfo"]
+note = "caches"
+
+[[gitignore.section.rule]]
+ignore = [".venv"]
+note = "Python virtual env"
+
+[[gitignore.section.rule]]
+ignore = [".idea"]
+note = "IntelliJ based IDEs"
+
+[[gitignore.section.rule]]
+ignore = [".DS_Store"]
+note = "Finder (MacOS) folder config"
+
+[[gitignore.section.rule]]
+add = ["/.act/README.md"]
+ignore = ["/.act/**"]
+note = "Nektos/ACT"
+
+[[gitignore.section.rule]]
+ignore = ["/**/.rumdl_cache/"]
+note = "Rumdl"
+
+[[gitignore.section.rule]]
+add = ["CLAUDE.md", "AGENTS.md", "opencode.json"]
+note = "Add"

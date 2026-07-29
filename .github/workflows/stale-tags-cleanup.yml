@@ -1,0 +1,207 @@
+# SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+name: Stale Tag Cleanup
+
+# Garbage-collects ephemeral git tags (PR-style) that accumulate over
+# time. The four "standard" tiers documented in README's Tag pinning
+# section — v<M>, v<M>.<m>, v<M>.<m>.<p>, v<M>.<m>.<p>-<buildCount> —
+# are NEVER touched. Only tags matching explicit prerelease patterns
+# (e.g. v2.6.0-PullRequest.5) older than the stale threshold get deleted.
+#
+# Runs automatically every Sunday at 04:00 UTC (a quiet window) and can
+# be triggered manually via workflow_dispatch for ad-hoc cleanup or
+# dry-run preview.
+
+on:
+  schedule:
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview deletions without executing (safe default for manual runs)"
+        type: boolean
+        default: true
+      stale_days:
+        description: "Delete matching tags older than this many days"
+        type: number
+        default: 30
+
+# Tag + release deletion needs write access to the repo. No other
+# permission is required — this workflow does not create PRs, run
+# tests, or touch any other surface.
+permissions: read-all
+
+# Prevent multiple concurrent cleanup runs from racing on the same
+# tag-delete operations. Only one can run at a time; any new
+# scheduled run cancels an in-flight one (safe because each run
+# is idempotent).
+concurrency:
+  group: stale-tag-cleanup
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    name: Delete stale ephemeral tags
+    runs-on: ${{ vars.RUNS_ON_ARM64 || vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        # Use the Automation App identity (same as cicd.yml) so
+        # deletions are auditably attributed to the App. `repositories`
+        # scopes the token to just this repo.
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          submodules: "recursive"
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Identify + delete stale ephemeral tags
+        # Pattern-match policy:
+        #   DELETE IF older than STALE_DAYS AND matches any of:
+        #     v<M>.<m>.<p>-PullRequest.<N>
+        #     v<M>.<m>.<p>-alpha.<N> / -beta.<N> / -rc.<N> / -preview.<N>
+        #   NEVER MATCH (always kept):
+        #     v<M>                        — Major umbrella (rolling)
+        #     v<M>.<m>                    — MajorMinor umbrella (rolling)
+        #     v<M>.<m>.<p>                — MajorMinorPatch (frozen)
+        #     v<M>.<m>.<p>-<buildCount>   — SemVer tier; suffix is a bare
+        #                                   number, no named prefix
+        #
+        # The regex requires a NAMED prerelease prefix before the
+        # dot-number suffix. Build-count tags like `v2.6.0-5` do not
+        # match, so the SemVer tier stays safe. Adding a new prerelease
+        # label type means extending this alternation list.
+        env:
+          # Workflow-dispatch inputs are safely scoped through env:, never
+          # interpolated into shell directly — guards against arbitrary
+          # characters in input values (the security hook is satisfied
+          # by this pattern even though these particular inputs are
+          # typed booleans/numbers).
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+          STALE_DAYS: ${{ github.event_name == 'workflow_dispatch' && inputs.stale_days || 30 }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        # Plain `bash`, deliberately NOT `bash -l`. A login shell runs
+        # ~/.bash_logout on the way out, and the runner image's copy is:
+        #
+        #   if [ "$SHLVL" = 1 ]; then
+        #       [ -x /usr/bin/clear_console ] && /usr/bin/clear_console -q
+        #   fi
+        #
+        # Steps run at SHLVL=1 and clear_console exists but has no console, so
+        # it exits 1. `set -e` below is still in force during logout, so that
+        # failure terminated the shell with 1 — overriding this step's own
+        # `exit 0` and failing the job on the "nothing to delete" path. It bit
+        # only here because the quirk needs an explicit `exit` builtin; steps
+        # that run off the end of the script are unaffected, which is why the
+        # `bash -l` steps in cicd.yml never showed it.
+        #
+        # This step needs nothing from a login shell — git, awk, date and gh
+        # are all on PATH. The control flow below also keeps a single natural
+        # success path, so re-adding `-l` could not resurrect the bug.
+        shell: bash
+        run: |
+          set -Eeo pipefail
+
+          # Portable unix-seconds cutoff: GNU date (Linux) vs BSD date (macOS)
+          CUTOFF=$(date -u -d "${STALE_DAYS} days ago" +%s 2>/dev/null \
+            || date -u "-v-${STALE_DAYS}d" +%s)
+
+          EPHEMERAL_RE='^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+-(PullRequest|alpha|beta|rc|preview)\.[0-9]+$'
+
+          echo "::group::Inventory"
+          echo "Stale threshold: ${STALE_DAYS} days (cutoff unix-ts=${CUTOFF})"
+          echo "Dry run:         ${DRY_RUN}"
+          echo "Pattern:         ${EPHEMERAL_RE}"
+          echo "::endgroup::"
+
+          # The pattern reaches awk through the environment rather than `-v`:
+          # awk applies escape processing to a `-v` value, so `\.` arrived as a
+          # plain `.` (the runner logged "escape sequence `\.' treated as plain
+          # `.'"). A bare `.` matches ANY character, which silently widened a
+          # tag-DELETION filter — `v1x2x3-rc.1` would have matched. ENVIRON
+          # values are passed through verbatim.
+          # Read the tags in their own statement rather than inside the
+          # process substitution below. A command that fails inside `< <(...)`
+          # cannot be caught by `set -e`, so an erroring git would have come
+          # back as an empty list and been reported as "nothing to delete" —
+          # a clean-looking pass that never actually checked anything.
+          TAG_LIST=$(git for-each-ref refs/tags --format='%(refname) %(creatordate:unix)')
+
+          mapfile -t STALE_TAGS < <(
+            printf '%s\n' "${TAG_LIST}" \
+              | EPHEMERAL_RE="${EPHEMERAL_RE}" CUTOFF="${CUTOFF}" awk '
+                  BEGIN { re = ENVIRON["EPHEMERAL_RE"]; cutoff = ENVIRON["CUTOFF"] + 0 }
+                  $1 ~ re && $2 + 0 < cutoff { print $1 }'
+          )
+
+          deleted=0
+          failed=0
+
+          if [[ ${#STALE_TAGS[@]} -eq 0 ]]; then
+            echo "::notice::No stale ephemeral tags found — nothing to delete"
+          else
+            echo "::group::Stale tags (${#STALE_TAGS[@]})"
+            printf '  %s\n' "${STALE_TAGS[@]}"
+            echo "::endgroup::"
+
+            if [[ "${DRY_RUN}" == "true" ]]; then
+              echo "::warning::DRY RUN — no deletions executed"
+              echo "Re-run with dry_run=false to actually delete the above tags."
+            else
+              for ref in "${STALE_TAGS[@]}"; do
+                tag="${ref#refs/tags/}"
+                echo "::group::Deleting ${tag}"
+
+                # Best-effort GitHub Release deletion — PR-style tags
+                # should not have releases (only the full-SemVer tier does),
+                # but the check keeps us safe if a historic workflow left
+                # one behind.
+                if gh release view "${tag}" --json tagName >/dev/null 2>&1; then
+                  if gh release delete --yes "${tag}"; then
+                    echo "  ✓ gh release deleted"
+                  else
+                    echo "  ✗ gh release delete failed"
+                    failed=$((failed+1))
+                  fi
+                fi
+
+                if git push origin --delete "${tag}"; then
+                  echo "  ✓ remote tag deleted"
+                  git tag -d "${tag}" >/dev/null 2>&1 || true
+                  deleted=$((deleted+1))
+                else
+                  echo "  ✗ remote tag delete failed"
+                  failed=$((failed+1))
+                fi
+
+                echo "::endgroup::"
+              done
+
+              echo ""
+              echo "Summary: ${deleted} deleted, ${failed} failed"
+            fi
+          fi
+
+          if [[ ${failed} -gt 0 ]]; then
+            echo "::error::${failed} tag(s) failed to delete — check the log"
+            exit 1
+          fi
+
+          # Ends on a command that succeeds, so the step's status never comes
+          # from a trailing test.
+          echo "Stale tag cleanup finished."

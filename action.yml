@@ -1,0 +1,143 @@
+# SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+name: "Rust Toolchain"
+description: >
+  Install a Rust toolchain using rustup, reading rust-toolchain.toml by default
+  with action input overrides. Inspired by dtolnay/rust-toolchain with extended
+  channel resolution and profile support.
+
+author: "elioseverojunior@gmail.com"
+
+branding:
+  icon: "terminal"
+  color: "orange"
+
+inputs:
+  toolchain:
+    description: >
+      Rust toolchain channel. Supports literal channels (stable, nightly, beta),
+      versioned channels (1.89.0), expressive formats (stable 6 months ago,
+      stable minus 3 releases), and <major.minor> series (1.62), which rustup
+      resolves to the newest patch in that series.
+      When omitted, reads from rust-toolchain.toml.
+    required: false
+
+  targets:
+    description: >
+      Comma, space, or newline-separated list of target triples to install
+      (e.g., wasm32-unknown-unknown, aarch64-apple-darwin). Merged with
+      rust-toolchain.toml targets, deduped, with these leading the list — so
+      the `target` output names one of yours whenever you set this.
+    required: false
+
+  target:
+    description: >
+      Single target triple (alias for targets). Useful when only one target
+      is needed.
+    required: false
+
+  components:
+    description: >
+      Comma, space, or newline-separated list of components to install (e.g.,
+      clippy, rustfmt). Accepts multiline YAML for readability. Merged with
+      rust-toolchain.toml components, deduped, with these leading the list.
+    required: false
+
+  profile:
+    description: >
+      Rust profile to use. Valid options are `minimal`, `default` and
+      `complete`; anything else is rejected. Overrides the rust-toolchain.toml
+      profile. Defaults to `default` (rustc, cargo, rust-std, rust-docs,
+      rustfmt, clippy), matching rustup's own default. rustup ignores the
+      profile when the toolchain is already installed, so the action also adds
+      the profile's components explicitly. `complete` requires `toolchain:
+      nightly` — it needs miri and rustc-codegen-cranelift, which rustup
+      publishes for nightly only, and pairing it with another channel fails the
+      step immediately.
+    required: false
+
+  set-rustup-toolchain:
+    description: >
+      Whether to export `RUSTUP_TOOLCHAIN` for the rest of the job (default
+      true). It sits at precedence 2 in rustup's override chain, above every
+      `rust-toolchain.toml` in the tree, which is what makes an action input
+      actually win in later steps. Set to false in a monorepo where nested
+      crates pin their own toolchains and each `rust-toolchain.toml` should
+      keep applying to its own directory. Every output still describes the
+      toolchain this action installed either way.
+    required: false
+    default: "true"
+
+outputs:
+  cachekey:
+    description: >
+      12-character cache key derived from rustc version date and commit hash,
+      compatible with dtolnay/rust-toolchain's cachekey output for seamless
+      cache interoperability.
+
+  cachekey-full:
+    description: >
+      The cachekey above extended with a digest of the resolved channel,
+      targets, components and profile. Two jobs on the same compiler but with
+      different targets share a `cachekey` and would restore each other's
+      artifacts; this key keeps them apart. Targets and components are sorted,
+      so writing the same set in a different order still hits the same key.
+
+  name:
+    description: >
+      Resolved Rust toolchain channel name (e.g., stable, nightly-2025-01-01,
+      1.89.0).
+
+  toolchain:
+    description: >
+      The resolved channel, after merging `rust-toolchain.toml` with the
+      inputs and expanding any expressive form — `stable minus 2 releases`
+      comes back as the `1.NN` it became. Same value as `name`, which is kept
+      under that name for dtolnay/rust-toolchain compatibility.
+
+  targets:
+    description: >
+      The target triples actually installed, as a JSON array string (e.g.
+      `["wasm32-unknown-unknown","aarch64-apple-darwin"]`). A JSON array rather
+      than a delimited string so `fromJSON()` reads it directly and no consumer
+      has to guess the separator. Inputs lead the list, then any the toml added.
+
+  target:
+    description: >
+      The first entry of `targets`, for the common job that installs exactly
+      one, or an empty string when none were requested. Because inputs lead the
+      merged list, this is the caller's own target whenever they named one.
+
+  components:
+    description: >
+      The components explicitly requested through the inputs or the toml, as a
+      JSON array string (e.g. `["clippy","rustfmt"]`). Components implied by
+      the profile are not listed here — those are best-effort and are not part
+      of the requested configuration.
+
+  profile:
+    description: >
+      The resolved profile — `minimal`, `default` or `complete`. Always
+      populated, since an unset profile resolves to `default`.
+
+  set-rustup-toolchain:
+    description: >
+      Whether `RUSTUP_TOOLCHAIN` was exported for the rest of the job, as
+      `true` or `false`, after applying the default.
+
+  json:
+    description: >
+      Every output above as one JSON object, natively typed — `targets` and
+      `components` are real arrays and `set-rustup-toolchain` is a real boolean,
+      so `fromJSON(steps.<id>.outputs.json).targets` drops straight into a
+      matrix. It also adds two provenance blocks the flat outputs cannot carry:
+      `inputs`, the action inputs verbatim, and `toml`, the parsed
+      `rust-toolchain.toml` before merging. Together they say where every
+      resolved value came from — absent toml scalars are `null`, unset inputs
+      are empty strings.
+
+runs:
+  using: "node24"
+  main: "dist/index.js"

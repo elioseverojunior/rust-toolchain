@@ -1,0 +1,25 @@
+// SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+/**
+ * The library surface, for consumers importing this package by name.
+ *
+ * `src/index.ts` is deliberately not re-exported. It is the GitHub Action
+ * entry point: it exports nothing and calls `run()` at the top level, so
+ * pulling it into this barrel would make merely importing the library shell
+ * out to `rustup`. Everything below is free of import-time side effects.
+ *
+ * Importing a single module directly (`@rust-toolchain/core`, …) stays
+ * supported and is cheaper — this barrel loads all five.
+ *
+ * The re-exports below use the package specifier rather than `./action`, so
+ * they resolve identically here and in a consumer that maps
+ * `@rust-toolchain/*` at its own root. A `@/`-style alias would resolve only
+ * inside this repo and break the moment the source is consumed.
+ */
+export * from "@rust-toolchain/action";
+export * from "@rust-toolchain/builder";
+export * from "@rust-toolchain/config";
+export * from "@rust-toolchain/core";
+export * from "@rust-toolchain/outputs";

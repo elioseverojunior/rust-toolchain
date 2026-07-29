@@ -1,0 +1,26 @@
+{
+  "extends": ["./tsconfig.base.json"],
+  "compilerOptions": {
+    // Build configs. `noEmit` is set in the base config — bun produces
+    // dist/index.js — so these only scope what tsc will type-check. rootDir is
+    // the repo root so tooling under scripts/ is checked alongside src/.
+    "outDir": "./dist",
+    "rootDir": ".",
+
+    // Resolved relative to this file, so no `baseUrl` — it is deprecated as of
+    // TypeScript 6.0 and errors with TS5101. The trailing `/*` on both sides is
+    // what makes these prefix rules: without it `"@/"` matches only a module
+    // named exactly `@/`, which resolves nothing and reports nothing.
+    //
+    // `@rust-toolchain` names the barrel, never `src/index.ts` — that file
+    // exports nothing and calls `run()` at the top level, so importing it would
+    // execute the action.
+    "paths": {
+      "@/*": ["./src/*"],
+      "@rust-toolchain": ["./src/lib.ts"],
+      "@rust-toolchain/*": ["./src/*"]
+    }
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules"]
+}

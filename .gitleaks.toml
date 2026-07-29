@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Gitleaks configuration
+# See https://github.com/gitleaks/gitleaks#configuration
+
+[allowlist]
+    # Allow test token in .act/secrets for local act simulation
+    paths = [
+        "(.*?)\\.act/.secrets",
+        "(.*?)\\.env\\.example",
+        "(.*?)\\.env\\.sample",
+        "(.*?)\\.env\\.template",
+    ]
+    regexes = []
+    commits = []
+    stopwords = []

@@ -1,0 +1,27 @@
+# Auto-generated lockfiles
+bun.lock
+package-lock.json
+pnpm-lock.yaml
+
+# Build / test outputs
+dist/
+coverage/
+node_modules/
+*.tsbuildinfo
+
+# Files Prettier has no parser for (no plugin loaded)
+.gitignore
+.nvmrc
+.npmrc
+.prettierignore
+*.toml
+
+# Changeset internal cache (the .md changeset entries are still formatted)
+.changeset/.cache/
+
+# Rumdl cache
+.rumdl_cache/
+
+# Local claude-mem scratch buffer — gitignored, not project source.
+# ESLint (`ignores`) and rumdl (`exclude`) already skip it.
+.remember/

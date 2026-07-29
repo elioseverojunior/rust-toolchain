@@ -1,0 +1,59 @@
+{
+  "name": "rust-toolchain",
+  "module": "src/index.ts",
+  "type": "module",
+  "license": "MIT",
+  "description": "Rust Toolchain Action",
+  "version": "0.0.1",
+  "engines": {
+    "node": ">=24.0.0,<25.0.0",
+    "bun": "^1.3.14",
+    "typescript": "^6.0.3"
+  },
+  "private": true,
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@happy-dom/global-registrator": "20.11.1",
+    "@types/bun": "1.3.14",
+    "@typescript-eslint/eslint-plugin": "8.65.0",
+    "@typescript-eslint/parser": "8.65.0",
+    "action-docs": "2.5.1",
+    "eslint": "10.8.0",
+    "eslint-import-resolver-typescript": "4.4.5",
+    "eslint-plugin-import-x": "4.17.1",
+    "globals": "17.8.0",
+    "mermaid": "11.16.0",
+    "prettier": "3.9.6",
+    "prettier-plugin-organize-imports": "4.3.0",
+    "typescript": "^6.0.3"
+  },
+  "peerDependencies": {
+    "typescript": "^6.0.3"
+  },
+  "scripts": {
+    "test": "bun test",
+    "test:coverage": "bun test --coverage",
+    "build": "bun run build:action",
+    "build:action": "bun build src/index.ts --outdir dist --target node --external none",
+    "lint": "bun run eslint:lint && bun run prettier:format",
+    "deps": "bunx --bun npm-check-updates -u --target minor && bun install",
+    "deps:check": "bunx --bun npm-check-updates --target minor",
+    "deps:latest": "bunx --bun npm-check-updates -u --target latest && bun install",
+    "prettier:format": "prettier --check .",
+    "prettier:format:fix": "prettier --write .",
+    "eslint:lint": "eslint --max-warnings 0 .",
+    "mermaid:lint": "bun scripts/lint-mermaid.ts",
+    "eslint:lint:fix": "eslint --fix --max-warnings 0 .",
+    "fix:all": "bun run eslint:lint:fix && bun run prettier:format:fix",
+    "typecheck": "tsc --noEmit",
+    "typecheck:watch": "tsc --noEmit --watch"
+  },
+  "trustedDependencies": [
+    "unrs-resolver"
+  ],
+  "dependencies": {
+    "@actions/core": "3.0.1",
+    "@actions/github": "9.1.1",
+    "smol-toml": "1.7.1"
+  }
+}
