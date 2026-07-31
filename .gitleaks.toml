@@ -13,6 +13,16 @@
         "(.*?)\\.env\\.sample",
         "(.*?)\\.env\\.template",
     ]
-    regexes = []
+    regexes = [
+        # The fixture cache key used across the tests and the design docs.
+        # `generateCacheKey` concatenates a rustc commit date with a commit
+        # hash, and `generateSpecCacheKey` appends a SHA-256 digest of the
+        # resolved spec; both are content digests of public data, never
+        # credentials. Their entropy is inherent to being digests, which is
+        # exactly what trips the generic-api-key rule. Scoped to the literal
+        # fixture rather than to a path, so a real secret in the same file is
+        # still caught.
+        "20250915abcd(-1f2e3d4c)?",
+    ]
     commits = []
     stopwords = []
