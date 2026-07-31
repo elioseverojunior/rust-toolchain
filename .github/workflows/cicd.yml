@@ -161,11 +161,145 @@ jobs:
           echo "::endgroup::"
 
   # ──────────────────────────────────────────────
-  #  5.  Release — only on push to default branch
+  #  5.  E2E — run the action itself, on real runners
+  # ──────────────────────────────────────────────
+  #
+  # The unit tests exercise `run()` behind injected dependencies, so nothing
+  # in CI ever parsed `action.yml` as action metadata or resolved an output
+  # expression. A literal `${{ … }}` in an input description once shipped to
+  # main because of that: it is opaque prose to YAML, rumdl, Prettier,
+  # actionlint and hk alike, and only a runner loading the metadata rejects
+  # it. This job is that runner.
+  e2e:
+    name: E2E
+    needs: [build]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+
+      - name: Write rust-toolchain.toml
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          cat > rust-toolchain.toml <<'EOF'
+          [toolchain]
+          channel = "1.90"
+          profile = "minimal"
+          components = ["clippy"]
+          EOF
+          cat rust-toolchain.toml
+
+      # No `with:` beyond the cache inputs on purpose — this asserts the
+      # TOML-first contract, which is the action's headline behaviour.
+      - name: Run Rust Toolchain Action
+        id: rust-toolchain
+        uses: ./
+        with:
+          cache: true
+          cache-key-hash: ${{ hashFiles('bun.lock') }}
+          cache-key-suffix: ci
+
+      # Values arrive through env rather than interpolated into the script, so
+      # an output containing shell metacharacters cannot execute.
+      - name: Verify Resolved Outputs
+        shell: bash
+        env:
+          NAME: ${{ steps.rust-toolchain.outputs.name }}
+          TOOLCHAIN: ${{ steps.rust-toolchain.outputs.toolchain }}
+          PROFILE: ${{ steps.rust-toolchain.outputs.profile }}
+          COMPONENTS: ${{ steps.rust-toolchain.outputs.components }}
+          CACHEKEY: ${{ steps.rust-toolchain.outputs.cachekey }}
+          CACHEKEY_FULL: ${{ steps.rust-toolchain.outputs.cachekey-full }}
+        run: |
+          set -eo pipefail
+
+          printf 'name=%s toolchain=%s profile=%s components=%s\n' \
+            "$NAME" "$TOOLCHAIN" "$PROFILE" "$COMPONENTS"
+          printf 'cachekey=%s cachekey-full=%s\n' "$CACHEKEY" "$CACHEKEY_FULL"
+
+          # The toml is the only configuration source here, so every value
+          # below proves it was read, parsed and applied.
+          [[ "$NAME" == "1.90" ]]      || { echo "::error::name is '$NAME', expected 1.90 from the toml"; exit 1; }
+          [[ "$TOOLCHAIN" == "$NAME" ]] || { echo "::error::toolchain and name disagree"; exit 1; }
+          [[ "$PROFILE" == "minimal" ]] || { echo "::error::profile is '$PROFILE', expected minimal from the toml"; exit 1; }
+          [[ "$COMPONENTS" == *clippy* ]] || { echo "::error::components '$COMPONENTS' lost the toml's clippy"; exit 1; }
+          [[ ${#CACHEKEY} -eq 12 ]]     || { echo "::error::cachekey '$CACHEKEY' is not 12 chars"; exit 1; }
+          [[ "$CACHEKEY_FULL" == "$CACHEKEY"-* ]] || { echo "::error::cachekey-full does not extend cachekey"; exit 1; }
+
+      # Also the only place the README's restore-keys recipe is evaluated by a
+      # real runner. Its block scalar must keep both lines at identical
+      # indentation, or the join separator gains leading spaces.
+      - name: Verify Cache Output
+        shell: bash
+        env:
+          CACHE_JSON: ${{ steps.rust-toolchain.outputs.cache }}
+          REGISTRY_KEY: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.registry.key }}
+          BUILD_KEY: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.build.key }}
+          CACHEKEY_FULL: ${{ steps.rust-toolchain.outputs.cachekey-full }}
+          REGISTRY_RESTORE_KEYS: |
+            ${{ join(fromJSON(steps.rust-toolchain.outputs.cache).layers.registry.restoreKeys, '
+            ') }}
+        run: |
+          set -eo pipefail
+
+          echo "cache: $CACHE_JSON"
+          echo "registry key: $REGISTRY_KEY"
+          echo "build key: $BUILD_KEY"
+          echo "registry restore-keys:"
+          echo "$REGISTRY_RESTORE_KEYS"
+
+          [[ -n "$REGISTRY_KEY" ]] || { echo "::error::registry cache key is empty"; exit 1; }
+          [[ -n "$BUILD_KEY" ]]    || { echo "::error::build cache key is empty"; exit 1; }
+
+          # The layer invariants, asserted rather than assumed: the registry
+          # key must not carry the toolchain digest, and the build key must.
+          [[ "$REGISTRY_KEY" != *"$CACHEKEY_FULL"* ]] \
+            || { echo "::error::registry key carries the toolchain digest; a rustc bump would re-download every crate"; exit 1; }
+          [[ "$BUILD_KEY" == *"$CACHEKEY_FULL"* ]] \
+            || { echo "::error::build key lacks the toolchain digest; it would restore artifacts cargo discards"; exit 1; }
+
+          # The widest rung is the bare layer-os-arch prefix, and `-x` demands
+          # a whole-line match — a re-indented block scalar would prepend
+          # spaces and fail here.
+          grep -qx "registry-${RUNNER_OS}-${RUNNER_ARCH}-" <<<"$REGISTRY_RESTORE_KEYS" \
+            || { echo "::error::join() did not produce one restore key per line"; exit 1; }
+
+      - name: Verify The Toolchain Actually Works
+        shell: bash
+        env:
+          NAME: ${{ steps.rust-toolchain.outputs.name }}
+        run: |
+          set -eo pipefail
+
+          rustc --version
+          cargo --version
+          cargo clippy --version
+
+          # RUSTUP_TOOLCHAIN is what makes the resolved channel win in later
+          # steps; this step is a later step, so it is the real assertion.
+          [[ -n "${RUSTUP_TOOLCHAIN:-}" ]] || { echo "::error::RUSTUP_TOOLCHAIN was not exported"; exit 1; }
+          [[ "$RUSTUP_TOOLCHAIN" == "$NAME" ]] \
+            || { echo "::error::RUSTUP_TOOLCHAIN is '$RUSTUP_TOOLCHAIN', expected '$NAME'"; exit 1; }
+          rustc --version | grep -q "1\.90" \
+            || { echo "::error::rustc is not the 1.90 the toml asked for"; exit 1; }
+
+  # ──────────────────────────────────────────────
+  #  6.  Release — only on push to default branch
   # ──────────────────────────────────────────────
   release:
     name: Release
-    needs: [build]
+    needs: [build, e2e]
     if: >
       github.ref_name == github.event.repository.default_branch
       && github.event_name == 'push'
