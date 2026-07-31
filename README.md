@@ -127,14 +127,18 @@ Install a Rust toolchain using rustup, reading rust-toolchain.toml by default wi
 
 ## Inputs
 
-| name                   | description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | required | default |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
-| `toolchain`            | <p>Rust toolchain channel. Supports literal channels (stable, nightly, beta), versioned channels (1.89.0), expressive formats (stable 6 months ago, stable minus 3 releases), and <major.minor> series (1.62), which rustup resolves to the newest patch in that series. When omitted, reads from rust-toolchain.toml.</p>                                                                                                                                                                                                                                                                                                                                            | `false`  | `""`    |
-| `targets`              | <p>Comma, space, or newline-separated list of target triples to install (e.g., wasm32-unknown-unknown, aarch64-apple-darwin). Merged with rust-toolchain.toml targets, deduped, with these leading the list — so the <code>target</code> output names one of yours whenever you set this.</p>                                                                                                                                                                                                                                                                                                                                                                         | `false`  | `""`    |
-| `target`               | <p>Single target triple (alias for targets). Useful when only one target is needed.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `false`  | `""`    |
-| `components`           | <p>Comma, space, or newline-separated list of components to install (e.g., clippy, rustfmt). Accepts multiline YAML for readability. Merged with rust-toolchain.toml components, deduped, with these leading the list.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                            | `false`  | `""`    |
-| `profile`              | <p>Rust profile to use. Valid options are <code>minimal</code>, <code>default</code> and <code>complete</code>; anything else is rejected. Overrides the rust-toolchain.toml profile. Defaults to <code>default</code> (rustc, cargo, rust-std, rust-docs, rustfmt, clippy), matching rustup's own default. rustup ignores the profile when the toolchain is already installed, so the action also adds the profile's components explicitly. <code>complete</code> requires <code>toolchain: nightly</code> — it needs miri and rustc-codegen-cranelift, which rustup publishes for nightly only, and pairing it with another channel fails the step immediately.</p> | `false`  | `""`    |
-| `set-rustup-toolchain` | <p>Whether to export <code>RUSTUP_TOOLCHAIN</code> for the rest of the job (default true). It sits at precedence 2 in rustup's override chain, above every <code>rust-toolchain.toml</code> in the tree, which is what makes an action input actually win in later steps. Set to false in a monorepo where nested crates pin their own toolchains and each <code>rust-toolchain.toml</code> should keep applying to its own directory. Every output still describes the toolchain this action installed either way.</p>                                                                                                                                               | `false`  | `true`  |
+| name                   | description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | required | default          |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------------- |
+| `toolchain`            | <p>Rust toolchain channel. Supports literal channels (stable, nightly, beta), versioned channels (1.89.0), expressive formats (stable 6 months ago, stable minus 3 releases), and <major.minor> series (1.62), which rustup resolves to the newest patch in that series. When omitted, reads from rust-toolchain.toml.</p>                                                                                                                                                                                                                                                                                                                                            | `false`  | `""`             |
+| `targets`              | <p>Comma, space, or newline-separated list of target triples to install (e.g., wasm32-unknown-unknown, aarch64-apple-darwin). Merged with rust-toolchain.toml targets, deduped, with these leading the list — so the <code>target</code> output names one of yours whenever you set this.</p>                                                                                                                                                                                                                                                                                                                                                                         | `false`  | `""`             |
+| `target`               | <p>Single target triple (alias for targets). Useful when only one target is needed.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `false`  | `""`             |
+| `components`           | <p>Comma, space, or newline-separated list of components to install (e.g., clippy, rustfmt). Accepts multiline YAML for readability. Merged with rust-toolchain.toml components, deduped, with these leading the list.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                            | `false`  | `""`             |
+| `profile`              | <p>Rust profile to use. Valid options are <code>minimal</code>, <code>default</code> and <code>complete</code>; anything else is rejected. Overrides the rust-toolchain.toml profile. Defaults to <code>default</code> (rustc, cargo, rust-std, rust-docs, rustfmt, clippy), matching rustup's own default. rustup ignores the profile when the toolchain is already installed, so the action also adds the profile's components explicitly. <code>complete</code> requires <code>toolchain: nightly</code> — it needs miri and rustc-codegen-cranelift, which rustup publishes for nightly only, and pairing it with another channel fails the step immediately.</p> | `false`  | `""`             |
+| `set-rustup-toolchain` | <p>Whether to export <code>RUSTUP_TOOLCHAIN</code> for the rest of the job (default true). It sits at precedence 2 in rustup's override chain, above every <code>rust-toolchain.toml</code> in the tree, which is what makes an action input actually win in later steps. Set to false in a monorepo where nested crates pin their own toolchains and each <code>rust-toolchain.toml</code> should keep applying to its own directory. Every output still describes the toolchain this action installed either way.</p>                                                                                                                                               | `false`  | `true`           |
+| `cache`                | <p>Whether to derive cargo cache keys (default false). When true, the <code>cache</code> output carries a key and restore-key ladder per layer for the workflow's own <code>actions/cache</code> steps. This action does not restore or save anything itself.</p>                                                                                                                                                                                                                                                                                                                                                                                                     | `false`  | `false`          |
+| `cache-key-hash`       | <p>A hash of the dependency set, required when <code>cache</code> is true. Pass <code>${{ hashFiles('**/Cargo.lock') }}</code> — <code>hashFiles</code> is a workflow expression function that a Node action cannot call, and using GitHub's own value keeps these keys interoperable with caches you already have. Without it the keys never change: they hit exactly on every run and serve the same crates for the life of the repository.</p>                                                                                                                                                                                                                     | `false`  | `""`             |
+| `cache-key-suffix`     | <p>An optional discriminator added to every cache key, e.g. a job name. Omitting it collapses the slot rather than leaving an empty segment, so the key reads <code>registry-Linux-X64-&lt;hash&gt;</code> and not <code>registry-Linux-X64--&lt;hash&gt;</code>.</p>                                                                                                                                                                                                                                                                                                                                                                                                 | `false`  | `""`             |
+| `cache-layers`         | <p>Which cache layers to derive keys for, comma, space or newline separated. Defaults to all of them. <code>registry</code> covers the downloaded crates and is keyed on the dependency set alone; <code>build</code> covers the target directory and is keyed on the dependency set plus the resolved toolchain, so a rustc bump does not invalidate the crates it never touched.</p>                                                                                                                                                                                                                                                                                | `false`  | `registry,build` |
 
 ## Outputs
 
@@ -142,6 +146,7 @@ Install a Rust toolchain using rustup, reading rust-toolchain.toml by default wi
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cachekey`             | <p>12-character cache key derived from rustc version date and commit hash, compatible with dtolnay/rust-toolchain's cachekey output for seamless cache interoperability.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `cachekey-full`        | <p>The cachekey above extended with a digest of the resolved channel, targets, components and profile. Two jobs on the same compiler but with different targets share a <code>cachekey</code> and would restore each other's artifacts; this key keeps them apart. Targets and components are sorted, so writing the same set in a different order still hits the same key.</p>                                                                                                                                                                                                                                                  |
+| `cache`                | <p>The derived cache keys as one JSON object: <code>enabled</code>, plus a <code>layers</code> map from layer name to <code>{ key, restoreKeys }</code>. Empty when <code>cache</code> is false. Read it with <code>fromJSON()</code> and feed the parts straight into <code>actions/cache</code>.</p>                                                                                                                                                                                                                                                                                                                           |
 | `name`                 | <p>Resolved Rust toolchain channel name (e.g., stable, nightly-2025-01-01, 1.89.0).</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `toolchain`            | <p>The resolved channel, after merging <code>rust-toolchain.toml</code> with the inputs and expanding any expressive form — <code>stable minus 2 releases</code> comes back as the <code>1.NN</code> it became. Same value as <code>name</code>, which is kept under that name for dtolnay/rust-toolchain compatibility.</p>                                                                                                                                                                                                                                                                                                     |
 | `targets`              | <p>The target triples actually installed, as a JSON array string (e.g. <code>["wasm32-unknown-unknown","aarch64-apple-darwin"]</code>). A JSON array rather than a delimited string so <code>fromJSON()</code> reads it directly and no consumer has to guess the separator. Inputs lead the list, then any the toml added.</p>                                                                                                                                                                                                                                                                                                  |
@@ -195,6 +200,30 @@ This action is a `node24` action.
     #
     # Required: false
     # Default: true
+
+    cache:
+    # Whether to derive cargo cache keys (default false). When true, the `cache` output carries a key and restore-key ladder per layer for the workflow's own `actions/cache` steps. This action does not restore or save anything itself.
+    #
+    # Required: false
+    # Default: false
+
+    cache-key-hash:
+    # A hash of the dependency set, required when `cache` is true. Pass `${{ hashFiles('**/Cargo.lock') }}` — `hashFiles` is a workflow expression function that a Node action cannot call, and using GitHub's own value keeps these keys interoperable with caches you already have. Without it the keys never change: they hit exactly on every run and serve the same crates for the life of the repository.
+    #
+    # Required: false
+    # Default: ""
+
+    cache-key-suffix:
+    # An optional discriminator added to every cache key, e.g. a job name. Omitting it collapses the slot rather than leaving an empty segment, so the key reads `registry-Linux-X64-<hash>` and not `registry-Linux-X64--<hash>`.
+    #
+    # Required: false
+    # Default: ""
+
+    cache-layers:
+    # Which cache layers to derive keys for, comma, space or newline separated. Defaults to all of them. `registry` covers the downloaded crates and is keyed on the dependency set alone; `build` covers the target directory and is keyed on the dependency set plus the resolved toolchain, so a rustc bump does not invalidate the crates it never touched.
+    #
+    # Required: false
+    # Default: registry,build
 ```
 
 <!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v1" -->
@@ -275,6 +304,7 @@ strings, absent toml scalars are `null`.
   "name": "1.90.0",
   "cachekey": "20250915abcd",
   "cachekey-full": "20250915abcd-1f2e3d4c",
+  "cache": { "enabled": false, "layers": {} },
   "inputs": {
     "toolchain": "",
     "targets": "",
@@ -296,6 +326,38 @@ strings, absent toml scalars are `null`.
 So in the example above, `wasm32-unknown-unknown` is traceable to the workflow
 and `aarch64-apple-darwin` to the checked-in toml — a distinction the merged
 `targets` list alone cannot make.
+
+### Deriving cargo cache keys
+
+Set `cache: true` and the action derives a key and restore-key ladder per
+layer. It does not restore or save anything itself — the keys go to your own
+`actions/cache` steps.
+
+```yaml
+- id: rust
+  uses: elioseverojunior/rust-toolchain@v1
+  with:
+    toolchain: stable
+    cache: true
+    cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}
+    cache-key-suffix: ci
+
+- uses: actions/cache@v6
+  with:
+    path: |
+      ~/.cargo/registry/index
+      ~/.cargo/registry/cache
+      ~/.cargo/git/db
+    key: ${{ fromJSON(steps.rust.outputs.cache).layers.registry.key }}
+    restore-keys: ${{ join(fromJSON(steps.rust.outputs.cache).layers.registry.restoreKeys, '
+') }}
+```
+
+The two layers are keyed differently on purpose. `registry` holds downloaded
+source archives that any compiler can build, so its key omits the toolchain —
+bumping stable does not re-download crates. `build` holds compiled artifacts,
+so its key carries the resolved toolchain and its ladder never falls back past
+one.
 
 ## Programmatic Usage
 

@@ -55,6 +55,11 @@ change.
   the coverage report. It is dependency wiring only — orchestration lives in
   `action.ts` behind the injected `ActionDeps`. Anything you add to `index.ts`
   is silently uncovered, so put it in `action.ts` instead.
+- A `switch` statement's final `case` block never has its closing brace marked
+  as covered under Bun 1.3.14 coverage, so any `switch` phantom-fails the 100%
+  gate — confirmed by reordering the cases and watching the phantom uncovered
+  line move to whichever case is last. Use early returns or a lookup object
+  instead of `switch`.
 
 ## Path aliases — the specifier is consumer-visible
 
@@ -104,6 +109,29 @@ Full reasoning in `docs/ARCHITECTURE.md` → Key Design Decisions.
 - `resolveRustupEnv` honours a caller-supplied `RUSTUP_HOME`; overlayfs runners
   need it pointed at a directory created at run time, or rustup's component
   renames fail with `EXDEV`.
+
+## Cache invariants — do not "simplify" these
+
+Full reasoning in `docs/ARCHITECTURE.md` → Key Design Decisions → Cache Layers.
+
+- **Empty key segments collapse; they never leave an empty slot.**
+  `joinKeySegments` (`src/cache/keys.ts`) filters blanks before joining, so an
+  unset `cache-key-suffix` yields `registry-Linux-X64-<hash>`, never
+  `registry-Linux-X64--<hash>`. A stray empty segment reads as harmless
+  cosmetics but is a distinct cache key from the padded form, so "cleaning it
+  up" by joining unconditionally silently invalidates every existing cache
+  entry.
+- **The registry key never contains the toolchain spec.** `registry` holds
+  downloaded crate sources that any rustc can compile; keying it on the
+  resolved toolchain would force a full re-download on every channel bump for
+  a layer that did not change. This is the entire reason the layers are split
+  rather than sharing one key.
+- **The build restore ladder never falls back past a `cachekey-full`
+  boundary.** `build` holds compiled artifacts, which are specific to the
+  resolved toolchain; a looser rung would let it restore artifacts `cargo`
+  discards on sight, paying a download only to re-save it under a new key.
+  Adding a shorter fallback rung "for a better hit rate" removes the guarantee
+  that a `build` restore is ever useful.
 
 ## Action pinning overrides the global rule
 

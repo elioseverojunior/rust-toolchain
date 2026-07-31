@@ -274,15 +274,17 @@ classDiagram
 
 ## Source File Map
 
-| File             | Type                            | Exports                                                                                                            | Responsibilities                                                                                                                                                                                           |
-| ---------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/index.ts`   | Entry (node:child_process)      | none — side-effecting script                                                                                       | Dependency wiring only: hands real `spawnSync`, `readFileSync`, `@actions/core` and a synchronous `sleep` to `run()`                                                                                       |
-| `src/action.ts`  | Module                          | `run`, `ActionDeps`, `ExecResult`, `ExecOptions`                                                                   | Orchestration behind injected dependencies — rustup bootstrap, install, targets, components, default, `RUSTUP_TOOLCHAIN`, cargo env defaults, cache keys, outputs; argv only, timeouts, retries            |
-| `src/core.ts`    | Module (smol-toml, node:crypto) | `parseRustToolchainToml`, `resolveChannel`, `generateCacheKey`, `generateSpecCacheKey`, `parseRustcVersion`, types | TOML parsing, channel resolution/scaling/validation, cache key computation                                                                                                                                 |
-| `src/config.ts`  | Module                          | `mergeConfig`, `resolveRustupEnv`, types                                                                           | Merge toml config with action inputs (scalars replaced by inputs; lists accumulate deduped, inputs leading) and validate identifiers; resolve `RUSTUP_HOME`/`CARGO_HOME`, honouring caller-supplied values |
-| `src/builder.ts` | Classes                         | `ToolchainSpec`, `ToolchainSpecBuilder`                                                                            | Fluent builder pattern, rustup argv generation                                                                                                                                                             |
-| `src/outputs.ts` | Module                          | `buildActionOutputs`, `toOutputEntries`, `ActionOutputs`, `ActionOutputsArgs`, `BooleanInput`, provenance types    | Maps the resolved spec plus its two sources onto the action's output surface; serialises lists as JSON arrays and the whole object as `json`                                                               |
-| `src/lib.ts`     | Barrel                          | re-exports `action`, `builder`, `config`, `core`, `outputs` — never `index`                                        | The library surface under one specifier, for consumers that would rather import `@rust-toolchain` than five modules                                                                                        |
+| File                  | Type                            | Exports                                                                                                            | Responsibilities                                                                                                                                                                                           |
+| --------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`        | Entry (node:child_process)      | none — side-effecting script                                                                                       | Dependency wiring only: hands real `spawnSync`, `readFileSync`, `@actions/core` and a synchronous `sleep` to `run()`                                                                                       |
+| `src/action.ts`       | Module                          | `run`, `ActionDeps`, `ExecResult`, `ExecOptions`                                                                   | Orchestration behind injected dependencies — rustup bootstrap, install, targets, components, default, `RUSTUP_TOOLCHAIN`, cargo env defaults, cache keys, outputs; argv only, timeouts, retries            |
+| `src/core.ts`         | Module (smol-toml, node:crypto) | `parseRustToolchainToml`, `resolveChannel`, `generateCacheKey`, `generateSpecCacheKey`, `parseRustcVersion`, types | TOML parsing, channel resolution/scaling/validation, cache key computation                                                                                                                                 |
+| `src/config.ts`       | Module                          | `mergeConfig`, `resolveRustupEnv`, types                                                                           | Merge toml config with action inputs (scalars replaced by inputs; lists accumulate deduped, inputs leading) and validate identifiers; resolve `RUSTUP_HOME`/`CARGO_HOME`, honouring caller-supplied values |
+| `src/builder.ts`      | Classes                         | `ToolchainSpec`, `ToolchainSpecBuilder`                                                                            | Fluent builder pattern, rustup argv generation                                                                                                                                                             |
+| `src/outputs.ts`      | Module                          | `buildActionOutputs`, `toOutputEntries`, `ActionOutputs`, `ActionOutputsArgs`, `BooleanInput`, provenance types    | Maps the resolved spec plus its two sources onto the action's output surface; serialises lists as JSON arrays and the whole object as `json`                                                               |
+| `src/cache/layers.ts` | Module                          | `CACHE_LAYER_IDS`, `CacheLayerId`, `parseCacheLayers`                                                              | The canonical layer list and the `cache-layers` input parser                                                                                                                                               |
+| `src/cache/keys.ts`   | Module                          | `joinKeySegments`, `buildLayerKey`, `CacheKeyContext`, `CacheLayerKey`                                             | Per-layer key and restore-key ladder derivation                                                                                                                                                            |
+| `src/lib.ts`          | Barrel                          | re-exports `action`, `builder`, `config`, `core`, `outputs` — never `index`                                        | The library surface under one specifier, for consumers that would rather import `@rust-toolchain` than five modules                                                                                        |
 
 `src/lib.ts` is the barrel; individual modules can still be imported directly
 and are cheaper, since the barrel loads all five.
@@ -342,14 +344,16 @@ flowchart LR
 
 All tests use Bun's built-in test runner with 100% coverage enforced by `bunfig.toml`.
 
-| File                  | Tests                                                                                                                                                                                                 | Coverage Target                   |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `src/action.test.ts`  | `run` against injected fakes — argv shape, timeouts, retry/backoff, spawn errors, rustup bootstrap (POSIX + Windows), cargo env defaults, tolerated `rustup default`, `set-rustup-toolchain`, outputs | 100%                              |
-| `src/core.test.ts`    | `parseRustToolchainToml`, `resolveChannel` (release-day table, bare-minor scaling, rejected names), `generateCacheKey`, `generateSpecCacheKey`, `parseRustcVersion`                                   | 100% lines, functions, statements |
-| `src/config.test.ts`  | `mergeConfig` — toml vs input priority, target alias, default channel, identifier validation; `resolveRustupEnv` — env overrides, blank handling, `HOME` fallback, Windows paths                      | 100%                              |
-| `src/builder.test.ts` | `ToolchainSpecBuilder` fluent chain, `ToolchainSpec` direct construction, argv generation and batching, install flags                                                                                 | 100%                              |
-| `src/outputs.test.ts` | `buildActionOutputs` — resolved values, empty-list and absent-profile edges, `inputs`/`toml` provenance; `toOutputEntries` — JSON array serialisation, string booleans, `json` key order              | 100%                              |
-| `src/lib.test.ts`     | Barrel surface pinned export by export, and the guard that `src/lib.ts` never re-exports `src/index.ts`; both path aliases resolve                                                                    | 100%                              |
+| File                       | Tests                                                                                                                                                                                                 | Coverage Target                   |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `src/action.test.ts`       | `run` against injected fakes — argv shape, timeouts, retry/backoff, spawn errors, rustup bootstrap (POSIX + Windows), cargo env defaults, tolerated `rustup default`, `set-rustup-toolchain`, outputs | 100%                              |
+| `src/core.test.ts`         | `parseRustToolchainToml`, `resolveChannel` (release-day table, bare-minor scaling, rejected names), `generateCacheKey`, `generateSpecCacheKey`, `parseRustcVersion`                                   | 100% lines, functions, statements |
+| `src/config.test.ts`       | `mergeConfig` — toml vs input priority, target alias, default channel, identifier validation; `resolveRustupEnv` — env overrides, blank handling, `HOME` fallback, Windows paths                      | 100%                              |
+| `src/builder.test.ts`      | `ToolchainSpecBuilder` fluent chain, `ToolchainSpec` direct construction, argv generation and batching, install flags                                                                                 | 100%                              |
+| `src/outputs.test.ts`      | `buildActionOutputs` — resolved values, empty-list and absent-profile edges, `inputs`/`toml` provenance; `toOutputEntries` — JSON array serialisation, string booleans, `json` key order              | 100%                              |
+| `src/cache/layers.test.ts` | `CACHE_LAYER_IDS`, `parseCacheLayers` — separators, dedup, unknown-layer and empty-selection rejection                                                                                                | 100%                              |
+| `src/cache/keys.test.ts`   | `joinKeySegments` — segment collapsing; `buildLayerKey` — registry vs. build key shape, restore-key ladders                                                                                           | 100%                              |
+| `src/lib.test.ts`          | Barrel surface pinned export by export, and the guard that `src/lib.ts` never re-exports `src/index.ts`; both path aliases resolve                                                                    | 100%                              |
 
 The release-cycle cases are pinned against real rust-lang.org release dates
 rather than against this codebase's own arithmetic, so a drifting epoch fails
@@ -395,6 +399,45 @@ collide even when one installed `wasm32-unknown-unknown` and the other did not �
 and the second restores artifacts produced without its target. Targets and
 components are sorted before hashing, so the same set written in a different
 order still hits the same key. See [COMPARISON.md](COMPARISON.md#cache-key).
+
+### Cache Layers
+
+`cache: true` derives a key and restore-key ladder per cache layer, published
+through the `cache` output. Phase A ships two layers, defined in
+`src/cache/layers.ts` and keyed in `src/cache/keys.ts`:
+
+- **`registry`** — the downloaded crate sources under `~/.cargo/registry` and
+  `~/.cargo/git`. Its key is `registry-<os>-<arch>-<suffix>-<lockHash>`, and it
+  deliberately omits the resolved toolchain: any rustc can compile a source
+  archive it did not build, so tying the key to the compiler would force a
+  re-download on every toolchain bump for no benefit.
+- **`build`** — the compiled artifacts under `target/`. Its key is
+  `build-<os>-<arch>-<suffix>-<cachekeyFull>-<lockHash>`, carrying the resolved
+  spec because those artifacts are toolchain-specific. Its restore ladder stops
+  one rung short of the bare `registry`-style prefix — the ladder is
+  `build-<os>-<arch>-<suffix>-<cachekeyFull>-` and nothing looser — because an
+  entry built by a different toolchain is not a useful restore: `cargo` would
+  discard it on sight, and the run pays the download cost only to re-save it
+  under a new key regardless.
+
+The layers are split by how often each one invalidates, which is the whole
+point of separating them: a `rustc` bump invalidates `build` but not
+`registry`, so splitting them stops a compiler upgrade from forcing a
+re-download of every crate it never touched.
+
+The dependency-set hash (`cache-key-hash`) is a required input rather than
+something the action computes, because `hashFiles()` — the only thing that can
+glob a workspace's lockfiles — is a GitHub Actions workflow-expression
+function, unreachable from a Node action. Taking the workflow's own value also
+keeps these keys interoperable with a hash the workflow may already use
+elsewhere.
+
+This action never calls `actions/cache` itself — it only derives keys for the
+workflow's own cache steps (see the [README's caching
+recipe](../README.md#deriving-cargo-cache-keys)). See
+[`docs/design/2026-07-31-layered-cargo-cache.md`](design/2026-07-31-layered-cargo-cache.md)
+for the full design rationale, including the `bin` layer that a later phase
+adds for cargo-installed tools.
 
 ### Toolchain Pinning
 

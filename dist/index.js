@@ -17827,6 +17827,46 @@ class ToolchainSpecBuilder {
   }
 }
 
+// src/cache/keys.ts
+function joinKeySegments(...segments) {
+  return segments.map((segment) => segment?.trim() ?? "").filter(Boolean).join("-");
+}
+function ladder(...prefixes) {
+  return [...new Set(prefixes.map((prefix) => `${prefix}-`))];
+}
+function buildLayerKey(layer, context) {
+  const root = joinKeySegments(layer, context.os, context.arch);
+  if (layer === "registry") {
+    const scoped2 = joinKeySegments(root, context.suffix);
+    return {
+      key: joinKeySegments(scoped2, context.lockHash),
+      restoreKeys: ladder(scoped2, root)
+    };
+  }
+  const scoped = joinKeySegments(root, context.suffix, context.specCacheKey);
+  return {
+    key: joinKeySegments(scoped, context.lockHash),
+    restoreKeys: ladder(scoped)
+  };
+}
+
+// src/cache/layers.ts
+var CACHE_LAYER_IDS = ["registry", "build"];
+function parseCacheLayers(value) {
+  const named = value.split(/[,\s\n]+/).map((entry) => entry.trim()).filter(Boolean);
+  for (const name of named) {
+    if (!CACHE_LAYER_IDS.includes(name)) {
+      throw new Error(`"${name}" is not a cache layer. Valid layers are: ` + `${CACHE_LAYER_IDS.join(", ")}.`);
+    }
+  }
+  const requested = new Set(named);
+  const layers = CACHE_LAYER_IDS.filter((id) => requested.has(id));
+  if (layers.length === 0) {
+    throw new Error("`cache-layers` must name at least one of: " + `${CACHE_LAYER_IDS.join(", ")}.`);
+  }
+  return layers;
+}
+
 // src/core.ts
 import { createHash } from "node:crypto";
 
@@ -18883,6 +18923,7 @@ function buildActionOutputs(args) {
     name: spec.channel,
     cachekey: args.cacheKey,
     "cachekey-full": args.specCacheKey,
+    cache: args.cache,
     inputs: {
       toolchain: inputs.toolchain ?? "",
       targets: inputs.targets ?? "",
@@ -18911,6 +18952,7 @@ function toOutputEntries(outputs) {
     ["components", JSON.stringify(outputs.components)],
     ["profile", outputs.profile],
     ["set-rustup-toolchain", String(outputs["set-rustup-toolchain"])],
+    ["cache", JSON.stringify(outputs.cache)],
     ["json", JSON.stringify(outputs)]
   ];
 }
@@ -19050,6 +19092,28 @@ function applyCargoDefaults(deps, release) {
     setIfUnset("CARGO_HTTP_MULTIPLEXING", "false");
   }
 }
+function resolveCacheOutputs(deps, specCacheKey) {
+  const enabled = readBooleanInput(deps, "cache", false);
+  if (!enabled.value)
+    return { enabled: false, layers: {} };
+  const layers = parseCacheLayers(deps.core.getInput("cache-layers").trim() || CACHE_LAYER_IDS.join(","));
+  const lockHash = deps.core.getInput("cache-key-hash").trim();
+  if (!lockHash) {
+    throw new Error("`cache-key-hash` is required when `cache` is true. This action cannot " + "compute it — `hashFiles()` is a workflow-expression function — so " + `pass the workflow's own value:
+` + "  cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}\n" + "Without it the cache keys never change: they hit exactly on every " + "run and serve the same crates for the life of the repository.");
+  }
+  const context = {
+    os: deps.env.RUNNER_OS ?? "",
+    arch: deps.env.RUNNER_ARCH ?? "",
+    suffix: deps.core.getInput("cache-key-suffix").trim(),
+    lockHash,
+    specCacheKey
+  };
+  const built = {};
+  for (const layer of layers)
+    built[layer] = buildLayerKey(layer, context);
+  return { enabled: true, layers: built };
+}
 function run(deps) {
   try {
     const config = resolveConfiguration(deps);
@@ -19091,13 +19155,15 @@ function run(deps) {
     const rustc = readRustcVersion(deps, env);
     deps.core.info(rustc.banner);
     applyCargoDefaults(deps, rustc.info.version);
+    const specCacheKey = generateSpecCacheKey(rustc.info.cacheKey, spec);
     const outputs = buildActionOutputs({
       spec,
       inputs: config.inputs,
       toml: config.toml,
       setRustupToolchain,
       cacheKey: rustc.info.cacheKey,
-      specCacheKey: generateSpecCacheKey(rustc.info.cacheKey, spec)
+      specCacheKey,
+      cache: resolveCacheOutputs(deps, specCacheKey)
     });
     for (const [name, value] of toOutputEntries(outputs)) {
       deps.core.setOutput(name, value);

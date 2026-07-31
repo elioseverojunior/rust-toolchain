@@ -1144,6 +1144,15 @@ git commit -S -m "docs(cache): document derived cache keys and rebuild bundle"
 - Any restore or save. No `@actions/cache`, no `post:` entrypoint, no bundle growth — Phase B.
 - Pruning, budget and the job summary — Phases D and E.
 
+## Carried into Phase B
+
+`src/action.ts` is 474 lines after Task 4, past this project's 300-line file guideline (see the root `CLAUDE.md`
+→ Engineering Rules). Phase B adds restore/save orchestration to that same file — `resolveCacheOutputs`,
+the `post:` entrypoint wiring, and the `@actions/cache` calls all land there under the naive plan. **Phase B's plan
+should extract the cache-input handling (`resolveCacheOutputs` and its helpers) into its own module** — e.g.
+`src/cache/inputs.ts` — before adding to `action.ts`, rather than growing the file further and pushing the split to a
+later phase.
+
 ## Carried into Phase C
 
 Phase A checks `cache-key-hash` unconditionally, because both of its layers key on the dependency set. The spec scopes
@@ -1159,5 +1168,19 @@ if (needsLockHash && !lockHash) {
 }
 ```
 
-Phase C also widens `parseCacheLayers`, the `buildLayerKey` switch, the `cache-layers` default in both `action.yml` and
-`resolveCacheOutputs`, and the `CACHE_LAYER_IDS` assertion in `src/cache/layers.test.ts`.
+Two more landmines the Task 1-4 reviews found, both cases where adding the `bin` layer would silently do the wrong
+thing rather than fail loudly:
+
+- `src/cache/keys.ts`'s `buildLayerKey` uses early-return `if`s instead of the `switch` the plan specified — see
+  `CLAUDE.md` → Coverage gate gotchas for why: a `switch`'s final case phantom-fails Bun's 100% coverage gate. The
+  `switch` would have failed to type-check the moment `CacheLayerId` gained a third member; the `if` shape has no such
+  guard and silently treats any non-`"registry"` layer, including a future `"bin"`, as `"build"`. **Phase C must
+  restore exhaustiveness** — the reviewer's suggestion was a `Record<CacheLayerId, (context, root) => CacheLayerKey>`
+  dispatch table, which type-errors on a missing key without reintroducing a `switch`.
+- `action.yml`'s `cache-layers` default is the string literal `"registry,build"`, duplicating the ordering that
+  `src/action.ts` falls back to via `CACHE_LAYER_IDS.join(",")`. Adding `bin` to `CACHE_LAYER_IDS` updates the
+  TypeScript fallback automatically but does not touch the YAML default, so the two silently diverge. **Phase C must
+  update both.**
+
+Phase C also widens `parseCacheLayers`, the `cache-layers` default in `resolveCacheOutputs`, and the `CACHE_LAYER_IDS`
+assertion in `src/cache/layers.test.ts`.

@@ -85,6 +85,8 @@ Refer to the [rustup book](https://rust-lang.github.io/rustup/concepts/index.htm
   - `src/config.ts` — merge toml config with action inputs (scalars replaced by inputs; lists accumulate deduped, inputs leading), `ToolchainInputs` + `ResolvedToolchain` types; `resolveRustupEnv` resolves `RUSTUP_HOME`/`CARGO_HOME`, honouring caller-supplied values
   - `src/builder.ts` — fluent `ToolchainSpecBuilder` with `.withChannel()`, `.withTargets()`, `.withComponents()`, `.withProfile()`, `.build()`
   - `src/outputs.ts` — `buildActionOutputs` maps the resolved spec plus the inputs and toml it was merged from onto the action's outputs; `toOutputEntries` flattens them to the `name, value` pairs GitHub accepts, serialising lists as JSON arrays and the whole object as `json`
+  - `src/cache/layers.ts` — `CACHE_LAYER_IDS`, the canonical layer list, and `parseCacheLayers`, which reads the `cache-layers` input into a deduped layer list
+  - `src/cache/keys.ts` — `joinKeySegments` (collapses empty segments) and `buildLayerKey`, which derives a layer's key and restore-key ladder
   - `src/lib.ts` — the library barrel. Re-exports the five library modules and deliberately **not** `index.ts`, whose import executes the action
   - `src/*.test.ts` — co-located tests; `tsconfig.json` includes `**/*.ts`, so `bun run typecheck` type-checks them too
 
