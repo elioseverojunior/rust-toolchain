@@ -21,6 +21,9 @@ describe("library barrel", () => {
         // builder.ts
         "ToolchainSpec",
         "ToolchainSpecBuilder",
+        // cache/layers.ts
+        "CACHE_LAYER_IDS",
+        "parseCacheLayers",
         // config.ts
         "RUSTUP_PROFILES",
         "DEFAULT_PROFILE",

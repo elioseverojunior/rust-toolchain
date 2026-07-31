@@ -20,6 +20,7 @@
  */
 export * from "@rust-toolchain/action";
 export * from "@rust-toolchain/builder";
+export * from "@rust-toolchain/cache/layers";
 export * from "@rust-toolchain/config";
 export * from "@rust-toolchain/core";
 export * from "@rust-toolchain/outputs";

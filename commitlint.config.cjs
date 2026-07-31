@@ -29,6 +29,7 @@ module.exports = {
       [
         "api",
         "aws",
+        "cache",
         "cli",
         "config",
         "deps",
