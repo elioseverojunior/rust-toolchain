@@ -55,11 +55,18 @@ change.
   the coverage report. It is dependency wiring only — orchestration lives in
   `action.ts` behind the injected `ActionDeps`. Anything you add to `index.ts`
   is silently uncovered, so put it in `action.ts` instead.
-- A `switch` statement's final `case` block never has its closing brace marked
-  as covered under Bun 1.3.14 coverage, so any `switch` phantom-fails the 100%
-  gate — confirmed by reordering the cases and watching the phantom uncovered
-  line move to whichever case is last. Use early returns or a lookup object
-  instead of `switch`.
+- A `switch` whose `case` bodies are **braced blocks that return** loses
+  coverage on the last case's closing brace under Bun 1.3.14, phantom-failing
+  the 100% gate. Confirmed twice: reordering the cases moves the phantom to
+  whichever case is now last, and a minimal pair under identical tests reports
+  87.5% lines for `case "a": { return "A"; }` against 100% for
+  `case "a": out = "A"; break;`. A plain `case`/`break` switch is **not**
+  affected — `resolveChannel` in `src/core.ts` uses one and the repo is at
+  100%. So the rule is narrower than "avoid `switch`": when a branch needs to
+  return a value, reach for a lookup object keyed by the union, the way
+  `src/cache/keys.ts` does with `DERIVERS`. That also buys back the
+  exhaustiveness a `switch` would have given, since a `Record<Union, …>`
+  fails to type-check when the union grows a member.
 
 ## Path aliases — the specifier is consumer-visible
 
