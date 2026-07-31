@@ -1146,7 +1146,7 @@ git commit -S -m "docs(cache): document derived cache keys and rebuild bundle"
 
 ## Carried into Phase B
 
-`src/action.ts` is 474 lines after Task 4, past this project's 300-line file guideline (see the root `CLAUDE.md`
+`src/action.ts` is 473 lines after Task 4, past this project's 300-line file guideline (see the root `CLAUDE.md`
 → Engineering Rules). Phase B adds restore/save orchestration to that same file — `resolveCacheOutputs`,
 the `post:` entrypoint wiring, and the `@actions/cache` calls all land there under the naive plan. **Phase B's plan
 should extract the cache-input handling (`resolveCacheOutputs` and its helpers) into its own module** — e.g.

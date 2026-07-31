@@ -349,8 +349,9 @@ layer. It does not restore or save anything itself — the keys go to your own
       ~/.cargo/registry/cache
       ~/.cargo/git/db
     key: ${{ fromJSON(steps.rust.outputs.cache).layers.registry.key }}
-    restore-keys: ${{ join(fromJSON(steps.rust.outputs.cache).layers.registry.restoreKeys, '
-') }}
+    restore-keys: |
+      ${{ join(fromJSON(steps.rust.outputs.cache).layers.registry.restoreKeys, '
+      ') }}
 ```
 
 The two layers are keyed differently on purpose. `registry` holds downloaded
@@ -445,7 +446,7 @@ Three things that commonly go wrong:
 package name to `index.ts`; here that file is the GitHub Action entry point — it
 exports nothing and calls `run()` at the top level, so importing it executes the
 action and shells out to `rustup`. `src/lib.ts` exists precisely so there is a
-side-effect-free barrel to map instead, and it re-exports the five library
+side-effect-free barrel to map instead, and it re-exports the seven library
 modules but never `index.ts`. A test asserts that.
 
 **Do not use `@/…` from outside this repo.** `@/*` is mapped here as a short

@@ -284,10 +284,10 @@ classDiagram
 | `src/outputs.ts`      | Module                          | `buildActionOutputs`, `toOutputEntries`, `ActionOutputs`, `ActionOutputsArgs`, `BooleanInput`, provenance types    | Maps the resolved spec plus its two sources onto the action's output surface; serialises lists as JSON arrays and the whole object as `json`                                                               |
 | `src/cache/layers.ts` | Module                          | `CACHE_LAYER_IDS`, `CacheLayerId`, `parseCacheLayers`                                                              | The canonical layer list and the `cache-layers` input parser                                                                                                                                               |
 | `src/cache/keys.ts`   | Module                          | `joinKeySegments`, `buildLayerKey`, `CacheKeyContext`, `CacheLayerKey`                                             | Per-layer key and restore-key ladder derivation                                                                                                                                                            |
-| `src/lib.ts`          | Barrel                          | re-exports `action`, `builder`, `config`, `core`, `outputs` — never `index`                                        | The library surface under one specifier, for consumers that would rather import `@rust-toolchain` than five modules                                                                                        |
+| `src/lib.ts`          | Barrel                          | re-exports `action`, `builder`, `cache/layers`, `cache/keys`, `config`, `core`, `outputs` — never `index`          | The library surface under one specifier, for consumers that would rather import `@rust-toolchain` than seven modules                                                                                       |
 
 `src/lib.ts` is the barrel; individual modules can still be imported directly
-and are cheaper, since the barrel loads all five.
+and are cheaper, since the barrel loads all seven.
 
 ### Why the barrel excludes `src/index.ts`
 

@@ -75,7 +75,7 @@ Refer to the [rustup book](https://rust-lang.github.io/rustup/concepts/index.htm
 ## Architecture
 
 - **Entrypoint (action)**: `src/index.ts` wires real dependencies into `run()` from `src/action.ts`. Build uses `@actions/core` for inputs, outputs, and failures.
-- **Library API**: `src/lib.ts` is the barrel (re-exports action/builder/config/core/outputs, never `index.ts`); consumers may also import `src/core.ts`, `src/config.ts`, `src/builder.ts`, `src/outputs.ts` directly.
+- **Library API**: `src/lib.ts` is the barrel (re-exports action, builder, config, core, outputs, cache/layers and cache/keys, never `index.ts`); consumers may also import `src/core.ts`, `src/config.ts`, `src/builder.ts`, `src/outputs.ts`, `src/cache/layers.ts`, `src/cache/keys.ts` directly.
 - **Path aliases** (`tsconfig.json` `paths`): library source imports itself as `@rust-toolchain/<module>` — the same specifier a consumer maps, so internal imports resolve in their project too. `@/<module>` is the short form and is **tests only**; using it in library source silently breaks source consumption.
 - **Build**: `bun run build:action`
 - **Source layout**:
@@ -87,7 +87,7 @@ Refer to the [rustup book](https://rust-lang.github.io/rustup/concepts/index.htm
   - `src/outputs.ts` — `buildActionOutputs` maps the resolved spec plus the inputs and toml it was merged from onto the action's outputs; `toOutputEntries` flattens them to the `name, value` pairs GitHub accepts, serialising lists as JSON arrays and the whole object as `json`
   - `src/cache/layers.ts` — `CACHE_LAYER_IDS`, the canonical layer list, and `parseCacheLayers`, which reads the `cache-layers` input into a deduped layer list
   - `src/cache/keys.ts` — `joinKeySegments` (collapses empty segments) and `buildLayerKey`, which derives a layer's key and restore-key ladder
-  - `src/lib.ts` — the library barrel. Re-exports the five library modules and deliberately **not** `index.ts`, whose import executes the action
+  - `src/lib.ts` — the library barrel. Re-exports the seven library modules and deliberately **not** `index.ts`, whose import executes the action
   - `src/*.test.ts` — co-located tests; `tsconfig.json` includes `**/*.ts`, so `bun run typecheck` type-checks them too
 
 ## GitHub Actions
