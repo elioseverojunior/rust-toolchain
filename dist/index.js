@@ -17687,7 +17687,7 @@ function resolveRustupEnv(env, platform2 = process.platform) {
 function parseCommaList(value) {
   if (!value)
     return [];
-  return value.split(/[,\s\n]+/).map((s) => s.trim()).filter(Boolean);
+  return value.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
 }
 var RUSTUP_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 function assertProfile(value) {
@@ -17834,26 +17834,31 @@ function joinKeySegments(...segments) {
 function ladder(...prefixes) {
   return [...new Set(prefixes.map((prefix) => `${prefix}-`))];
 }
-function buildLayerKey(layer, context) {
-  const root = joinKeySegments(layer, context.os, context.arch);
-  if (layer === "registry") {
-    const scoped2 = joinKeySegments(root, context.suffix);
+var DERIVERS = {
+  registry: (context, root) => {
+    const scoped = joinKeySegments(root, context.suffix);
     return {
-      key: joinKeySegments(scoped2, context.lockHash),
-      restoreKeys: ladder(scoped2, root)
+      key: joinKeySegments(scoped, context.lockHash),
+      restoreKeys: ladder(scoped, root)
+    };
+  },
+  build: (context, root) => {
+    const scoped = joinKeySegments(root, context.suffix, context.specCacheKey);
+    return {
+      key: joinKeySegments(scoped, context.lockHash),
+      restoreKeys: ladder(scoped)
     };
   }
-  const scoped = joinKeySegments(root, context.suffix, context.specCacheKey);
-  return {
-    key: joinKeySegments(scoped, context.lockHash),
-    restoreKeys: ladder(scoped)
-  };
+};
+function buildLayerKey(layer, context) {
+  const root = joinKeySegments(layer, context.os, context.arch);
+  return DERIVERS[layer](context, root);
 }
 
 // src/cache/layers.ts
 var CACHE_LAYER_IDS = ["registry", "build"];
 function parseCacheLayers(value) {
-  const named = value.split(/[,\s\n]+/).map((entry) => entry.trim()).filter(Boolean);
+  const named = parseCommaList(value);
   for (const name of named) {
     if (!CACHE_LAYER_IDS.includes(name)) {
       throw new Error(`"${name}" is not a cache layer. Valid layers are: ` + `${CACHE_LAYER_IDS.join(", ")}.`);
@@ -19092,30 +19097,68 @@ function applyCargoDefaults(deps, release) {
     setIfUnset("CARGO_HTTP_MULTIPLEXING", "false");
   }
 }
-function resolveCacheOutputs(deps, specCacheKey) {
-  const enabled = readBooleanInput(deps, "cache", false);
-  if (!enabled.value)
-    return { enabled: false, layers: {} };
+var MISSING_LOCK_HASH_MESSAGE = "`cache-key-hash` is required when `cache` is true. This action cannot " + "compute it — `hashFiles()` is a workflow-expression function — so " + `pass the workflow's own value:
+` + "  cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}\n" + "Without it the cache keys never change: they hit exactly on every " + "run and serve the same crates for the life of the repository.";
+var MAX_CACHE_KEY_LENGTH = 512;
+var SPEC_CACHE_KEY_STAND_IN = generateSpecCacheKey("0".repeat(12), {
+  channel: "",
+  targets: [],
+  components: []
+});
+var INVALID_SUFFIX_CHARACTER = /[,\s]/;
+function requireRunnerEnv(deps, name) {
+  const value = (deps.env[name] ?? "").trim();
+  if (value)
+    return value;
+  throw new Error(`\`${name}\` is empty, so the derived cache keys would silently drop that ` + `segment and collide with keys from other runners. Cache entries are ` + `not portable across operating systems or architectures. GitHub sets ` + `\`${name}\` on every hosted runner; set it explicitly on a self-hosted ` + "one, or leave `cache` unset.");
+}
+function assertKeyIsUsable(layer, key, suffix, lockHash) {
+  if (key.length <= MAX_CACHE_KEY_LENGTH)
+    return;
+  throw new Error(`The derived \`${layer}\` cache key is ${key.length} characters, but ` + `actions/cache rejects any key over ${MAX_CACHE_KEY_LENGTH}. Shorten ` + `\`cache-key-suffix\` (${suffix.length} characters) or ` + `\`cache-key-hash\` (${lockHash.length} characters).`);
+}
+function readCacheKeySuffix(deps) {
+  const suffix = deps.core.getInput("cache-key-suffix").trim();
+  if (!INVALID_SUFFIX_CHARACTER.test(suffix))
+    return suffix;
+  throw new Error("`cache-key-suffix` must not contain a comma or whitespace, got " + `${JSON.stringify(suffix)}. actions/cache rejects a key containing a ` + "comma, and a joined `restore-keys` block splits on a newline, so an " + "embedded one would arrive as two keys.");
+}
+function readCacheRequest(deps) {
+  if (!readBooleanInput(deps, "cache", false).value)
+    return;
   const layers = parseCacheLayers(deps.core.getInput("cache-layers").trim() || CACHE_LAYER_IDS.join(","));
   const lockHash = deps.core.getInput("cache-key-hash").trim();
-  if (!lockHash) {
-    throw new Error("`cache-key-hash` is required when `cache` is true. This action cannot " + "compute it — `hashFiles()` is a workflow-expression function — so " + `pass the workflow's own value:
-` + "  cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}\n" + "Without it the cache keys never change: they hit exactly on every " + "run and serve the same crates for the life of the repository.");
-  }
+  if (!lockHash)
+    throw new Error(MISSING_LOCK_HASH_MESSAGE);
+  const suffix = readCacheKeySuffix(deps);
   const context = {
-    os: deps.env.RUNNER_OS ?? "",
-    arch: deps.env.RUNNER_ARCH ?? "",
-    suffix: deps.core.getInput("cache-key-suffix").trim(),
-    lockHash,
-    specCacheKey
+    os: requireRunnerEnv(deps, "RUNNER_OS"),
+    arch: requireRunnerEnv(deps, "RUNNER_ARCH"),
+    suffix,
+    lockHash
   };
+  for (const layer of layers) {
+    const { key } = buildLayerKey(layer, {
+      ...context,
+      specCacheKey: SPEC_CACHE_KEY_STAND_IN
+    });
+    assertKeyIsUsable(layer, key, suffix, lockHash);
+  }
+  return { layers, context };
+}
+function buildCacheOutputs(request, specCacheKey) {
+  if (!request)
+    return { enabled: false, layers: {} };
+  const context = { ...request.context, specCacheKey };
   const built = {};
-  for (const layer of layers)
+  for (const layer of request.layers) {
     built[layer] = buildLayerKey(layer, context);
+  }
   return { enabled: true, layers: built };
 }
 function run(deps) {
   try {
+    const cacheRequest = readCacheRequest(deps);
     const config = resolveConfiguration(deps);
     const spec = config.spec;
     const rustupEnv = resolveRustupEnv(deps.env, deps.platform);
@@ -19163,7 +19206,7 @@ function run(deps) {
       setRustupToolchain,
       cacheKey: rustc.info.cacheKey,
       specCacheKey,
-      cache: resolveCacheOutputs(deps, specCacheKey)
+      cache: buildCacheOutputs(cacheRequest, specCacheKey)
     });
     for (const [name, value] of toOutputEntries(outputs)) {
       deps.core.setOutput(name, value);

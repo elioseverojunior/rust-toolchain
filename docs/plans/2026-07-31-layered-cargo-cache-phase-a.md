@@ -66,6 +66,7 @@ input together, in one coherent change.
 
 | File                                                          | Responsibility                                                         | Task    |
 | ------------------------------------------------------------- | ---------------------------------------------------------------------- | ------- |
+| `src/config.ts`                                               | Export the existing `parseCommaList` for reuse                         | 1       |
 | `src/cache/layers.ts`                                         | Layer identifiers and `cache-layers` input parsing                     | 1       |
 | `src/cache/layers.test.ts`                                    | Tests for the above                                                    | 1       |
 | `commitlint.config.cjs`                                       | Add `cache` to `scope-enum`                                            | 1       |
@@ -73,7 +74,6 @@ input together, in one coherent change.
 | `src/cache/keys.test.ts`                                      | Tests for the above                                                    | 2       |
 | `src/outputs.ts`                                              | `CacheOutputs` types, `cache` in `ActionOutputs` and `toOutputEntries` | 3       |
 | `src/outputs.test.ts`                                         | Tests for the above                                                    | 3       |
-| `src/config.ts`                                               | Export the existing `parseCommaList` for reuse                         | 4       |
 | `src/action.ts`                                               | Read and validate the cache inputs, build the keys, pass to outputs    | 4       |
 | `src/action.test.ts`                                          | Tests for the above                                                    | 4       |
 | `src/lib.ts`, `src/lib.test.ts`                               | Barrel exports and the pinned export list                              | 1, 2, 4 |
@@ -89,13 +89,15 @@ input together, in one coherent change.
 
 - Create: `src/cache/layers.ts`
 - Create: `src/cache/layers.test.ts`
+- Modify: `src/config.ts:124-130` — export the existing `parseCommaList`
 - Modify: `src/lib.ts` — add the new barrel re-export
-- Modify: `src/lib.test.ts:17-41` — add `CACHE_LAYER_IDS` and `parseCacheLayers` to the pinned export list
+- Modify: `src/lib.test.ts:17-41` — add `CACHE_LAYER_IDS`, `parseCacheLayers` and `parseCommaList` to the pinned
+  export list
 - Modify: `commitlint.config.cjs:26-44` — add `cache` to `scope-enum`
 
 **Interfaces:**
 
-- Consumes: nothing.
+- Consumes: `parseCommaList` from `@rust-toolchain/config`.
 - Produces: `CACHE_LAYER_IDS: readonly ["registry", "build"]`, `type CacheLayerId = "registry" | "build"`,
   `parseCacheLayers(value: string): CacheLayerId[]`.
 
@@ -114,7 +116,31 @@ Insert it alphabetically between `aws` and `cli`:
         "config",
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 2: Export `parseCommaList` from `src/config.ts`**
+
+The function already exists and is used by `mergeConfig`. Change its declaration from private to exported so
+`parseCacheLayers` reuses it rather than duplicating the separator grammar, and drop the redundant `\n` alternative
+from the character class while you are there — `\s` already matches it:
+
+```ts
+/**
+ * Splits a comma-, whitespace- or newline-separated input into entries.
+ *
+ * `\s` already covers `\n`, so the class needs no separate newline alternative.
+ * Shared with `parseCacheLayers` so the separator grammar has one definition.
+ */
+export function parseCommaList(value?: string): string[] {
+  if (!value) return [];
+  return value
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+```
+
+Then add `"parseCommaList"` to the `config.ts` group in the `src/lib.test.ts` export list.
+
+- [ ] **Step 3: Write the failing test**
 
 Create `src/cache/layers.test.ts`:
 
@@ -182,12 +208,15 @@ Expected: FAIL — `Cannot find module '@/cache/layers'`.
 
 - [ ] **Step 4: Write the minimal implementation**
 
-Create `src/cache/layers.ts`:
+Create `src/cache/layers.ts`. Note the import specifier: library source addresses a sibling as
+`@rust-toolchain/config`, never `@/config` — the short form is tests only and would fail to resolve in a consumer.
 
 ```ts
 // SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
+
+import { parseCommaList } from "@rust-toolchain/config";
 
 /**
  * The cache partitions, in canonical order.
@@ -213,10 +242,10 @@ export type CacheLayerId = (typeof CACHE_LAYER_IDS)[number];
  * order keeps the `cache` output diffable between runs.
  */
 export function parseCacheLayers(value: string): CacheLayerId[] {
-  const named = value
-    .split(/[,\s\n]+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  // Shares `parseCommaList` with `targets` and `components` rather than
+  // restating the separator grammar: one definition is what keeps "the same
+  // separators as targets" true instead of merely intended.
+  const named = parseCommaList(value);
 
   for (const name of named) {
     if (!(CACHE_LAYER_IDS as readonly string[]).includes(name)) {
@@ -256,7 +285,7 @@ export * from "@rust-toolchain/outputs";
 
 - [ ] **Step 6: Update the pinned export list**
 
-In `src/lib.test.ts`, add the two new value exports to the array in the first test. `CacheLayerId` is a type and does
+In `src/lib.test.ts`, add the new value exports to the array in the first test. `CacheLayerId` is a type and does
 not appear at runtime, so it is not listed:
 
 ```ts
@@ -267,6 +296,7 @@ not appear at runtime, so it is not listed:
         "CACHE_LAYER_IDS",
         "parseCacheLayers",
         // config.ts
+        "parseCommaList",
 ```
 
 - [ ] **Step 7: Run the full suite and verify it passes**
@@ -278,7 +308,7 @@ Expected: PASS, with coverage still at 100% for lines, functions and statements.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/cache/layers.ts src/cache/layers.test.ts src/lib.ts src/lib.test.ts commitlint.config.cjs
+git add src/cache/layers.ts src/cache/layers.test.ts src/config.ts src/lib.ts src/lib.test.ts commitlint.config.cjs
 git commit -S -m "feat(cache): add cache layer identifiers and input parsing"
 ```
 
@@ -445,7 +475,10 @@ export interface CacheKeyContext {
    * block comment.
    */
   lockHash?: string;
-  /** `generateSpecCacheKey` output: rustc build plus channel, targets, components, profile. */
+  /**
+   * `generateSpecCacheKey` output: the rustc build plus a digest of the
+   * channel, targets, components and profile.
+   */
   specCacheKey: string;
 }
 
@@ -458,51 +491,73 @@ export interface CacheLayerKey {
 /**
  * Restore keys are prefix matches, so each rung keeps its trailing `-`.
  *
- * Without it, a `ci` suffix rung would also match a `ci-nightly` entry and
- * restore a cache built for a different job.
+ * The trailing dash buys the separator, not a boundary. Without it a `ci` rung
+ * would also match `...-cinightly-<hash>`, an unrelated job whose suffix merely
+ * begins with the same letters. It does not — and cannot — stop `...-ci-`
+ * matching `...-ci-nightly-<hash>`: a prefix match has no way to tell where a
+ * suffix ends.
+ *
+ * That residual overlap is deliberate. A job with `cache-key-suffix: ci` will
+ * restore the `registry` entry of a job using `ci-nightly`, through the widest
+ * rung if not the narrower one. It is harmless: crate sources are
+ * toolchain-independent, so a cross-job restore costs nothing and usually
+ * helps. The `build` layer is immune for a different reason — its only rung
+ * ends in the spec digest, which an entry from another toolchain cannot share.
  */
 function ladder(...prefixes: string[]): string[] {
   return [...new Set(prefixes.map((prefix) => `${prefix}-`))];
 }
 
 /**
- * Derives one layer's key and restore ladder.
+ * How each layer turns a validated context into its key and ladder.
  *
- * The two layers differ in exactly one way, and it is the point of the split:
+ * A `Record` keyed on `CacheLayerId` rather than a chain of `if`s: adding a
+ * layer to `CACHE_LAYER_IDS` then fails to compile here until it is given a
+ * deriver, where an `if` would have silently handed the new layer whichever
+ * shape the fall-through branch happened to produce. It is not a `switch`
+ * because Bun's coverage instrumenter never marks a final `case`'s closing
+ * brace as covered — see `CLAUDE.md` → Coverage gate gotchas.
+ *
+ * The two entries differ in exactly one way, and it is the point of the split:
  * `registry` holds downloaded source archives, which any rustc can compile, so
  * its key omits the toolchain entirely. `build` holds compiled artifacts, so
  * its key carries the resolved spec and its ladder never falls back past one —
  * artifacts from another toolchain are discarded on sight, and restoring them
  * costs download time only to re-save them under a new key.
  */
+const DERIVERS: Record<
+  CacheLayerId,
+  (context: CacheKeyContext, root: string) => CacheLayerKey
+> = {
+  registry: (context, root) => {
+    const scoped = joinKeySegments(root, context.suffix);
+    return {
+      key: joinKeySegments(scoped, context.lockHash),
+      restoreKeys: ladder(scoped, root),
+    };
+  },
+  build: (context, root) => {
+    const scoped = joinKeySegments(root, context.suffix, context.specCacheKey);
+    return {
+      key: joinKeySegments(scoped, context.lockHash),
+      restoreKeys: ladder(scoped),
+    };
+  },
+};
+
+/** Derives one layer's key and restore ladder. */
 export function buildLayerKey(
   layer: CacheLayerId,
   context: CacheKeyContext,
 ): CacheLayerKey {
   const root = joinKeySegments(layer, context.os, context.arch);
-
-  switch (layer) {
-    case "registry": {
-      const scoped = joinKeySegments(root, context.suffix);
-      return {
-        key: joinKeySegments(scoped, context.lockHash),
-        restoreKeys: ladder(scoped, root),
-      };
-    }
-    case "build": {
-      const scoped = joinKeySegments(
-        root,
-        context.suffix,
-        context.specCacheKey,
-      );
-      return {
-        key: joinKeySegments(scoped, context.lockHash),
-        restoreKeys: ladder(scoped),
-      };
-    }
-  }
+  return DERIVERS[layer](context, root);
 }
 ```
+
+Both arrow functions are invoked by the tests above, so the dispatch table adds no uncovered function. A `switch` here
+would type-error the moment `CacheLayerId` gained a third member — the property the table preserves — but Bun's
+coverage instrumenter never marks a final `case`'s closing brace as covered, which fails the 100% gate outright.
 
 - [ ] **Step 4: Run the test and verify it passes**
 
@@ -710,34 +765,31 @@ git commit -S -m "feat(cache): publish derived cache keys as an action output"
 
 **Files:**
 
-- Modify: `src/config.ts:124-130` — export the existing `parseCommaList`
-- Modify: `src/action.ts` — add `resolveCacheOutputs`, call it from `run`
+- Modify: `src/action.ts` — add `readCacheRequest` and `buildCacheOutputs`, call both from `run`
 - Modify: `src/action.test.ts` — cover the new behaviour
-- Modify: `src/lib.test.ts` — add `parseCommaList` to the pinned export list
 - Modify: `action.yml` — declare four inputs and one output
 
 **Interfaces:**
 
 - Consumes: `parseCacheLayers`, `CACHE_LAYER_IDS` (Task 1); `buildLayerKey`, `CacheKeyContext` (Task 2); `CacheOutputs`
   (Task 3).
-- Produces: nothing consumed by later Phase A tasks. Phase B replaces the body of `resolveCacheOutputs` with one that
+- Produces: nothing consumed by later Phase A tasks. Phase B replaces the body of `buildCacheOutputs` with one that
   also restores.
+
+**Validation runs at the top of `run`, derivation at the bottom.** This is the one structural rule of the task. The
+keys need the spec digest, which does not exist until rustup has installed a toolchain and `rustc -vV` has been read —
+but _validating the inputs_ needs none of that. Doing both at the bottom means a typo in `cache-layers` fails the step
+only after a rustup bootstrap, a toolchain install and every `target add` and `component add`, and — because the throw
+escapes the argument expression feeding `buildActionOutputs` — takes every other output down with it, so a caller
+reading outputs from an `always()` step loses `toolchain`, `cachekey` and `json` over a pure cache-input typo. The
+design spec's stated intent is "a step that fails on line one telling the caller what to paste".
+
+So the work splits in two: `readCacheRequest(deps)` validates and returns everything but the digest, and
+`buildCacheOutputs(request, specCacheKey)` completes it.
 
 **Steps:**
 
-- [ ] **Step 1: Export `parseCommaList` from `src/config.ts`**
-
-The function already exists and is used by `mergeConfig`. Change its declaration from private to exported so the cache
-code reuses it rather than duplicating the separator grammar:
-
-```ts
-/** Splits a comma-, whitespace- or newline-separated input into entries. */
-export function parseCommaList(value?: string): string[] {
-```
-
-Then add `"parseCommaList"` to the `config.ts` group in the `src/lib.test.ts` export list.
-
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 1: Write the failing test**
 
 `src/action.test.ts:49-110` already defines `harness(options)`, returning `{ deps, calls, outputs, exported, failures,
 sleeps, paths, logs }`. Reuse it — do not add a second harness.
@@ -845,13 +897,62 @@ describe("cache key outputs", () => {
 });
 ```
 
-- [ ] **Step 3: Run the test and verify it fails**
+Then a second suite for the validation step. Every case asserts `h.calls` is **empty** — that is the whole claim being
+made, and an assertion on the message alone would pass just as happily against validation left at the bottom of `run`:
+
+```ts
+describe("cache input validation", () => {
+  it("rejects an unknown layer before running any command", () => {
+    /* cache-layers: "bin" */
+    expect(h.failures[0]).toContain('"bin" is not a cache layer');
+    expect(h.calls).toEqual([]);
+  });
+
+  it("rejects a missing lock hash before running any command", () => {
+    /* cache: "true", no cache-key-hash */
+  });
+
+  // `joinKeySegments` drops empty segments, so an unset RUNNER_OS would not
+  // fail — it would silently produce `registry-X64-ci-<hash>`, a key that
+  // collides across operating systems and whose widest rung matches every
+  // entry the repository has.
+  it("fails when RUNNER_OS is blank rather than collapsing the segment", () => {
+    /* env: { ...cacheEnv, RUNNER_OS: "" } */
+  });
+
+  it("fails when RUNNER_ARCH is missing rather than collapsing the segment", () => {
+    /* env: { ...cacheEnv, RUNNER_ARCH: undefined } */
+  });
+
+  // actions/cache rejects a key containing a comma outright, and getInput
+  // trims the ends but not the middle, so an embedded newline survives into
+  // the key and splits a joined `restore-keys` block into two entries.
+  it("rejects a cache-key-suffix containing a comma", () => {});
+  it("rejects a cache-key-suffix containing an embedded newline", () => {});
+
+  it("fails when a derived key would exceed the 512-character limit", () => {
+    /* cache-key-suffix: "s".repeat(600) */
+  });
+
+  // The limit applies to the longest key the run derives, which is the build
+  // layer's: at a 480-character suffix the registry key lands at 506 and the
+  // build key, carrying the spec digest, at 525.
+  it("accounts for the spec digest the build key has yet to receive", () => {
+    /* expect(h.failures[0]).toContain("`build`") */
+  });
+
+  // None of the above applies when the caller never asked for cache keys.
+  it("ignores every cache input when cache is disabled", () => {});
+});
+```
+
+- [ ] **Step 2: Run the test and verify it fails**
 
 Run: `bun test src/action.test.ts`
 
 Expected: FAIL — the `cache` output is undefined, so `JSON.parse` throws.
 
-- [ ] **Step 4: Write the minimal implementation**
+- [ ] **Step 3: Write the minimal implementation**
 
 In `src/action.ts`, add the imports to the existing block:
 
@@ -867,13 +968,120 @@ import {
 } from "@rust-toolchain/cache/layers";
 ```
 
-`CacheOutputs` comes from the existing `@rust-toolchain/outputs` import — add it there as a type import.
+`CacheOutputs` comes from the existing `@rust-toolchain/outputs` import — add it there as a type import, and
+`CacheLayerKey` from the same import as `buildLayerKey`.
 
-Add the function above `run`:
+Add the module-level constants above `run`. The long error strings are hoisted out of the functions so neither grows
+past the project's 30-line guideline over what is really prose:
 
 ```ts
 /**
- * Derives the cache keys for the enabled layers.
+ * Every Phase A layer keys on the dependency set, so an absent hash makes the
+ * key constant: it hits exactly forever, never re-saves, and serves stale
+ * crates for the life of the repository. That is worse than failing here.
+ */
+const MISSING_LOCK_HASH_MESSAGE = "`cache-key-hash` is required when …";
+
+/** `actions/cache` rejects any key longer than this. */
+const MAX_CACHE_KEY_LENGTH = 512;
+
+/**
+ * A spec digest standing in for the one this run has yet to produce.
+ *
+ * The real digest is not known until rustc has run, and the length check
+ * deliberately happens before the install rather than after it. Built through
+ * `generateSpecCacheKey` itself, from the widest rustc key `generateCacheKey`
+ * can return, so the stand-in is never narrower than the real value and the
+ * two stay in step without pinning a width here as a literal that could drift.
+ */
+const SPEC_CACHE_KEY_STAND_IN = generateSpecCacheKey("0".repeat(12), {
+  channel: "",
+  targets: [],
+  components: [],
+});
+
+/** Anything that would make a key ambiguous once it reaches a workflow. */
+const INVALID_SUFFIX_CHARACTER = /[,\s]/;
+```
+
+Then the two halves. `requireRunnerEnv` exists because `joinKeySegments` drops empty segments — right for an unset
+suffix, wrong for `RUNNER_OS`, where it would yield a plausible-looking `registry-X64-<hash>` that collides across
+operating systems and whose widest rung matches every entry in the repository:
+
+```ts
+/** Everything a layer key needs except the digest of the installed spec. */
+type PendingCacheKeyContext = Omit<CacheKeyContext, "specCacheKey">;
+
+/** The validated cache inputs, ready to be completed with the spec digest. */
+interface CacheRequest {
+  layers: CacheLayerId[];
+  context: PendingCacheKeyContext;
+}
+
+function requireRunnerEnv(deps: ActionDeps, name: string): string;
+
+/**
+ * Fails when a derived key would break a rule `actions/cache` enforces.
+ *
+ * This action owns key derivation, so it owns the constraints on the result:
+ * `actions/cache` rejects a key over 512 characters, and the README's
+ * `restore-keys` recipe joins the ladder on a newline, so a key carrying one
+ * would arrive at the cache step as two.
+ */
+function assertKeyIsUsable(
+  layer: CacheLayerId,
+  key: string,
+  suffix: string,
+  lockHash: string,
+): void;
+
+/**
+ * Reads `cache-key-suffix`, rejecting anything a key cannot carry.
+ *
+ * `getInput` trims the ends and nothing else, so an embedded newline or a
+ * comma reaches the key intact.
+ */
+function readCacheKeySuffix(deps: ActionDeps): string;
+
+/**
+ * Reads and validates every cache input, before anything is installed.
+ *
+ * Returns `undefined` when caching is off, which is also why none of the other
+ * inputs are examined in that case: they describe a key nobody asked for.
+ */
+function readCacheRequest(deps: ActionDeps): CacheRequest | undefined {
+  if (!readBooleanInput(deps, "cache", false).value) return undefined;
+
+  const layers = parseCacheLayers(
+    deps.core.getInput("cache-layers").trim() || CACHE_LAYER_IDS.join(","),
+  );
+
+  const lockHash = deps.core.getInput("cache-key-hash").trim();
+  if (!lockHash) throw new Error(MISSING_LOCK_HASH_MESSAGE);
+
+  const suffix = readCacheKeySuffix(deps);
+  const context: PendingCacheKeyContext = {
+    os: requireRunnerEnv(deps, "RUNNER_OS"),
+    arch: requireRunnerEnv(deps, "RUNNER_ARCH"),
+    suffix,
+    lockHash,
+  };
+
+  // Checked against a same-width stand-in for the digest, so the build layer —
+  // the longer of the two — is measured as it will actually be derived.
+  for (const layer of layers) {
+    const { key } = buildLayerKey(layer, {
+      ...context,
+      specCacheKey: SPEC_CACHE_KEY_STAND_IN,
+    });
+    assertKeyIsUsable(layer, key, suffix, lockHash);
+  }
+
+  return { layers, context };
+}
+
+/**
+ * Completes the validated request into the per-layer keys.
  *
  * Nothing is restored or saved here: the keys go out as an output for the
  * workflow's own `actions/cache` steps. The lock hash arrives as an input
@@ -881,57 +1089,33 @@ Add the function above `run`:
  * cannot call, and taking GitHub's own value keeps the keys interoperable with
  * caches the workflow already has.
  */
-function resolveCacheOutputs(
-  deps: ActionDeps,
+function buildCacheOutputs(
+  request: CacheRequest | undefined,
   specCacheKey: string,
 ): CacheOutputs {
-  const enabled = readBooleanInput(deps, "cache", false);
-  if (!enabled.value) return { enabled: false, layers: {} };
+  if (!request) return { enabled: false, layers: {} };
 
-  const layers = parseCacheLayers(
-    deps.core.getInput("cache-layers").trim() || CACHE_LAYER_IDS.join(","),
-  );
-  const lockHash = deps.core.getInput("cache-key-hash").trim();
-
-  // Every Phase A layer keys on the dependency set, so an absent hash makes the
-  // key constant: it hits exactly forever, never re-saves, and serves stale
-  // crates for the life of the repository. That is worse than failing here.
-  if (!lockHash) {
-    throw new Error(
-      "`cache-key-hash` is required when `cache` is true. This action cannot " +
-        "compute it — `hashFiles()` is a workflow-expression function — so " +
-        "pass the workflow's own value:\n" +
-        "  cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}\n" +
-        "Without it the cache keys never change: they hit exactly on every " +
-        "run and serve the same crates for the life of the repository.",
-    );
-  }
-
-  const context: CacheKeyContext = {
-    os: deps.env.RUNNER_OS ?? "",
-    arch: deps.env.RUNNER_ARCH ?? "",
-    suffix: deps.core.getInput("cache-key-suffix").trim(),
-    lockHash,
-    specCacheKey,
-  };
-
+  const context: CacheKeyContext = { ...request.context, specCacheKey };
   const built: Partial<Record<CacheLayerId, CacheLayerKey>> = {};
-  for (const layer of layers) built[layer] = buildLayerKey(layer, context);
+  for (const layer of request.layers) {
+    built[layer] = buildLayerKey(layer, context);
+  }
   return { enabled: true, layers: built };
 }
 ```
 
-`CacheLayerKey` comes from the same import as `buildLayerKey`:
+In `run`, validate first — as the very first statement inside the `try`, before `resolveConfiguration`:
 
 ```ts
-import {
-  buildLayerKey,
-  type CacheKeyContext,
-  type CacheLayerKey,
-} from "@rust-toolchain/cache/keys";
+// First, deliberately. Every cache input is validated against nothing but
+// itself, so a typo here must fail before the rustup bootstrap and the
+// toolchain install it would otherwise throw away.
+const cacheRequest = readCacheRequest(deps);
+
+const config = resolveConfiguration(deps);
 ```
 
-In `run`, replace the inline `generateSpecCacheKey` call so the value is computed once and shared:
+and derive last, replacing the inline `generateSpecCacheKey` call so the value is computed once and shared:
 
 ```ts
 const specCacheKey = generateSpecCacheKey(rustc.info.cacheKey, spec);
@@ -942,17 +1126,17 @@ const outputs = buildActionOutputs({
   setRustupToolchain,
   cacheKey: rustc.info.cacheKey,
   specCacheKey,
-  cache: resolveCacheOutputs(deps, specCacheKey),
+  cache: buildCacheOutputs(cacheRequest, specCacheKey),
 });
 ```
 
-- [ ] **Step 5: Run the test and verify it passes**
+- [ ] **Step 4: Run the test and verify it passes**
 
 Run: `bun test src/action.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 6: Declare the inputs and output in `action.yml`**
+- [ ] **Step 5: Declare the inputs and output in `action.yml`**
 
 Add to `inputs:`, after `set-rustup-toolchain`:
 
@@ -981,7 +1165,10 @@ cache-key-suffix:
     An optional discriminator added to every cache key, e.g. a job name.
     Omitting it collapses the slot rather than leaving an empty segment, so
     the key reads `registry-Linux-X64-<hash>` and not
-    `registry-Linux-X64--<hash>`.
+    `registry-Linux-X64--<hash>`. Set it when jobs differ in `RUSTFLAGS` or
+    other `CARGO_*` settings: those are not part of the derived key, so such
+    jobs otherwise share a `build` key, each rebuilding and then re-saving a
+    full `target/` over the other. May not contain a comma or whitespace.
   required: false
 
 cache-layers:
@@ -1007,16 +1194,16 @@ cache:
     `actions/cache`.
 ```
 
-- [ ] **Step 7: Run the full suite**
+- [ ] **Step 6: Run the full suite**
 
 Run: `bun run fix:all && bun run typecheck && bun run test`
 
 Expected: PASS, coverage still 100%.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/action.ts src/action.test.ts src/config.ts src/lib.test.ts action.yml
+git add src/action.ts src/action.test.ts action.yml
 git commit -S -m "feat(cache): read cache inputs and emit derived keys"
 ```
 
@@ -1076,14 +1263,35 @@ itself — the keys go to your own `actions/cache` steps.
       ~/.cargo/registry/cache
       ~/.cargo/git/db
     key: ${{ fromJSON(steps.rust.outputs.cache).layers.registry.key }}
-    restore-keys: ${{ join(fromJSON(steps.rust.outputs.cache).layers.registry.restoreKeys, '
-') }}
+    restore-keys: |
+      ${{ join(fromJSON(steps.rust.outputs.cache).layers.registry.restoreKeys, '
+      ') }}
+
+- uses: actions/cache@v6
+  with:
+    path: target/
+    key: ${{ fromJSON(steps.rust.outputs.cache).layers.build.key }}
+    restore-keys: |
+      ${{ join(fromJSON(steps.rust.outputs.cache).layers.build.restoreKeys, '
+      ') }}
 ```
+
+Both lines of a `restore-keys` block must sit at identical indentation. The literal newline inside
+`join(..., '<newline>')` is the separator, so indenting the closing `') }}` any further makes the separator a newline
+**plus** those spaces, quietly prefixing whitespace to every restore key after the first.
 
 The two layers are keyed differently on purpose. `registry` holds downloaded source archives that any compiler can
 build, so its key omits the toolchain — bumping stable does not re-download crates. `build` holds compiled artifacts,
 so its key carries the resolved toolchain and its ladder never falls back past one.
+
+`RUSTFLAGS` and the `CARGO_*` variables are **not** part of the derived key. Cargo fingerprints them itself, so a job
+that changes them rebuilds rather than reusing the wrong artifacts — but it then re-saves a full `target/` under the
+same `build` key as the job it differs from. Give such jobs distinct `cache-key-suffix` values.
 ````
+
+**Every fenced `yaml` block in the README must be parsed by a YAML parser**, not read by eye. Nothing in this
+repository's lint chain — `rumdl`, Prettier, `actionlint` — parses YAML inside a Markdown fence, which is exactly how
+an earlier revision of this recipe shipped a block whose `restore-keys` value was invalid YAML.
 
 - [ ] **Step 3: Document the layer model in `docs/ARCHITECTURE.md`**
 
@@ -1146,12 +1354,27 @@ git commit -S -m "docs(cache): document derived cache keys and rebuild bundle"
 
 ## Carried into Phase B
 
-`src/action.ts` is 473 lines after Task 4, past this project's 300-line file guideline (see the root `CLAUDE.md`
-→ Engineering Rules). Phase B adds restore/save orchestration to that same file — `resolveCacheOutputs`,
-the `post:` entrypoint wiring, and the `@actions/cache` calls all land there under the naive plan. **Phase B's plan
-should extract the cache-input handling (`resolveCacheOutputs` and its helpers) into its own module** — e.g.
-`src/cache/inputs.ts` — before adding to `action.ts`, rather than growing the file further and pushing the split to a
-later phase.
+`src/action.ts` is 599 lines after Task 4, past this project's 300-line file guideline (see the root `CLAUDE.md`
+→ Engineering Rules). Phase B adds restore/save orchestration to that same file — `readCacheRequest`,
+`buildCacheOutputs`, the `post:` entrypoint wiring, and the `@actions/cache` calls all land there under the naive plan.
+**Phase B's plan should extract the cache-input handling (`readCacheRequest`, `buildCacheOutputs` and their helpers)
+into its own module** — e.g. `src/cache/inputs.ts` — before adding to `action.ts`, rather than growing the file further
+and pushing the split to a later phase.
+
+**The design spec contradicts itself on the `build` layer, and Phase B must reconcile it before building restore/save
+on top.** `docs/design/2026-07-31-layered-cargo-cache.md` → Layer model lists the `build` layer as invalidated by
+"lockfile, `cachekey-full`, `RUSTFLAGS` and `CARGO_*`", but the Key algebra it specifies two sections later has no
+`RUSTFLAGS` or `CARGO_*` component at all — it is `build-<os>-<arch>-<suffix>-<cachekeyFull>-<lockHash>`. Phase A
+implements the algebra, which is the narrower and safer reading, so two jobs differing only in `RUSTFLAGS` currently
+share a `build` key.
+
+That is not a correctness hazard: cargo fingerprints `RUSTFLAGS` internally and rebuilds rather than serving artifacts
+built under different flags. It is a write-amplification hazard, which is the specific thing this design exists to
+remove — each such job re-saves a full `target/` over the other's entry. Phase A's escape hatch is documented rather
+than coded: `cache-key-suffix` tells the caller to separate those jobs by hand, in `action.yml` and in the README's
+caching section. Phase B must decide which half of the spec is right — fold the environment into the key, or delete
+the claim from the layer table — because a restore/save phase acting on a key that re-saves under contention makes the
+cost real rather than theoretical.
 
 ## Carried into Phase C
 
@@ -1168,19 +1391,18 @@ if (needsLockHash && !lockHash) {
 }
 ```
 
-Two more landmines the Task 1-4 reviews found, both cases where adding the `bin` layer would silently do the wrong
-thing rather than fail loudly:
+One more landmine the Task 1-4 reviews found, a case where adding the `bin` layer would silently do the wrong thing
+rather than fail loudly:
 
-- `src/cache/keys.ts`'s `buildLayerKey` uses early-return `if`s instead of the `switch` the plan specified — see
-  `CLAUDE.md` → Coverage gate gotchas for why: a `switch`'s final case phantom-fails Bun's 100% coverage gate. The
-  `switch` would have failed to type-check the moment `CacheLayerId` gained a third member; the `if` shape has no such
-  guard and silently treats any non-`"registry"` layer, including a future `"bin"`, as `"build"`. **Phase C must
-  restore exhaustiveness** — the reviewer's suggestion was a `Record<CacheLayerId, (context, root) => CacheLayerKey>`
-  dispatch table, which type-errors on a missing key without reintroducing a `switch`.
 - `action.yml`'s `cache-layers` default is the string literal `"registry,build"`, duplicating the ordering that
   `src/action.ts` falls back to via `CACHE_LAYER_IDS.join(",")`. Adding `bin` to `CACHE_LAYER_IDS` updates the
   TypeScript fallback automatically but does not touch the YAML default, so the two silently diverge. **Phase C must
   update both.**
 
-Phase C also widens `parseCacheLayers`, the `cache-layers` default in `resolveCacheOutputs`, and the `CACHE_LAYER_IDS`
+Exhaustiveness is no longer among these. `buildLayerKey` dispatches through a
+`Record<CacheLayerId, (context, root) => CacheLayerKey>`, so adding `bin` to `CACHE_LAYER_IDS` fails to compile until
+the layer is given a deriver — the guarantee a `switch` would have provided, without the phantom-uncovered final case
+that fails Bun's coverage gate.
+
+Phase C also widens `parseCacheLayers`, the `cache-layers` default in `readCacheRequest`, and the `CACHE_LAYER_IDS`
 assertion in `src/cache/layers.test.ts`.

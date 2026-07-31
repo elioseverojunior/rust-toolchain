@@ -94,7 +94,10 @@ inputs:
       An optional discriminator added to every cache key, e.g. a job name.
       Omitting it collapses the slot rather than leaving an empty segment, so
       the key reads `registry-Linux-X64-<hash>` and not
-      `registry-Linux-X64--<hash>`.
+      `registry-Linux-X64--<hash>`. Set it when jobs differ in `RUSTFLAGS` or
+      other `CARGO_*` settings: those are not part of the derived key, so such
+      jobs otherwise share a `build` key, each rebuilding and then re-saving a
+      full `target/` over the other. May not contain a comma or whitespace.
     required: false
 
   cache-layers:
@@ -178,10 +181,13 @@ outputs:
       `components` are real arrays and `set-rustup-toolchain` is a real boolean,
       so `fromJSON(steps.<id>.outputs.json).targets` drops straight into a
       matrix. It also adds two provenance blocks the flat outputs cannot carry:
-      `inputs`, the action inputs verbatim, and `toml`, the parsed
+      `inputs`, the toolchain inputs verbatim, and `toml`, the parsed
       `rust-toolchain.toml` before merging. Together they say where every
       resolved value came from — absent toml scalars are `null`, unset inputs
-      are empty strings.
+      are empty strings. `inputs` covers only the inputs a
+      `rust-toolchain.toml` can also supply, plus `set-rustup-toolchain`; the
+      `cache-*` inputs have no toml counterpart and are reported through the
+      `cache` output instead.
 
 runs:
   using: "node24"

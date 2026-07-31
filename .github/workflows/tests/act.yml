@@ -72,6 +72,47 @@ jobs:
           targets: ${{ matrix.targets }}
           components: ${{ matrix.components }}
           profile: ${{ matrix.profile }}
+          # There is no Cargo.lock in this repository, and hashFiles returns an
+          # empty string for a glob matching nothing — which the action rejects.
+          # Any real lockfile hash exercises the same code path.
+          cache: true
+          cache-key-hash: ${{ hashFiles('bun.lock') }}
+          cache-key-suffix: act
+
+      - name: Verify Cache Output
+        shell: bash
+        # Read through env rather than interpolating into the script: this is
+        # also the only place the README's `restore-keys` expression is ever
+        # evaluated by a real runner, and its block scalar must keep both lines
+        # at identical indentation or the join separator gains leading spaces.
+        env:
+          CACHE_JSON: ${{ steps.rust-toolchain.outputs.cache }}
+          REGISTRY_KEY: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.registry.key }}
+          BUILD_KEY: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.build.key }}
+          REGISTRY_RESTORE_KEYS: |
+            ${{ join(fromJSON(steps.rust-toolchain.outputs.cache).layers.registry.restoreKeys, '
+            ') }}
+        run: |
+          echo "cache: $CACHE_JSON"
+          echo "registry key: $REGISTRY_KEY"
+          echo "build key: $BUILD_KEY"
+          echo "registry restore-keys:"
+          echo "$REGISTRY_RESTORE_KEYS"
+
+          if [[ -z "$REGISTRY_KEY" ]]; then
+            echo "registry cache key is empty"
+            exit 1
+          fi
+          if [[ -z "$BUILD_KEY" ]]; then
+            echo "build cache key is empty"
+            exit 1
+          fi
+          # The widest rung, and the only one guaranteed present, is the bare
+          # layer-os-arch prefix.
+          if ! grep -qx "registry-${RUNNER_OS}-${RUNNER_ARCH}-" <<<"$REGISTRY_RESTORE_KEYS"; then
+            echo "join() did not produce one restore key per line"
+            exit 1
+          fi
 
       - name: Verify Cachekey Output
         shell: bash
