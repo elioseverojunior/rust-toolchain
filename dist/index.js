@@ -18915,6 +18915,79 @@ function parseRustcVersion(output) {
   return { version, commitHash, commitDate, cacheKey };
 }
 
+// src/inputs.ts
+function readBooleanInput(reader, name, fallback) {
+  const raw = reader.getInput(name).trim();
+  if (raw === "")
+    return { raw, value: fallback };
+  if (["true", "True", "TRUE"].includes(raw))
+    return { raw, value: true };
+  if (["false", "False", "FALSE"].includes(raw))
+    return { raw, value: false };
+  throw new Error(`Input \`${name}\` must be "true" or "false", got "${raw}".`);
+}
+
+// src/cache/inputs.ts
+var MISSING_LOCK_HASH_MESSAGE = "`cache-key-hash` is required when `cache` is true. This action cannot " + "compute it — `hashFiles()` is a workflow-expression function — so " + `pass the workflow's own value:
+` + "  cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}\n" + "Without it the cache keys never change: they hit exactly on every " + "run and serve the same crates for the life of the repository.";
+var MAX_CACHE_KEY_LENGTH = 512;
+var SPEC_CACHE_KEY_STAND_IN = generateSpecCacheKey("0".repeat(12), {
+  channel: "",
+  targets: [],
+  components: []
+});
+var INVALID_SUFFIX_CHARACTER = /[,\s]/;
+function requireRunnerEnv(source, name) {
+  const value = (source.env[name] ?? "").trim();
+  if (value)
+    return value;
+  throw new Error(`\`${name}\` is empty, so the derived cache keys would silently drop that ` + `segment and collide with keys from other runners. Cache entries are ` + `not portable across operating systems or architectures. GitHub sets ` + `\`${name}\` on every hosted runner; set it explicitly on a self-hosted ` + "one, or leave `cache` unset.");
+}
+function assertKeyIsUsable(layer, key, suffix, lockHash) {
+  if (key.length <= MAX_CACHE_KEY_LENGTH)
+    return;
+  throw new Error(`The derived \`${layer}\` cache key is ${key.length} characters, but ` + `actions/cache rejects any key over ${MAX_CACHE_KEY_LENGTH}. Shorten ` + `\`cache-key-suffix\` (${suffix.length} characters) or ` + `\`cache-key-hash\` (${lockHash.length} characters).`);
+}
+function readCacheKeySuffix(source) {
+  const suffix = source.getInput("cache-key-suffix").trim();
+  if (!INVALID_SUFFIX_CHARACTER.test(suffix))
+    return suffix;
+  throw new Error("`cache-key-suffix` must not contain a comma or whitespace, got " + `${JSON.stringify(suffix)}. actions/cache rejects a key containing a ` + "comma, and a joined `restore-keys` block splits on a newline, so an " + "embedded one would arrive as two keys.");
+}
+function readCacheRequest(source) {
+  if (!readBooleanInput(source, "cache", false).value)
+    return;
+  const layers = parseCacheLayers(source.getInput("cache-layers").trim() || CACHE_LAYER_IDS.join(","));
+  const lockHash = source.getInput("cache-key-hash").trim();
+  if (!lockHash)
+    throw new Error(MISSING_LOCK_HASH_MESSAGE);
+  const suffix = readCacheKeySuffix(source);
+  const context = {
+    os: requireRunnerEnv(source, "RUNNER_OS"),
+    arch: requireRunnerEnv(source, "RUNNER_ARCH"),
+    suffix,
+    lockHash
+  };
+  for (const layer of layers) {
+    const { key } = buildLayerKey(layer, {
+      ...context,
+      specCacheKey: SPEC_CACHE_KEY_STAND_IN
+    });
+    assertKeyIsUsable(layer, key, suffix, lockHash);
+  }
+  return { layers, context };
+}
+function buildCacheOutputs(request, specCacheKey) {
+  if (!request)
+    return { enabled: false, layers: {} };
+  const context = { ...request.context, specCacheKey };
+  const built = {};
+  for (const layer of request.layers) {
+    built[layer] = buildLayerKey(layer, context);
+  }
+  return { enabled: true, layers: built };
+}
+
 // src/outputs.ts
 function buildActionOutputs(args) {
   const { spec, inputs, toml } = args;
@@ -19019,16 +19092,6 @@ function readInputs(deps) {
     profile: deps.core.getInput("profile") || undefined
   };
 }
-function readBooleanInput(deps, name, fallback) {
-  const raw = deps.core.getInput(name).trim();
-  if (raw === "")
-    return { raw, value: fallback };
-  if (["true", "True", "TRUE"].includes(raw))
-    return { raw, value: true };
-  if (["false", "False", "FALSE"].includes(raw))
-    return { raw, value: false };
-  throw new Error(`Input \`${name}\` must be "true" or "false", got "${raw}".`);
-}
 function resolveConfiguration(deps) {
   const inputs = readInputs(deps);
   const toml = readTomlConfig(deps);
@@ -19097,68 +19160,12 @@ function applyCargoDefaults(deps, release) {
     setIfUnset("CARGO_HTTP_MULTIPLEXING", "false");
   }
 }
-var MISSING_LOCK_HASH_MESSAGE = "`cache-key-hash` is required when `cache` is true. This action cannot " + "compute it — `hashFiles()` is a workflow-expression function — so " + `pass the workflow's own value:
-` + "  cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}\n" + "Without it the cache keys never change: they hit exactly on every " + "run and serve the same crates for the life of the repository.";
-var MAX_CACHE_KEY_LENGTH = 512;
-var SPEC_CACHE_KEY_STAND_IN = generateSpecCacheKey("0".repeat(12), {
-  channel: "",
-  targets: [],
-  components: []
-});
-var INVALID_SUFFIX_CHARACTER = /[,\s]/;
-function requireRunnerEnv(deps, name) {
-  const value = (deps.env[name] ?? "").trim();
-  if (value)
-    return value;
-  throw new Error(`\`${name}\` is empty, so the derived cache keys would silently drop that ` + `segment and collide with keys from other runners. Cache entries are ` + `not portable across operating systems or architectures. GitHub sets ` + `\`${name}\` on every hosted runner; set it explicitly on a self-hosted ` + "one, or leave `cache` unset.");
-}
-function assertKeyIsUsable(layer, key, suffix, lockHash) {
-  if (key.length <= MAX_CACHE_KEY_LENGTH)
-    return;
-  throw new Error(`The derived \`${layer}\` cache key is ${key.length} characters, but ` + `actions/cache rejects any key over ${MAX_CACHE_KEY_LENGTH}. Shorten ` + `\`cache-key-suffix\` (${suffix.length} characters) or ` + `\`cache-key-hash\` (${lockHash.length} characters).`);
-}
-function readCacheKeySuffix(deps) {
-  const suffix = deps.core.getInput("cache-key-suffix").trim();
-  if (!INVALID_SUFFIX_CHARACTER.test(suffix))
-    return suffix;
-  throw new Error("`cache-key-suffix` must not contain a comma or whitespace, got " + `${JSON.stringify(suffix)}. actions/cache rejects a key containing a ` + "comma, and a joined `restore-keys` block splits on a newline, so an " + "embedded one would arrive as two keys.");
-}
-function readCacheRequest(deps) {
-  if (!readBooleanInput(deps, "cache", false).value)
-    return;
-  const layers = parseCacheLayers(deps.core.getInput("cache-layers").trim() || CACHE_LAYER_IDS.join(","));
-  const lockHash = deps.core.getInput("cache-key-hash").trim();
-  if (!lockHash)
-    throw new Error(MISSING_LOCK_HASH_MESSAGE);
-  const suffix = readCacheKeySuffix(deps);
-  const context = {
-    os: requireRunnerEnv(deps, "RUNNER_OS"),
-    arch: requireRunnerEnv(deps, "RUNNER_ARCH"),
-    suffix,
-    lockHash
-  };
-  for (const layer of layers) {
-    const { key } = buildLayerKey(layer, {
-      ...context,
-      specCacheKey: SPEC_CACHE_KEY_STAND_IN
-    });
-    assertKeyIsUsable(layer, key, suffix, lockHash);
-  }
-  return { layers, context };
-}
-function buildCacheOutputs(request, specCacheKey) {
-  if (!request)
-    return { enabled: false, layers: {} };
-  const context = { ...request.context, specCacheKey };
-  const built = {};
-  for (const layer of request.layers) {
-    built[layer] = buildLayerKey(layer, context);
-  }
-  return { enabled: true, layers: built };
-}
 function run(deps) {
   try {
-    const cacheRequest = readCacheRequest(deps);
+    const cacheRequest = readCacheRequest({
+      getInput: deps.core.getInput,
+      env: deps.env
+    });
     const config = resolveConfiguration(deps);
     const spec = config.spec;
     const rustupEnv = resolveRustupEnv(deps.env, deps.platform);
@@ -19190,7 +19197,7 @@ function run(deps) {
     } catch (error2) {
       deps.core.info(`rustup default did not succeed, continuing: ${error2 instanceof Error ? error2.message : String(error2)}`);
     }
-    const setRustupToolchain = readBooleanInput(deps, "set-rustup-toolchain", true);
+    const setRustupToolchain = readBooleanInput(deps.core, "set-rustup-toolchain", true);
     if (setRustupToolchain.value) {
       deps.core.exportVariable("RUSTUP_TOOLCHAIN", spec.channel);
     }
