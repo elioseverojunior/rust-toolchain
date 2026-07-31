@@ -2,7 +2,7 @@
   "name": "rust-toolchain",
   "module": "src/index.ts",
   "type": "module",
-  "license": "MIT",
+  "license": "MIT OR Apache-2.0",
   "description": "Rust Toolchain Action",
   "version": "0.0.1",
   "engines": {
