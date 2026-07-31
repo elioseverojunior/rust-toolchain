@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+import { parseCommaList } from "@rust-toolchain/config";
+
 /**
  * The cache partitions, in canonical order.
  *
@@ -26,10 +28,10 @@ export type CacheLayerId = (typeof CACHE_LAYER_IDS)[number];
  * order keeps the `cache` output diffable between runs.
  */
 export function parseCacheLayers(value: string): CacheLayerId[] {
-  const named = value
-    .split(/[,\s\n]+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  // Shares `parseCommaList` with `targets` and `components` rather than
+  // restating the separator grammar: one definition is what keeps "the same
+  // separators as targets" true instead of merely intended.
+  const named = parseCommaList(value);
 
   for (const name of named) {
     if (!(CACHE_LAYER_IDS as readonly string[]).includes(name)) {

@@ -121,11 +121,16 @@ export function resolveRustupEnv(
   };
 }
 
-/** Splits a comma-, whitespace- or newline-separated input into entries. */
+/**
+ * Splits a comma-, whitespace- or newline-separated input into entries.
+ *
+ * `\s` already covers `\n`, so the class needs no separate newline alternative.
+ * Shared with `parseCacheLayers` so the separator grammar has one definition.
+ */
 export function parseCommaList(value?: string): string[] {
   if (!value) return [];
   return value
-    .split(/[,\s\n]+/)
+    .split(/[,\s]+/)
     .map((s) => s.trim())
     .filter(Boolean);
 }

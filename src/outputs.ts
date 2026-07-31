@@ -23,11 +23,16 @@ export interface BooleanInput {
 }
 
 /**
- * The action inputs verbatim, before any parsing or merging.
+ * The toolchain inputs verbatim, before any parsing or merging.
  *
  * Every field is a string, `""` when unset, mirroring `core.getInput`. Keyed by
  * input name rather than by a TypeScript-friendly alias so the JSON reads the
  * same as the `with:` block that produced it.
+ *
+ * Not every input: this block exists to say whether a resolved value came from
+ * the workflow or from `rust-toolchain.toml`, so it carries only the inputs
+ * that question applies to, plus `set-rustup-toolchain`. The `cache-*` inputs
+ * have no toml counterpart and are reported through `CacheOutputs` instead.
  */
 export interface InputProvenance {
   toolchain: string;

@@ -905,3 +905,154 @@ describe("cache key outputs", () => {
     expect(h.failures[0]).toContain('"bin" is not a cache layer');
   });
 });
+
+describe("cache input validation", () => {
+  // The whole point of validating up front: a typo in a cache input must not
+  // cost a rustup bootstrap, a toolchain install and four component adds
+  // before it is reported. Nothing has been executed when it fails.
+  it("rejects an unknown layer before running any command", () => {
+    const h = harness({
+      inputs: {
+        toolchain: "stable",
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+        "cache-layers": "bin",
+      },
+      env: cacheEnv,
+    });
+    run(h.deps);
+    expect(h.failures[0]).toContain('"bin" is not a cache layer');
+    expect(h.calls).toEqual([]);
+  });
+
+  it("rejects a missing lock hash before running any command", () => {
+    const h = harness({
+      inputs: { toolchain: "stable", cache: "true" },
+      env: cacheEnv,
+    });
+    run(h.deps);
+    expect(h.failures[0]).toContain("`cache-key-hash` is required");
+    expect(h.calls).toEqual([]);
+  });
+
+  // `joinKeySegments` drops empty segments, so an unset RUNNER_OS would not
+  // fail — it would silently produce `registry-X64-ci-<hash>`, a key that
+  // collides across operating systems and whose widest rung matches every
+  // entry the repository has.
+  it("fails when RUNNER_OS is blank rather than collapsing the segment", () => {
+    const h = harness({
+      inputs: {
+        toolchain: "stable",
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+      },
+      env: { ...cacheEnv, RUNNER_OS: "" },
+    });
+    run(h.deps);
+    expect(h.failures[0]).toContain("`RUNNER_OS`");
+    expect(h.calls).toEqual([]);
+  });
+
+  it("fails when RUNNER_ARCH is missing rather than collapsing the segment", () => {
+    const h = harness({
+      inputs: {
+        toolchain: "stable",
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+      },
+      env: { ...cacheEnv, RUNNER_ARCH: undefined },
+    });
+    run(h.deps);
+    expect(h.failures[0]).toContain("`RUNNER_ARCH`");
+    expect(h.calls).toEqual([]);
+  });
+
+  // actions/cache rejects a key containing a comma outright.
+  it("rejects a cache-key-suffix containing a comma", () => {
+    const h = harness({
+      inputs: {
+        toolchain: "stable",
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+        "cache-key-suffix": "ci,nightly",
+      },
+      env: cacheEnv,
+    });
+    run(h.deps);
+    expect(h.failures[0]).toContain("`cache-key-suffix`");
+    expect(h.failures[0]).toContain("comma or whitespace");
+    expect(h.calls).toEqual([]);
+  });
+
+  // getInput trims the ends but not the middle, so an embedded newline
+  // survives into the key and splits the README's joined restore-keys block
+  // into two entries, one of them nonsense.
+  it("rejects a cache-key-suffix containing an embedded newline", () => {
+    const h = harness({
+      inputs: {
+        toolchain: "stable",
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+        "cache-key-suffix": "ci\nnightly",
+      },
+      env: cacheEnv,
+    });
+    run(h.deps);
+    expect(h.failures[0]).toContain("comma or whitespace");
+    expect(h.calls).toEqual([]);
+  });
+
+  it("fails when a derived key would exceed the 512-character limit", () => {
+    const h = harness({
+      inputs: {
+        toolchain: "stable",
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+        "cache-key-suffix": "s".repeat(600),
+      },
+      env: cacheEnv,
+    });
+    run(h.deps);
+    expect(h.failures[0]).toContain("512");
+    expect(h.failures[0]).toContain("`cache-key-suffix`");
+    expect(h.calls).toEqual([]);
+  });
+
+  // The limit applies to the longest key the run will derive, which is the
+  // build layer's — it carries the spec digest the registry key omits.
+  it("accounts for the spec digest the build key has yet to receive", () => {
+    const h = harness({
+      inputs: {
+        toolchain: "stable",
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+        // Long enough that only the build layer, with its extra spec segment,
+        // crosses 512: the registry key lands at 506 characters and the build
+        // key at 525.
+        "cache-key-suffix": "s".repeat(480),
+      },
+      env: cacheEnv,
+    });
+    run(h.deps);
+    expect(h.failures[0]).toContain("`build`");
+    expect(h.calls).toEqual([]);
+  });
+
+  // Nothing above applies when the caller never asked for cache keys.
+  it("ignores every cache input when cache is disabled", () => {
+    const h = harness({
+      inputs: {
+        toolchain: "stable",
+        "cache-layers": "bin",
+        "cache-key-suffix": "ci,nightly",
+      },
+      env: { ...cacheEnv, RUNNER_OS: "" },
+    });
+    run(h.deps);
+    expect(h.failures).toEqual([]);
+    expect(JSON.parse(h.outputs["cache"] ?? "null")).toEqual({
+      enabled: false,
+      layers: {},
+    });
+  });
+});

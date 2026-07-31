@@ -36,7 +36,10 @@ export interface CacheKeyContext {
    * block comment.
    */
   lockHash?: string;
-  /** `generateSpecCacheKey` output: rustc build plus channel, targets, components, profile. */
+  /**
+   * `generateSpecCacheKey` output: the rustc build plus a digest of the
+   * channel, targets, components and profile.
+   */
   specCacheKey: string;
 }
 
@@ -49,46 +52,65 @@ export interface CacheLayerKey {
 /**
  * Restore keys are prefix matches, so each rung keeps its trailing `-`.
  *
- * Without it, a `ci` suffix rung would also match a `ci-nightly` entry and
- * restore a cache built for a different job.
+ * The trailing dash buys the separator, not a boundary. Without it a `ci` rung
+ * would also match `...-cinightly-<hash>`, an unrelated job whose suffix merely
+ * begins with the same letters. It does not — and cannot — stop `...-ci-`
+ * matching `...-ci-nightly-<hash>`: a prefix match has no way to tell where a
+ * suffix ends.
+ *
+ * That residual overlap is deliberate. A job with `cache-key-suffix: ci` will
+ * restore the `registry` entry of a job using `ci-nightly`, through the widest
+ * rung if not the narrower one. It is harmless: crate sources are
+ * toolchain-independent, so a cross-job restore costs nothing and usually
+ * helps. The `build` layer is immune for a different reason — its only rung
+ * ends in the spec digest, which an entry from another toolchain cannot share.
  */
 function ladder(...prefixes: string[]): string[] {
   return [...new Set(prefixes.map((prefix) => `${prefix}-`))];
 }
 
 /**
- * Derives one layer's key and restore ladder.
+ * How each layer turns a validated context into its key and ladder.
  *
- * The two layers differ in exactly one way, and it is the point of the split:
+ * A `Record` keyed on `CacheLayerId` rather than a chain of `if`s: adding a
+ * layer to `CACHE_LAYER_IDS` then fails to compile here until it is given a
+ * deriver, where an `if` would have silently handed the new layer whichever
+ * shape the fall-through branch happened to produce. It is not a `switch`
+ * because Bun's coverage instrumenter never marks a final `case`'s closing
+ * brace as covered — see `CLAUDE.md` → Coverage gate gotchas.
+ *
+ * The two entries differ in exactly one way, and it is the point of the split:
  * `registry` holds downloaded source archives, which any rustc can compile, so
  * its key omits the toolchain entirely. `build` holds compiled artifacts, so
  * its key carries the resolved spec and its ladder never falls back past one —
  * artifacts from another toolchain are discarded on sight, and restoring them
  * costs download time only to re-save them under a new key.
- *
- * Written as an early return rather than a `switch`: `CacheLayerId` has
- * exactly two members, so TypeScript narrows `layer` to `"build"` below
- * without an `else` or a trailing `default`, and Bun's coverage instrumenter
- * does not double-count a final `switch` case's closing brace as a phantom
- * uncovered line the way it does here.
  */
-export function buildLayerKey(
-  layer: CacheLayerId,
-  context: CacheKeyContext,
-): CacheLayerKey {
-  const root = joinKeySegments(layer, context.os, context.arch);
-
-  if (layer === "registry") {
+const DERIVERS: Record<
+  CacheLayerId,
+  (context: CacheKeyContext, root: string) => CacheLayerKey
+> = {
+  registry: (context, root) => {
     const scoped = joinKeySegments(root, context.suffix);
     return {
       key: joinKeySegments(scoped, context.lockHash),
       restoreKeys: ladder(scoped, root),
     };
-  }
+  },
+  build: (context, root) => {
+    const scoped = joinKeySegments(root, context.suffix, context.specCacheKey);
+    return {
+      key: joinKeySegments(scoped, context.lockHash),
+      restoreKeys: ladder(scoped),
+    };
+  },
+};
 
-  const scoped = joinKeySegments(root, context.suffix, context.specCacheKey);
-  return {
-    key: joinKeySegments(scoped, context.lockHash),
-    restoreKeys: ladder(scoped),
-  };
+/** Derives one layer's key and restore ladder. */
+export function buildLayerKey(
+  layer: CacheLayerId,
+  context: CacheKeyContext,
+): CacheLayerKey {
+  const root = joinKeySegments(layer, context.os, context.arch);
+  return DERIVERS[layer](context, root);
 }
