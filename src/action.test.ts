@@ -810,3 +810,98 @@ profile = "minimal"
     expect(h.failures).toHaveLength(1);
   });
 });
+
+const cacheEnv = {
+  HOME: "/home/runner",
+  GITHUB_WORKSPACE: "/workspace",
+  RUNNER_TEMP: "/tmp/runner",
+  RUNNER_OS: "Linux",
+  RUNNER_ARCH: "X64",
+};
+
+describe("cache key outputs", () => {
+  it("emits nothing but a disabled marker when cache is unset", () => {
+    const h = harness({ inputs: { toolchain: "stable" }, env: cacheEnv });
+    run(h.deps);
+    expect(JSON.parse(h.outputs["cache"] ?? "null")).toEqual({
+      enabled: false,
+      layers: {},
+    });
+  });
+
+  it("derives every default layer when cache is enabled", () => {
+    const h = harness({
+      inputs: {
+        toolchain: "stable",
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+        "cache-key-suffix": "ci",
+      },
+      env: cacheEnv,
+    });
+    run(h.deps);
+    const cache = JSON.parse(h.outputs["cache"] ?? "null");
+    expect(h.failures).toEqual([]);
+    expect(cache.enabled).toBe(true);
+    expect(Object.keys(cache.layers)).toEqual(["registry", "build"]);
+    expect(cache.layers.registry.key).toBe("registry-Linux-X64-ci-a1b2c3");
+  });
+
+  // The build key must carry the same spec digest the cachekey-full output
+  // reports, or the two describe different toolchains.
+  it("keys the build layer on the published cachekey-full value", () => {
+    const h = harness({
+      inputs: {
+        toolchain: "stable",
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+      },
+      env: cacheEnv,
+    });
+    run(h.deps);
+    const cache = JSON.parse(h.outputs["cache"] ?? "null");
+    expect(cache.layers.build.key).toContain(h.outputs["cachekey-full"]);
+  });
+
+  it("honours an explicit layer selection", () => {
+    const h = harness({
+      inputs: {
+        toolchain: "stable",
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+        "cache-layers": "registry",
+      },
+      env: cacheEnv,
+    });
+    run(h.deps);
+    const cache = JSON.parse(h.outputs["cache"] ?? "null");
+    expect(Object.keys(cache.layers)).toEqual(["registry"]);
+  });
+
+  // A missing lock hash makes both keys constant: they hit exactly on every
+  // run, never re-save, and serve the same crates forever. Failing loudly
+  // beats a cache that is silently wrong for the life of the repository.
+  it("fails when cache is enabled without a lock hash", () => {
+    const h = harness({
+      inputs: { toolchain: "stable", cache: "true" },
+      env: cacheEnv,
+    });
+    run(h.deps);
+    expect(h.failures[0]).toContain("`cache-key-hash` is required");
+    expect(h.failures[0]).toContain("hashFiles");
+  });
+
+  it("reports an unknown layer through setFailed", () => {
+    const h = harness({
+      inputs: {
+        toolchain: "stable",
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+        "cache-layers": "bin",
+      },
+      env: cacheEnv,
+    });
+    run(h.deps);
+    expect(h.failures[0]).toContain('"bin" is not a cache layer');
+  });
+});

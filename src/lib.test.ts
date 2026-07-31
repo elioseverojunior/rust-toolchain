@@ -34,6 +34,7 @@ describe("library barrel", () => {
         "resolveRustupEnv",
         "assertProfileAvailable",
         "mergeConfig",
+        "parseCommaList",
         // core.ts
         "resolveChannel",
         "parseRustToolchainToml",

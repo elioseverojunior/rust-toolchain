@@ -121,7 +121,8 @@ export function resolveRustupEnv(
   };
 }
 
-function parseCommaList(value?: string): string[] {
+/** Splits a comma-, whitespace- or newline-separated input into entries. */
+export function parseCommaList(value?: string): string[] {
   if (!value) return [];
   return value
     .split(/[,\s\n]+/)

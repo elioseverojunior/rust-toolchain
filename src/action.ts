@@ -9,6 +9,16 @@ import {
   type ToolchainSpec,
 } from "@rust-toolchain/builder";
 import {
+  buildLayerKey,
+  type CacheKeyContext,
+  type CacheLayerKey,
+} from "@rust-toolchain/cache/keys";
+import {
+  CACHE_LAYER_IDS,
+  parseCacheLayers,
+  type CacheLayerId,
+} from "@rust-toolchain/cache/layers";
+import {
   assertProfileAvailable,
   mergeConfig,
   resolveRustupEnv,
@@ -26,6 +36,7 @@ import {
   buildActionOutputs,
   toOutputEntries,
   type BooleanInput,
+  type CacheOutputs,
 } from "@rust-toolchain/outputs";
 
 /** Outcome of one process invocation. */
@@ -312,6 +323,54 @@ function applyCargoDefaults(deps: ActionDeps, release: string): void {
   }
 }
 
+/**
+ * Derives the cache keys for the enabled layers.
+ *
+ * Nothing is restored or saved here: the keys go out as an output for the
+ * workflow's own `actions/cache` steps. The lock hash arrives as an input
+ * because `hashFiles()` is a workflow-expression function that a Node action
+ * cannot call, and taking GitHub's own value keeps the keys interoperable with
+ * caches the workflow already has.
+ */
+function resolveCacheOutputs(
+  deps: ActionDeps,
+  specCacheKey: string,
+): CacheOutputs {
+  const enabled = readBooleanInput(deps, "cache", false);
+  if (!enabled.value) return { enabled: false, layers: {} };
+
+  const layers = parseCacheLayers(
+    deps.core.getInput("cache-layers").trim() || CACHE_LAYER_IDS.join(","),
+  );
+  const lockHash = deps.core.getInput("cache-key-hash").trim();
+
+  // Every Phase A layer keys on the dependency set, so an absent hash makes the
+  // key constant: it hits exactly forever, never re-saves, and serves stale
+  // crates for the life of the repository. That is worse than failing here.
+  if (!lockHash) {
+    throw new Error(
+      "`cache-key-hash` is required when `cache` is true. This action cannot " +
+        "compute it — `hashFiles()` is a workflow-expression function — so " +
+        "pass the workflow's own value:\n" +
+        "  cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}\n" +
+        "Without it the cache keys never change: they hit exactly on every " +
+        "run and serve the same crates for the life of the repository.",
+    );
+  }
+
+  const context: CacheKeyContext = {
+    os: deps.env.RUNNER_OS ?? "",
+    arch: deps.env.RUNNER_ARCH ?? "",
+    suffix: deps.core.getInput("cache-key-suffix").trim(),
+    lockHash,
+    specCacheKey,
+  };
+
+  const built: Partial<Record<CacheLayerId, CacheLayerKey>> = {};
+  for (const layer of layers) built[layer] = buildLayerKey(layer, context);
+  return { enabled: true, layers: built };
+}
+
 /** Installs the requested toolchain and publishes the action's outputs. */
 export function run(deps: ActionDeps): void {
   try {
@@ -395,17 +454,15 @@ export function run(deps: ActionDeps): void {
     deps.core.info(rustc.banner);
     applyCargoDefaults(deps, rustc.info.version);
 
+    const specCacheKey = generateSpecCacheKey(rustc.info.cacheKey, spec);
     const outputs = buildActionOutputs({
       spec,
       inputs: config.inputs,
       toml: config.toml,
       setRustupToolchain,
       cacheKey: rustc.info.cacheKey,
-      specCacheKey: generateSpecCacheKey(rustc.info.cacheKey, spec),
-      // Wired up in the follow-on task that populates layer keys from
-      // `cache`/`cache-layers` inputs; until then the action publishes a
-      // disabled cache block rather than a partially-built one.
-      cache: { enabled: false, layers: {} },
+      specCacheKey,
+      cache: resolveCacheOutputs(deps, specCacheKey),
     });
     for (const [name, value] of toOutputEntries(outputs)) {
       deps.core.setOutput(name, value);

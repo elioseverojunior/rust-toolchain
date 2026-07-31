@@ -70,6 +70,44 @@ inputs:
     required: false
     default: "true"
 
+  cache:
+    description: >
+      Whether to derive cargo cache keys (default false). When true, the
+      `cache` output carries a key and restore-key ladder per layer for the
+      workflow's own `actions/cache` steps. This action does not restore or
+      save anything itself.
+    required: false
+    default: "false"
+
+  cache-key-hash:
+    description: >
+      A hash of the dependency set, required when `cache` is true. Pass
+      `${{ hashFiles('**/Cargo.lock') }}` — `hashFiles` is a workflow
+      expression function that a Node action cannot call, and using GitHub's
+      own value keeps these keys interoperable with caches you already have.
+      Without it the keys never change: they hit exactly on every run and
+      serve the same crates for the life of the repository.
+    required: false
+
+  cache-key-suffix:
+    description: >
+      An optional discriminator added to every cache key, e.g. a job name.
+      Omitting it collapses the slot rather than leaving an empty segment, so
+      the key reads `registry-Linux-X64-<hash>` and not
+      `registry-Linux-X64--<hash>`.
+    required: false
+
+  cache-layers:
+    description: >
+      Which cache layers to derive keys for, comma, space or newline
+      separated. Defaults to all of them. `registry` covers the downloaded
+      crates and is keyed on the dependency set alone; `build` covers the
+      target directory and is keyed on the dependency set plus the resolved
+      toolchain, so a rustc bump does not invalidate the crates it never
+      touched.
+    required: false
+    default: "registry,build"
+
 outputs:
   cachekey:
     description: >
@@ -84,6 +122,13 @@ outputs:
       different targets share a `cachekey` and would restore each other's
       artifacts; this key keeps them apart. Targets and components are sorted,
       so writing the same set in a different order still hits the same key.
+
+  cache:
+    description: >
+      The derived cache keys as one JSON object: `enabled`, plus a `layers`
+      map from layer name to `{ key, restoreKeys }`. Empty when `cache` is
+      false. Read it with `fromJSON()` and feed the parts straight into
+      `actions/cache`.
 
   name:
     description: >
