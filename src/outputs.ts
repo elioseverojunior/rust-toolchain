@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 import type { ToolchainSpec } from "@rust-toolchain/builder";
+import type { CacheLayerKey } from "@rust-toolchain/cache/keys";
+import type { CacheLayerId } from "@rust-toolchain/cache/layers";
 import type { ToolchainInputs } from "@rust-toolchain/config";
 import type { ToolchainTomlConfig } from "@rust-toolchain/core";
 
@@ -52,6 +54,18 @@ export interface TomlProvenance {
 }
 
 /**
+ * The cache keys this action derived, per layer.
+ *
+ * `layers` is partial because `cache-layers` selects which exist; a consumer
+ * reads only the ones it enabled. Nothing here is restored or saved yet — these
+ * are keys for the workflow's own `actions/cache` steps to use.
+ */
+export interface CacheOutputs {
+  enabled: boolean;
+  layers: Partial<Record<CacheLayerId, CacheLayerKey>>;
+}
+
+/**
  * Every value the action publishes, natively typed.
  *
  * Serialised whole into the `json` output, so the declaration order below is
@@ -68,6 +82,7 @@ export interface ActionOutputs {
   name: string;
   cachekey: string;
   "cachekey-full": string;
+  cache: CacheOutputs;
   inputs: InputProvenance;
   toml: TomlProvenance;
 }
@@ -84,6 +99,8 @@ export interface ActionOutputsArgs {
   cacheKey: string;
   /** The above, extended with a digest of the whole spec. */
   specCacheKey: string;
+  /** Per-layer cache keys, or a disabled marker when `cache` is false. */
+  cache: CacheOutputs;
 }
 
 /**
@@ -113,6 +130,7 @@ export function buildActionOutputs(args: ActionOutputsArgs): ActionOutputs {
     name: spec.channel,
     cachekey: args.cacheKey,
     "cachekey-full": args.specCacheKey,
+    cache: args.cache,
     inputs: {
       toolchain: inputs.toolchain ?? "",
       targets: inputs.targets ?? "",
@@ -151,6 +169,7 @@ export function toOutputEntries(outputs: ActionOutputs): [string, string][] {
     ["components", JSON.stringify(outputs.components)],
     ["profile", outputs.profile],
     ["set-rustup-toolchain", String(outputs["set-rustup-toolchain"])],
+    ["cache", JSON.stringify(outputs.cache)],
     ["json", JSON.stringify(outputs)],
   ];
 }

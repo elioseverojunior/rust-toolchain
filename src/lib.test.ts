@@ -69,6 +69,7 @@ describe("library barrel", () => {
       setRustupToolchain: { raw: "", value: true },
       cacheKey: "20250915abcd",
       specCacheKey: "20250915abcd-1f2e3d4c",
+      cache: { enabled: false, layers: {} },
     });
     expect(outputs.target).toBe("wasm32-unknown-unknown");
   });

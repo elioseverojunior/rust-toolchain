@@ -12,6 +12,7 @@ import {
   toOutputEntries,
   type ActionOutputs,
   type ActionOutputsArgs,
+  type CacheOutputs,
 } from "@/outputs";
 
 const spec = (
@@ -39,6 +40,7 @@ const args = (
   setRustupToolchain: { raw: "", value: true },
   cacheKey: "20250915abcd",
   specCacheKey: "20250915abcd-1f2e3d4c",
+  cache: { enabled: false, layers: {} },
   ...overrides,
 });
 
@@ -285,6 +287,7 @@ describe("toOutputEntries", () => {
       "name",
       "cachekey",
       "cachekey-full",
+      "cache",
       "inputs",
       "toml",
     ]);
@@ -302,7 +305,48 @@ describe("toOutputEntries", () => {
       "components",
       "profile",
       "set-rustup-toolchain",
+      "cache",
       "json",
     ]);
+  });
+});
+
+describe("cache outputs", () => {
+  it("carries the per-layer keys through to the outputs", () => {
+    const cache: CacheOutputs = {
+      enabled: true,
+      layers: {
+        registry: {
+          key: "registry-Linux-X64-ci-a1b2c3",
+          restoreKeys: ["registry-Linux-X64-ci-", "registry-Linux-X64-"],
+        },
+      },
+    };
+    expect(buildActionOutputs(args({ cache })).cache).toEqual(cache);
+  });
+
+  it("reports a disabled cache with no layers", () => {
+    expect(buildActionOutputs(args()).cache).toEqual({
+      enabled: false,
+      layers: {},
+    });
+  });
+
+  // Action outputs are strings, so the object ships as JSON and a consumer
+  // reads it with fromJSON() rather than parsing a delimited format.
+  it("serialises the cache block as JSON in the flat entries", () => {
+    const cache: CacheOutputs = {
+      enabled: true,
+      layers: {
+        build: {
+          key: "build-Linux-X64-20250915abcd-1f2e3d4c-a1b2c3",
+          restoreKeys: ["build-Linux-X64-20250915abcd-1f2e3d4c-"],
+        },
+      },
+    };
+    const entries = toOutputEntries(buildActionOutputs(args({ cache })));
+    const entry = entries.find(([name]) => name === "cache");
+    expect(entry).toBeDefined();
+    expect(JSON.parse(entry?.[1] ?? "null")).toEqual(cache);
   });
 });

@@ -402,6 +402,10 @@ export function run(deps: ActionDeps): void {
       setRustupToolchain,
       cacheKey: rustc.info.cacheKey,
       specCacheKey: generateSpecCacheKey(rustc.info.cacheKey, spec),
+      // Wired up in the follow-on task that populates layer keys from
+      // `cache`/`cache-layers` inputs; until then the action publishes a
+      // disabled cache block rather than a partially-built one.
+      cache: { enabled: false, layers: {} },
     });
     for (const [name, value] of toOutputEntries(outputs)) {
       deps.core.setOutput(name, value);

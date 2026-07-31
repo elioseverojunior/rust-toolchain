@@ -737,6 +737,7 @@ profile = "minimal"
         components: ["rustfmt"],
         profile: "minimal",
       }),
+      cache: { enabled: false, layers: {} },
       inputs: {
         toolchain: "",
         targets: "",
