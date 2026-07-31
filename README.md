@@ -29,7 +29,7 @@ One action, driven by the `rust-toolchain.toml` you already committed, that inst
 _every later step_, and publishes what it resolved as typed outputs instead of leaving you to guess.
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v1
+- uses: elioseverojunior/rust-toolchain@v0.1
 ```
 
 That single line reads `rust-toolchain.toml`, installs the channel, targets, components and profile it
@@ -103,6 +103,22 @@ caches — see [Roadmap](#roadmap).
 See [docs/COMPARISON.md](docs/COMPARISON.md) for a feature-by-feature comparison against the wider
 Rust action ecosystem.
 
+## Versioning
+
+Releases follow SemVer, and floating tags track them:
+
+| Reference       | Points at                  | Use when                                                  |
+| --------------- | -------------------------- | --------------------------------------------------------- |
+| `@v0.1`         | Newest `0.1.x` release     | **Recommended** — picks up fixes, never a breaking change |
+| `@v0.1.0-17`    | One exact release, forever | You want byte-identical behaviour across every run        |
+| `@<commit-sha>` | One exact commit           | Your supply-chain policy requires SHA pinning             |
+| `@main`         | Unreleased work            | Never, in CI you care about                               |
+
+**There is deliberately no `@v1`.** The action is pre-1.0, so `0.1` is the compatibility boundary — in
+SemVer's `0.x` range the minor behaves as the major. If you arrived from `dtolnay/rust-toolchain@v1`
+and reached for `@v1` out of habit, use `@v0.1`. When 1.0 ships, `@v1` becomes the recommended float
+and `@v0.1` keeps working.
+
 ## Roadmap
 
 The caching story ships in phases, each independently useful. Phase A is released.
@@ -137,7 +153,7 @@ Phase A gives you those keys today; wire them into `actions/cache` yourself. Pha
 ## Quick Start
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v1
+- uses: elioseverojunior/rust-toolchain@v0.1
 ```
 
 Without any inputs, the action reads `rust-toolchain.toml` in the workspace root.
@@ -146,7 +162,7 @@ If the file doesn't exist, defaults to `stable`.
 ### With Overrides
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v1
+- uses: elioseverojunior/rust-toolchain@v0.1
   with:
     toolchain: nightly
     targets: wasm32-unknown-unknown, aarch64-apple-darwin
@@ -159,7 +175,7 @@ If the file doesn't exist, defaults to `stable`.
 Components can be specified as comma-separated, space-separated, or newline-separated:
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v1
+- uses: elioseverojunior/rust-toolchain@v0.1
   with:
     components: |
       clippy
@@ -170,7 +186,7 @@ Components can be specified as comma-separated, space-separated, or newline-sepa
 Or inline:
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v1
+- uses: elioseverojunior/rust-toolchain@v0.1
   with:
     components: "clippy rustfmt llvm-tools"
 ```
@@ -180,7 +196,7 @@ Or inline:
 Set the Rust profile via input (overrides `rust-toolchain.toml`):
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v1
+- uses: elioseverojunior/rust-toolchain@v0.1
   with:
     profile: minimal
 ```
@@ -209,7 +225,7 @@ requirement and fail the step if they cannot be installed.
 > the step immediately, with a message naming the cause, rather than after a
 > failed download.
 
-<!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v1" -->
+<!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v0.1" -->
 
 ## Description
 
@@ -253,7 +269,7 @@ This action is a `node24` action.
 ## Usage
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v1
+- uses: elioseverojunior/rust-toolchain@v0.1
   with:
     toolchain:
     # Rust toolchain channel. Supports literal channels (stable, nightly, beta), versioned channels (1.89.0), expressive formats (stable 6 months ago, stable minus 3 releases), and <major.minor> series (1.62), which rustup resolves to the newest patch in that series. When omitted, reads from rust-toolchain.toml.
@@ -316,7 +332,7 @@ This action is a `node24` action.
     # Default: registry,build
 ```
 
-<!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v1" -->
+<!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v0.1" -->
 
 ## Reading the Resolved Configuration
 
@@ -324,7 +340,7 @@ Every value the action settled on is published back, so a later step never has
 to re-derive what was installed.
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v1
+- uses: elioseverojunior/rust-toolchain@v0.1
   id: rust
   with:
     target: wasm32-unknown-unknown
@@ -365,7 +381,7 @@ jobs:
       config: ${{ steps.rust.outputs.json }}
     steps:
       - uses: actions/checkout@v5
-      - uses: elioseverojunior/rust-toolchain@v1
+      - uses: elioseverojunior/rust-toolchain@v0.1
         id: rust
 
   build:
@@ -428,7 +444,7 @@ layer. It does not restore or save anything itself — the keys go to your own
 
 ```yaml
 - id: rust
-  uses: elioseverojunior/rust-toolchain@v1
+  uses: elioseverojunior/rust-toolchain@v0.1
   with:
     toolchain: stable
     cache: true
@@ -626,7 +642,7 @@ this action never read. If your crates pin their own toolchains, opt out so each
 `rust-toolchain.toml` keeps applying to its own directory:
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v1
+- uses: elioseverojunior/rust-toolchain@v0.1
   with:
     toolchain: stable
     set-rustup-toolchain: false

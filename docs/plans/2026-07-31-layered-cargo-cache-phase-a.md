@@ -1234,7 +1234,7 @@ dirty. Verify afterwards that both `action-docs-all` markers still carry their f
 `project` or `version` silently regenerates the Usage block as `- uses: @`:
 
 ```text
-<!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v1" -->
+<!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v0.1" -->
 ```
 
 - [ ] **Step 2: Add a caching recipe to the README**
@@ -1249,7 +1249,7 @@ itself — the keys go to your own `actions/cache` steps.
 
 ```yaml
 - id: rust
-  uses: elioseverojunior/rust-toolchain@v1
+  uses: elioseverojunior/rust-toolchain@v0.1
   with:
     toolchain: stable
     cache: true

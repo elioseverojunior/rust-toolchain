@@ -162,7 +162,7 @@ inside the markers are overwritten.
 Both markers must keep their full attribute set:
 
 ```text
-<!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v1" -->
+<!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v0.1" -->
 ```
 
 `action-docs` has no CLI flag for `project`/`version` and never reads the repo

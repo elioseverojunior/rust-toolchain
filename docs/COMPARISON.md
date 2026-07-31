@@ -195,7 +195,7 @@ This is why the action exports `RUSTUP_TOOLCHAIN`. Given:
 
 ```yaml
 # rust-toolchain.toml pins channel = "1.89.0"
-- uses: elioseverojunior/rust-toolchain@v1
+- uses: elioseverojunior/rust-toolchain@v0.1
   with:
     toolchain: nightly
 - run: cargo build
@@ -215,7 +215,7 @@ see all of them flattened to the root's resolution. Set
 nested `rust-toolchain.toml` to win in its own directory:
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v1
+- uses: elioseverojunior/rust-toolchain@v0.1
   with:
     toolchain: stable
     set-rustup-toolchain: false # crates/*/rust-toolchain.toml keep applying
@@ -267,7 +267,7 @@ different order still produces the same key.
 
 ```yaml
 - id: rust
-  uses: elioseverojunior/rust-toolchain@v1
+  uses: elioseverojunior/rust-toolchain@v0.1
   with:
     toolchain: stable
     targets: wasm32-unknown-unknown
@@ -302,7 +302,7 @@ The `@rev` difference is the one to be aware of when migrating:
 - uses: dtolnay/rust-toolchain@1.89.0
 
 # here — pick either
-- uses: elioseverojunior/rust-toolchain@v1
+- uses: elioseverojunior/rust-toolchain@v0.1
   with:
     toolchain: 1.89.0
 # ...or drop the input entirely and commit rust-toolchain.toml
