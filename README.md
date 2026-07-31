@@ -22,10 +22,68 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # Rust Toolchain Action
 
-A GitHub Action that installs a Rust toolchain using `rustup` see the [docs](https://rust-lang.github.io/rustup/concepts/index.html), reading
-`rust-toolchain.toml` by default with action input overrides. Inspired by
-[dtolnay/rust-toolchain](https://github.com/dtolnay/rust-toolchain) with
-extended channel resolution, explicit `profile` support, and a fluent builder API.
+**Install a Rust toolchain that actually matches what your repository asked for — and get the cache keys for free.**
+
+One action, driven by the `rust-toolchain.toml` you already committed, that installs via
+[`rustup`](https://rust-lang.github.io/rustup/concepts/index.html), makes its resolved channel win in
+_every later step_, and publishes what it resolved as typed outputs instead of leaving you to guess.
+
+```yaml
+- uses: elioseverojunior/rust-toolchain@v1
+```
+
+That single line reads `rust-toolchain.toml`, installs the channel, targets, components and profile it
+declares, exports `RUSTUP_TOOLCHAIN` so nothing downstream silently drifts, and hands back a `json`
+output describing exactly what happened.
+
+## Why replace what you have
+
+Most Rust CI setups today stack three or four actions: one to install the toolchain, one to cache, one
+to install `cargo-nextest` and friends, plus a hand-written `bash` step computing cache keys. Each has
+its own inputs, its own failure modes, and no shared understanding of what the others did.
+
+| Instead of                                       | Which gives you                                                    | This action                                                   |
+| ------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------- |
+| Reading `rust-toolchain.toml` yourself in `bash` | A parser you maintain                                              | Reads it by default, no input needed                          |
+| `toolchain: stable` and hoping                   | A pinned toml silently overriding you at _use_ time                | Exports `RUSTUP_TOOLCHAIN`, so your input wins everywhere     |
+| A hand-written key-computation step              | `sha256sum` vs `shasum`, empty-segment bugs, calendar hacks        | Derived, validated keys as one JSON output                    |
+| Guessing what got installed                      | Grepping `rustc -vV` in a later step                               | `toolchain`, `targets`, `components`, `profile` + provenance  |
+| `profile: minimal` on a warm runner              | Silently ignored — rustup skips `--profile` when already installed | Profile components added explicitly, so it applies either way |
+
+### What it replaces today, and what is coming
+
+Honest status, because a claim you disprove in five minutes is worse than no claim:
+
+| Action                                                                                                | Its job                                       | Status here                                                             |
+| ----------------------------------------------------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------- |
+| [`dtolnay/rust-toolchain`](https://github.com/dtolnay/rust-toolchain)                                 | Install a toolchain                           | ✅ **Replaced today** — superset, `cachekey` byte-compatible            |
+| [`actions-rs/toolchain`](https://github.com/actions-rs/toolchain)                                     | Install a toolchain (unmaintained since 2021) | ✅ **Replaced today**                                                   |
+| [`actions/cache`](https://github.com/actions/cache) hand-wired for cargo                              | Generic cache + your own key logic            | ✅ **Key derivation replaced today** — feed `outputs.cache` straight in |
+| [`actions-rust-lang/setup-rust-toolchain`](https://github.com/actions-rust-lang/setup-rust-toolchain) | Toolchain + a `rust-cache` wrapper            | ◐ Toolchain today · caching in **Phase B**                              |
+| [`moonrepo/setup-rust`](https://github.com/moonrepo/setup-rust)                                       | Toolchain + cache + cargo tools               | ◐ Toolchain today · cache **Phase B** · tools **Phase C**               |
+| [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache)                                       | Restore/save the cargo cache                  | ◐ Keys today · restore/save in **Phase B**                              |
+| [`taiki-e/install-action`](https://github.com/taiki-e/install-action)                                 | Install cargo tools fast                      | ○ Planned — **Phase C**                                                 |
+| [`baptiste0928/cargo-install`](https://github.com/baptiste0928/cargo-install)                         | Install + cache cargo tools                   | ○ Planned — **Phase C**                                                 |
+| [`actions-rs/cargo`](https://github.com/actions-rs/cargo)                                             | Run cargo commands                            | ✗ Not a goal — use `run: cargo …`                                       |
+| [`clechasseur/rs-clippy-check`](https://github.com/clechasseur/rs-clippy-check)                       | Clippy annotations on PRs                     | ✗ Not a goal — different concern                                        |
+
+✅ replaced · ◐ partially replaced, rest on the roadmap · ○ planned · ✗ deliberately out of scope
+
+**Today** this is a strict superset of `dtolnay/rust-toolchain` plus cache-key derivation, so it retires
+your toolchain action and your key-computation step in one move. It does **not** yet restore or save
+caches — see [Roadmap](#roadmap).
+
+## Built to be trusted
+
+- **245 tests, 100% line/function/statement coverage**, enforced in CI — the gate fails the build, it is
+  not a badge
+- **No shell, ever** — every command is an argv array. Channel, targets, components and profile can come
+  from an untrusted workspace `rust-toolchain.toml`, so none of them is ever interpolated into a string
+- **Every command is bounded** by a timeout, and network-bound ones retry three times with backoff
+- **Verified end-to-end on a real runner** via [`act`](https://github.com/nektos/act), not only in unit
+  tests — including that the documented cache recipe actually evaluates
+- **REUSE-compliant licensing**, `gitleaks`, CodeQL, and OpenSSF Scorecard in CI
+- **Committed, reproducible bundle** — CI fails on `dist/` drift, so what runs is what you reviewed
 
 ## Features
 
@@ -42,7 +100,39 @@ extended channel resolution, explicit `profile` support, and a fluent builder AP
 - **Cargo defaults** — sets `CARGO_INCREMENTAL=0` and `CARGO_TERM_COLOR=always`, plus the registry-protocol and HTTP-multiplexing workarounds for 1.66–1.71, never overwriting values you set yourself
 - **Resilient** — argv arrays with no shell, validated inputs, a timeout on every command, and three retries with backoff on network-bound ones
 
-See [docs/COMPARISON.md](docs/COMPARISON.md) for a feature-by-feature comparison with dtolnay/rust-toolchain.
+See [docs/COMPARISON.md](docs/COMPARISON.md) for a feature-by-feature comparison against the wider
+Rust action ecosystem.
+
+## Roadmap
+
+The caching story ships in phases, each independently useful. Phase A is released.
+
+| Phase | What it adds                                                                                                   | Status          |
+| ----- | -------------------------------------------------------------------------------------------------------------- | --------------- |
+| **A** | Layered cache **key derivation** — `registry` and `build` keys with restore-key ladders, as the `cache` output | ✅ **Released** |
+| **B** | Restore and save — a `post:` step that caches the layers itself, so `Swatinem/rust-cache` comes out too        | Planned         |
+| **C** | `cargo-tools` — installs and caches cargo binaries, keyed on resolved versions                                 | Planned         |
+| **D** | Deterministic pruning and a size budget, replacing heuristic cache cleaning                                    | Planned         |
+| **E** | Per-layer job summary and reporting                                                                            | Planned         |
+
+### Why layers, and why it matters
+
+`Swatinem/rust-cache` stores `~/.cargo` **and** `./target` in a **single** cache entry whose key
+includes the lockfile hash. Its restore-key fallback omits that hash, so a dependency bump does restore
+the previous entry — but `save.ts` has no exact-hit check, so it then writes a **complete new entry**.
+Every lockfile change writes another full copy of `~/.cargo` plus `target` into a repository-wide 10 GB
+budget that GitHub evicts globally by least-recent-use. An oversized entry does not degrade its own hit
+rate; it evicts _other workflows'_ caches, so the symptom surfaces somewhere else entirely.
+
+This action partitions by **what actually invalidates each layer**:
+
+- `registry` — downloaded crate sources. Keyed on the dependency set **alone**. A rustc bump does not
+  re-download a single crate, because crate sources compile under any compiler.
+- `build` — compiled artifacts. Keyed on the dependency set **plus** the resolved toolchain, with a
+  ladder that never falls back across a toolchain boundary — artifacts from another rustc are ones
+  cargo discards on sight, so restoring them costs download time to gain nothing.
+
+Phase A gives you those keys today; wire them into `actions/cache` yourself. Phase B does the wiring.
 
 ## Quick Start
 
@@ -123,7 +213,7 @@ requirement and fail the step if they cannot be installed.
 
 ## Description
 
-Install a Rust toolchain using rustup, reading rust-toolchain.toml by default with action input overrides. Inspired by dtolnay/rust-toolchain with extended channel resolution and profile support.
+Install a Rust toolchain with rustup, driven by the rust-toolchain.toml you already committed. Exports RUSTUP_TOOLCHAIN so the resolved channel wins in every later step rather than losing to a pinned toml, publishes the merged channel, targets, components and profile as typed outputs with provenance, and derives layered cargo cache keys ready to hand to actions/cache. A superset of dtolnay/rust-toolchain, whose cachekey output it matches byte for byte.
 
 ## Inputs
 

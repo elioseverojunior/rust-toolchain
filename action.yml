@@ -4,9 +4,13 @@
 
 name: "Rust Toolchain"
 description: >
-  Install a Rust toolchain using rustup, reading rust-toolchain.toml by default
-  with action input overrides. Inspired by dtolnay/rust-toolchain with extended
-  channel resolution and profile support.
+  Install a Rust toolchain with rustup, driven by the rust-toolchain.toml you
+  already committed. Exports RUSTUP_TOOLCHAIN so the resolved channel wins in
+  every later step rather than losing to a pinned toml, publishes the merged
+  channel, targets, components and profile as typed outputs with provenance,
+  and derives layered cargo cache keys ready to hand to actions/cache. A
+  superset of dtolnay/rust-toolchain, whose cachekey output it matches byte
+  for byte.
 
 author: "elioseverojunior@gmail.com"
 

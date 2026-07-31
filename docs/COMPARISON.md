@@ -4,18 +4,65 @@ SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
 SPDX-License-Identifier: MIT OR Apache-2.0
 -->
 
-# Comparison with dtolnay/rust-toolchain
+# Comparison with the Rust action ecosystem
 
-This action is a superset of
-[dtolnay/rust-toolchain](https://github.com/dtolnay/rust-toolchain). It carries
-every behaviour of the upstream action, adds `rust-toolchain.toml` support, a
-`profile` input, a spec-aware cache key, and a set of correctness and hardening
-fixes.
+This action replaces the toolchain half of a typical Rust CI setup outright, and is taking over the
+caching half in phases. This document states, per action, exactly what is replaced today and what is
+not — a claim a reader disproves in five minutes is worth less than no claim.
 
-Compared against `dtolnay/rust-toolchain@master` (composite action,
-`action.yml`) as of 2026-07-24.
+## What this replaces
 
-## Summary
+| Action                                                                                                | Its job                               | Status                                                        |
+| ----------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------- |
+| [`dtolnay/rust-toolchain`](https://github.com/dtolnay/rust-toolchain)                                 | Install a toolchain                   | ✅ Replaced — strict superset, `cachekey` byte-compatible     |
+| [`actions-rs/toolchain`](https://github.com/actions-rs/toolchain)                                     | Install a toolchain (unmaintained)    | ✅ Replaced                                                   |
+| [`actions/cache`](https://github.com/actions/cache) hand-wired for cargo                              | Generic cache plus your own key logic | ✅ Key derivation replaced — feed `outputs.cache` in directly |
+| [`actions-rust-lang/setup-rust-toolchain`](https://github.com/actions-rust-lang/setup-rust-toolchain) | Toolchain plus a `rust-cache` wrapper | ◐ Toolchain today, caching in Phase B                         |
+| [`moonrepo/setup-rust`](https://github.com/moonrepo/setup-rust)                                       | Toolchain, cache and cargo tools      | ◐ Toolchain today, cache Phase B, tools Phase C               |
+| [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache)                                       | Restore and save the cargo cache      | ◐ Keys today, restore/save in Phase B                         |
+| [`taiki-e/install-action`](https://github.com/taiki-e/install-action)                                 | Install cargo tools quickly           | ○ Planned, Phase C                                            |
+| [`baptiste0928/cargo-install`](https://github.com/baptiste0928/cargo-install)                         | Install and cache cargo tools         | ○ Planned, Phase C                                            |
+| [`actions-rs/cargo`](https://github.com/actions-rs/cargo)                                             | Run cargo commands                    | ✗ Out of scope — use `run: cargo …`                           |
+| [`clechasseur/rs-clippy-check`](https://github.com/clechasseur/rs-clippy-check)                       | Clippy annotations on pull requests   | ✗ Out of scope — a different concern                          |
+
+✅ replaced · ◐ partially replaced, remainder on the roadmap · ○ planned · ✗ deliberately out of scope
+
+## Against Swatinem/rust-cache
+
+Worth stating precisely, because the common description of `rust-cache`'s weakness is wrong, and the
+wrong description leads to the wrong fix.
+
+`rust-cache` stores `~/.cargo` **and** `./target` in a single cache entry. Its primary key includes a
+hash of the lockfile; its restore-keys array is a single fallback key that omits that hash
+(`src/restore.ts`, `src/config.ts`).
+
+So on a dependency bump the exact key misses, the fallback key hits, the previous entry is restored —
+registry and target together — cargo rebuilds what changed, and then `src/save.ts` saves a **complete
+new entry** under the new key. There is no exact-hit check on the restore path.
+
+The failure is therefore **not** a wasted download. It is write amplification: every lockfile change
+writes another full copy of `~/.cargo` plus `target` into a repository-wide 10 GB budget, and GitHub
+evicts globally by least-recent-use. An oversized entry does not degrade its own hit rate — it evicts
+other workflows' caches, so the symptom surfaces somewhere else entirely.
+
+| Failure mode                                 | Root cause                                                 | Addressed by                               |
+| -------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------ |
+| Everything re-saves when one input moves     | One entry, one key, mixed invalidation rates               | Layer model (Phase A keys, Phase B saves)  |
+| 10 GB exhaustion and cross-workflow eviction | Full re-save per lockfile change, no size accounting       | Skip-save on exact hit, `cache-budget`     |
+| Pruning is heuristic and silent              | Ownership inferred by string-munging filenames, `catch {}` | Deterministic keep-set, no silent failures |
+| Cannot tell a cold run from a broken key     | A single `cache-hit` boolean                               | Per-layer outputs and a job summary        |
+
+The first two are one problem. Monolithic entries cause the eviction churn, so partitioning fixes both.
+
+Phase A ships the partitioning as **keys**; Phase B acts on them. Until then `rust-cache` still does the
+restoring, and the two coexist fine — its `key`/`shared-key` inputs accept this action's outputs.
+
+## Against dtolnay/rust-toolchain
+
+A strict superset. Every upstream behaviour is carried, plus `rust-toolchain.toml` support, a `profile`
+input, a spec-aware cache key, and a set of correctness and hardening fixes.
+
+Compared against `dtolnay/rust-toolchain@master` (composite action, `action.yml`) as of 2026-07-24.
 
 |                                   | dtolnay                | this action                                                           |
 | --------------------------------- | ---------------------- | --------------------------------------------------------------------- |
@@ -24,8 +71,8 @@ Compared against `dtolnay/rust-toolchain@master` (composite action,
 | Profile                           | Hardcoded `minimal`    | `profile` input, toml, or `minimal`; validated against rustup's three |
 | Command execution                 | Shell interpolation    | argv arrays, no shell                                                 |
 | Toolchain pinning for later steps | `rustup default`       | `rustup default` **and** `RUSTUP_TOOLCHAIN`                           |
-| Cache key                         | rustc version only     | rustc version, plus an optional spec-bound key                        |
-| Tests                             | Workflow matrix        | 150 unit tests at 100% coverage, plus an `act` matrix                 |
+| Cache key                         | rustc version only     | rustc version, a spec-bound key, and per-layer cargo cache keys       |
+| Tests                             | Workflow matrix        | 245 unit tests at 100% coverage, plus an `act` matrix                 |
 
 ## Legacy parity
 
