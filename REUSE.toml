@@ -48,81 +48,14 @@ ignore = [
 # `.gitmessage` is a git commit template, where `#` is what git strips.
 [[tool.comply.comment-styles]]
 close = ""
-extensions = ["pkl"]
 filenames = [".gitmessage"]
 line = ""
 open = "#"
 
-[tasks.scorecard]
-alias = ["sco"]
-description = "Score supply-chain health with OpenSSF Scorecard"
-# Extra flags pass straight through, e.g. `mise run sco --checks=Binary-Artifacts`.
-run = '''
-#!/usr/bin/env bash
 
-set -eo pipefail
-
-# `scorecard --local` walks the filesystem directly and has NO exclude/ignore
-# flag, so pointing it at the repo root scans build/ and build/DerivedData
-# (gigabytes of build output) and scores Binary-Artifacts 0/10 on compiled
-# dependencies. Mirror only the tracked files into a scratch tree instead:
-# `git ls-files` IS the exclusion mechanism, since a path .gitignore excludes is
-# never tracked and so can never reach the scan. Local mode runs the
-# filesystem-based checks; the history/API ones are skipped either way, so the
-# tree needs no .git.
-#
-# Copy working-tree content (not `git checkout-index`, which reads the index)
-# so an edit you have not staged yet is what actually gets scored.
-root="$(git rev-parse --show-toplevel)"
-out="${SCORECARD_OUTPUT:-$root/scorecard.json}"
-
-tree="$(mktemp -d)"
-raw="$(mktemp)"
-trap 'rm -rf "$tree" "$raw"' EXIT
-
-while IFS= read -r -d '' f; do
-  [ -f "$root/$f" ] || [ -L "$root/$f" ] || continue
-  mkdir -p "$tree/$(dirname "$f")"
-  cp -Pp "$root/$f" "$tree/$f"
-done < <(git -C "$root" ls-files -z)
-
-eval "args=(${usage_args:-})"
-
-# A filtered run (--checks=...) produces a partial report whose aggregate score
-# is computed from only those checks — writing that over scorecard.json makes a
-# single 10/10 check look like a perfect overall score. Send filtered runs to a
-# separate file so the canonical report is always a complete scan.
-# Tested against usage_args rather than the array length: mise renders run
-# blocks as tera templates, and bash's ${#array[@]} opens a tera comment (`{#`),
-# which fails the task with "Closing comment tag `#}` not found".
-if [ -n "${usage_args:-}" ]; then
-  out="${out%.json}.partial.json"
-fi
-
-scorecard \
-  --local="$tree" \
-  --format json \
-  --show-details \
-  --show-annotations \
-  --output "$raw" \
-  "${args[@]}"
-
-# scorecard reports the directory it was pointed at, so --local leaves the
-# scratch mirror's mktemp path in .repo.name and cannot resolve .repo.commit at
-# all. Restore the real identity; mark it -dirty because the scan copies
-# working-tree content, which by definition may differ from HEAD.
-name="$(git -C "$root" remote get-url origin 2>/dev/null || basename "$root")"
-commit="$(git -C "$root" rev-parse HEAD 2>/dev/null || echo unknown)"
-if [ -n "$(git -C "$root" status --porcelain)" ]; then
-  commit="$commit-dirty"
-fi
-
-jq --arg name "$name" --arg commit "$commit" \
-  '.repo.name = $name | .repo.commit = $commit' "$raw" > "$out"
-
-echo "wrote $out ($(jq '.checks | length' "$out") checks, score $(jq '.score' "$out"))"
-cat "$out" | jq -Sr '.' > "$out.new"
-mv "$out.new" "$out"
-'''
-shell = "bash -c"
-usage = 'arg "[args]" var=#true help="extra scorecard flags, e.g. --checks=Binary-Artifacts"'
+[[tool.comply.comment-styles]]
+close = ""
+extensions = ["pkl"]
+filenames = ["hk.pkl"]
+line = ""
+open = "//"
