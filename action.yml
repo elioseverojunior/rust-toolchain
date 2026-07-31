@@ -81,12 +81,17 @@ inputs:
 
   cache-key-hash:
     description: >
-      A hash of the dependency set, required when `cache` is true. Pass
-      `${{ hashFiles('**/Cargo.lock') }}` — `hashFiles` is a workflow
-      expression function that a Node action cannot call, and using GitHub's
-      own value keeps these keys interoperable with caches you already have.
-      Without it the keys never change: they hit exactly on every run and
-      serve the same crates for the life of the repository.
+      A hash of the dependency set, required when `cache` is true. Pass the
+      workflow expression `hashFiles('**/Cargo.lock')` wrapped in the usual
+      interpolation braces — `hashFiles` is a workflow expression function
+      that a Node action cannot call, and using GitHub's own value keeps
+      these keys interoperable with caches you already have. Without it the
+      keys never change: they hit exactly on every run and serve the same
+      crates for the life of the repository. The README's caching section
+      shows the full step. Note this text deliberately avoids writing the
+      interpolation braces literally: an expression inside action metadata
+      is not an expression context, and `act` rejects the whole action with
+      "expressions are not allowed here" before any code runs.
     required: false
 
   cache-key-suffix:
