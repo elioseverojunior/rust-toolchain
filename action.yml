@@ -5,12 +5,16 @@
 name: "Rust Toolchain"
 description: >
   Install a Rust toolchain with rustup, driven by the rust-toolchain.toml you
-  already committed. Exports RUSTUP_TOOLCHAIN so the resolved channel wins in
-  every later step rather than losing to a pinned toml, publishes the merged
-  channel, targets, components and profile as typed outputs with provenance,
-  and derives layered cargo cache keys ready to hand to actions/cache. A
-  superset of dtolnay/rust-toolchain, whose cachekey output it matches byte
-  for byte.
+  already committed, and cache cargo for you. Exports RUSTUP_TOOLCHAIN so the
+  resolved channel wins in every later step rather than losing to a pinned
+  toml, and publishes the merged channel, targets, components and profile as
+  typed outputs with provenance. With cache enabled it restores the registry
+  and target layers before the toolchain is used and saves them again from a
+  post step, keyed separately so a compiler bump does not re-download the
+  crates it never touched — no actions/cache step and no Swatinem/rust-cache
+  needed, though the derived keys are published if you would rather wire your
+  own. A superset of dtolnay/rust-toolchain, whose cachekey output it matches
+  byte for byte.
 
 author: "elioseverojunior@gmail.com"
 
@@ -106,10 +110,18 @@ inputs:
       An optional discriminator added to every cache key, e.g. a job name.
       Omitting it collapses the slot rather than leaving an empty segment, so
       the key reads `registry-Linux-X64-<hash>` and not
-      `registry-Linux-X64--<hash>`. Set it when jobs differ in `RUSTFLAGS` or
-      other `CARGO_*` settings: those are not part of the derived key, so such
-      jobs otherwise share a `build` key, each rebuilding and then re-saving a
-      full `target/` over the other. May not contain a comma or whitespace.
+      `registry-Linux-X64--<hash>`. You do not need it to separate jobs that
+      differ in `RUSTFLAGS`, or in any other variable whose name begins with
+      `CARGO_`, `CC`, `CFLAGS`, `CXX`, `CMAKE` or `RUST` — every one of those
+      is hashed into the `build` key already, so such jobs no longer share one.
+      (Prefixes rather than wildcards on purpose: the README table is generated
+      from this text as HTML, where a pair of asterisks reads as emphasis and
+      swallows the underscores between them.)
+      Reach for it when the thing that
+      distinguishes two jobs is not an environment variable at all: two jobs
+      building the same crate with the same flags for different purposes, say,
+      or one you want kept out of another's restore ladder. May not contain a
+      comma or whitespace.
     required: false
 
   cache-layers:

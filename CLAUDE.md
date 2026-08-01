@@ -149,7 +149,7 @@ subsections.
   make the 100% gate unreachable. Every module that restores or saves takes
   the `CacheClient` port (`src/cache/client.ts`) instead, so tests inject a
   fake and the real adapter is exercised only by the actual runtime, plus
-  CI's `E2E` job.
+  CI's `E2E` and `E2E Warm Cache` jobs.
 - **A cache failure never fails the build.** Restore, save, size measurement
   and the job summary write are each caught at their own boundary and reduced
   to a `core.warning` — a flaky cache service is not a reason to fail a job

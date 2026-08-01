@@ -594,8 +594,11 @@ network code, into every test process, making the 100% coverage gate
 unreachable for anything downstream of it. Every module that needs to restore
 or save takes a `CacheClient` as a dependency instead, so tests inject a fake
 and the real adapter is exercised only by the actual GitHub Actions runtime —
-and by CI's `E2E` job, the one place restore and save meet the real cache
-service (see [README → Built to be trusted](../README.md#built-to-be-trusted)).
+and by CI's `E2E` and `E2E Warm Cache` jobs, the only place restore and save
+meet the real cache service. It takes two jobs rather than one: `post:` runs
+after every other step in its own job, so nothing a job saves is visible to
+that same job, and the warm restore has to happen in a dependent job (see
+[README → Built to be trusted](../README.md#built-to-be-trusted)).
 
 ### Toolchain Pinning
 
