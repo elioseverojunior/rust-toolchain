@@ -399,61 +399,184 @@ depends_post = []
 shell = "bash -c"
 run = "bunx --bun npm-check-updates -u --target latest && bun install"
 
-# === Config & Release ===
+# === Versioning ===
 #
-# No `release` or `version` task, deliberately. Both used to exist and both ran
-# `changeset` -- against no `.changeset/` directory and no changesets dependency,
-# so each failed on invocation while implying that changesets governed this
-# repository's versioning. Nothing has ever governed it locally.
+# Ported from the automation in the `comply` repository, minus the parts that
+# anchor on `Cargo.toml` (`version:sync`, `version:check`, `release:prepare`) --
+# this repository publishes a GitHub Action, has no manifest declaring the
+# released version, and `package.json`'s inert 0.0.1 is not a substitute.
 #
-# Versioning is CI-only and has exactly one source of truth:
-# `.github/workflows/version.yml`, which `cicd.yml` calls as its `version` job.
-# It runs GitVersion, applies the rule that a tag ref outranks the derivation,
-# and publishes the result as job outputs. Tags and GitHub Releases are created
-# by `cicd.yml`'s Release job from those outputs alone.
+# There is no `release` task, deliberately. Tags and GitHub Releases are created
+# only by `cicd.yml`'s Release job, from the outputs of
+# `.github/workflows/version.yml` -- the single source of truth. These tasks
+# print the SAME derivation locally so you can see what a push would produce;
+# they never write anything. A previous pair of `release`/`version` tasks ran
+# `changeset` against no `.changeset/` directory and no changesets dependency,
+# failing on invocation while implying changesets governed versioning.
 #
-# There is no local equivalent because GitVersion is not in `[tools]` above, and
-# adding a task that derives a version some other way would recreate the split
-# brain `version.yml` exists to prevent. To see what a run would resolve, use
-# the workflow's dry run: `gh workflow run CICD -f dry-run=true`.
+# GitVersion is not in `[tools]` above -- it is a dotnet tool, installed
+# separately -- so `version:json` degrades to `{}` rather than failing when it
+# is absent, and every task below reports that clearly instead of emitting
+# `vnull`.
+
+[tasks."git:tags:fetch"]
+alias = []
+description = "Force-refresh tags from origin so GitVersion sees the graph CI sees"
+depends = []
+depends_post = []
+hide = true
+shell = "bash -c"
+run = '''
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+git remote get-url origin >/dev/null 2>&1 || exit 0
+
+# `--force` is the whole point: without it git leaves an existing tag alone and
+# the refresh is a no-op precisely when it matters.
+git fetch --tags --force --quiet origin 2>/dev/null || {
+    echo "version: could not reach origin; tags may be stale and the computed version wrong" >&2
+    exit 0
+}
+'''
+
+[tasks."version:json"]
+alias = []
+# Every version answer in this file routes through here, so refreshing tags at
+# this one point makes all of them correct by construction rather than each
+# remembering to do it.
+depends = ["git:tags:fetch"]
+description = "Print the GitVersion JSON for the working tree, or an empty object"
+hide = true
+shell = "bash -c"
+run = '''
+#!/usr/bin/env bash
+set -eo pipefail
+# `/nocache` because GitVersion's cache invalidates on the COMMIT, not on the
+# tag graph. The Release job moves the floating tags onto the current commit, so
+# an entry computed before the tag keeps being served at exactly the moment the
+# answer changed. `.github/workflows/version.yml` passes `disableCache: true`
+# for the same reason.
+#
+# `AssemblySemVer`/`AssemblySemFileVer` are .NET four-part assembly versions
+# (`0.0.1.0`). Nothing here consumes them, and they read as a third and fourth
+# disagreeing version next to `SemVer` and `MajorMinorPatch`. Deleting them and
+# adding `MajorMinor` makes this object identical to the `json` output of
+# `.github/workflows/version.yml`, so the local and CI answers agree.
+gitversion /nocache /output json \
+  | jq -Sr 'del(.AssemblySemVer, .AssemblySemFileVer) + {MajorMinor: "\(.Major).\(.Minor)"}' \
+    2>/dev/null || echo '{}'
+'''
+
+[tasks.version]
+alias = ["semver"]
+description = "Print GitVersion's SemVer for the working tree, e.g. 0.2.1-2 -- what a push to main would release"
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "mise run version:json | jq -r '.SemVer'"
+
+[tasks."version:tag"]
+alias = []
+description = "Print the exact tag name derived from version:json, e.g. v0.2.1-2"
+depends = []
+depends_post = []
+hide = true
+shell = "bash -c"
+run = '''
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+VERSION="$(mise run version:json | jq -r '.SemVer // empty')"
+
+# Empty means version:json fell back to `{}` -- gitversion is missing or refused
+# the tree. Printing `vnull` from that is worse than stopping.
+if [ -z "${VERSION}" ]; then
+    echo "error: version:json supplied no SemVer; is gitversion installed?" >&2
+    exit 1
+fi
+
+echo "v${VERSION}"
+'''
+
+[tasks."version:tags:floating"]
+alias = []
+description = "Print the floating tag names for a version, e.g. v0.2.1 v0.2 v0 -- the set the Release job force-pushes"
+depends = []
+depends_post = []
+hide = true
+shell = "bash -c"
+usage = 'arg "[tag]" help="tag to derive from, e.g. v0.2.1-2; defaults to the version:tag derivation"'
+run = '''
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+TAG="${usage_tag:-$(mise run version:tag)}"
+
+# v0.2.1-2 -> 0.2.1: drop the leading v, then the pre-release/build suffix.
+BASE="${TAG#v}"
+BASE="${BASE%%[-+]*}"
+
+IFS='.' read -r MAJOR MINOR _ <<<"${BASE}"
+MINOR="${MINOR:-0}"
+
+# A version like `0.2` yields `v0.2` twice; emit each name once.
+printf 'v%s\nv%s.%s\nv%s\n' "${BASE}" "${MAJOR}" "${MINOR}" "${MAJOR}" | awk '!seen[$0]++'
+'''
 
 # === Documentation ===
 #
 # The site under `docs/` is a separate Bun project with its own `package.json`
-# and `bun.lock`, so these tasks `cd` into it. Defined here rather than called
-# as raw `bun` lines in the workflow, so local and CI build it the same way.
+# and `bun.lock`. `dir = "docs"` rather than `cd docs &&` so mise resolves the
+# working directory itself and the tasks compose. None of these belong in a
+# lint or test gate: a broken docs build must not fail the action's gate.
 
 [tasks."docs:install"]
-description = "Install the docs site's dependencies (docs/ has its own lockfile)"
-alias = []
+alias = ["docsi"]
+description = "Install the docs site dependencies (docs/ has its own lockfile)"
 depends = []
 depends_post = []
-shell = "bash -c"
-run = "cd docs && bun install --frozen-lockfile"
+dir = "docs"
+# `--frozen-lockfile`, where the upstream this was ported from uses a plain
+# `bun install`: cicd.yml asserts `git diff --exit-code -- docs/bun.lock` after
+# building, so an install that rewrites the lock fails the job. Add dependencies
+# with `bun add` from inside `docs/` instead.
+run = "bun install --frozen-lockfile"
 
 [tasks."docs:build"]
-description = "Build the VitePress site into docs/.vitepress/dist"
-alias = []
+alias = ["docsb"]
+description = "Build the VitePress site into docs/.vitepress/dist. Set DOCS_BASE=/ for a custom domain; the default /rust-toolchain/ matches GitHub project pages"
 depends = ["docs:install"]
 depends_post = []
-shell = "bash -c"
-run = "cd docs && bun run build"
+dir = "docs"
+run = "bun run build"
 
 [tasks."docs:dev"]
-description = "Serve the docs site with hot reload on port 5273"
-alias = []
+alias = ["docs", "docsd"]
+description = "Serve the docs site with hot reload on http://localhost:5273"
 depends = ["docs:install"]
 depends_post = []
-shell = "bash -c"
-run = "cd docs && bun run dev"
+dir = "docs"
+run = "bun run dev"
+
+[tasks."docs:typecheck"]
+alias = ["docstc"]
+description = "Type-check the site's .ts/.mts sources. Nothing else does: vitepress build transpiles without type-checking, so an error in config.mts only ever surfaced in an editor"
+depends = ["docs:install"]
+depends_post = []
+dir = "docs"
+run = "bun run typecheck"
 
 [tasks."docs:preview"]
-description = "Serve the built docs site on port 5273"
-alias = []
+alias = ["docsp"]
+description = "Serve the built docs site on http://localhost:5273, to check the production build before publishing"
 depends = ["docs:build"]
 depends_post = []
-shell = "bash -c"
-run = "cd docs && bun run preview"
+dir = "docs"
+run = "bun run preview"
 
 [tasks.readme]
 description = "Regenerate README.md from action.yml using action-docs"

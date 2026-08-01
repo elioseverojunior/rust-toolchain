@@ -26,7 +26,7 @@ on:
   workflow_call:
     outputs:
       json:
-        description: "The full GitVersion object, PascalCase keys, MajorMinor added and the two Assembly fields removed"
+        description: "The full GitVersion object, PascalCase keys, MajorMinor added and the two Assembly fields removed -- the same shape `mise run version:json` prints"
         value: ${{ jobs.semver.outputs.json }}
       version:
         description: "SemVer, e.g. 0.1.0-* -- the TAG when a tag ref triggered the run, otherwise GitVersion's derivation"
@@ -141,12 +141,13 @@ jobs:
           versionSpec: ${{ env.GITVERSION_SPEC }}
           preferLatestVersion: true
 
-      # `disableCache`: GitVersion's cache invalidates on the COMMIT, not on the
-      # tag graph, so a run that tags and then asks again is served the pre-tag
-      # answer. The checkout above is fresh, so there is no entry to hit today --
-      # this keeps that a property of the runner rather than something this
-      # step's correctness rests on. The step above still caches the TOOL, which
-      # is the slow part; only the ANSWER is recomputed.
+      # `disableCache` for the reason `mise run version:json` passes `/nocache`:
+      # GitVersion's cache invalidates on the COMMIT, not on the tag graph, so a
+      # run that tags and then asks again is served the pre-tag answer. The
+      # checkout above is fresh, so there is no entry to hit today -- this keeps
+      # that a property of the runner rather than something this step's
+      # correctness rests on. The step above still caches the TOOL, which is the
+      # slow part; only the ANSWER is recomputed.
       - name: Determine Version
         id: gitversion
         uses: gittools/actions/gitversion/execute@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
@@ -162,11 +163,16 @@ jobs:
       # `gitversion /output json` emits PascalCase; GitHub expressions compare
       # property names case-insensitively so nothing notices, but jq does not --
       # unconverted, `.Major` is null and MajorMinor comes out "null.null".
-      # Capitalised, the two key sets are identical, so this `json` output has
-      # the same shape as `gitversion /output json` run by hand -- which is the
-      # only way to reproduce it locally, since GitVersion is not in mise's
-      # `[tools]` and there is no task wrapping it. (`PreReleaseLabelWithDash` is
-      # the one field the action does not expose; nothing reads it.)
+      # Capitalised, the two key sets are identical, and the deletion and
+      # MajorMinor shape below mirror `mise run version:json`, so the local and
+      # CI answers are the same object here. (`PreReleaseLabelWithDash` is the
+      # one field the action does not expose; nothing reads it.)
+      #
+      # They diverge one step later, on purpose: `resolved` below republishes
+      # `json` with the tag-authority values patched in, and derives
+      # PreReleaseLabel from the SemVer STRING rather than passing GitVersion's
+      # field through. So `0.2.1-2` reports "2" here and "" from the local task,
+      # which is the distinction `cicd.yml`'s Classify Release step depends on.
       - name: Compose version JSON
         id: version
         env:

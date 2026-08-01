@@ -128,6 +128,12 @@ jobs:
         with:
           install: false
 
+      # `vitepress build` transpiles without type-checking, so an error in
+      # config.mts would otherwise reach the published site and only ever show
+      # up in an editor. Before the build, so a type error fails fast.
+      - name: Typecheck
+        run: mise run docs:typecheck
+
       # `mise run` rather than `bun run build`, so DOCS_BASE handling and the
       # install-then-build order stay declared once, in mise.toml.
       - name: Build
