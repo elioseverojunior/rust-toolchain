@@ -17827,6 +17827,34 @@ class ToolchainSpecBuilder {
   }
 }
 
+// src/cache/env.ts
+import { createHash } from "node:crypto";
+var BUILD_ENV_PREFIXES = [
+  "CARGO_",
+  "CC",
+  "CFLAGS",
+  "CXX",
+  "CMAKE",
+  "RUST"
+];
+var EXCLUDED = new Set([
+  "CARGO_HOME",
+  "RUSTUP_HOME",
+  "CARGO_TERM_COLOR",
+  "RUSTUP_TOOLCHAIN"
+]);
+function hashBuildEnv(env) {
+  const canonical = Object.entries(env).filter(([name, value]) => {
+    if (value === undefined)
+      return false;
+    if (EXCLUDED.has(name))
+      return false;
+    return BUILD_ENV_PREFIXES.some((prefix) => name.startsWith(prefix));
+  }).map(([name, value]) => `${name}=${value}`).sort().join(`
+`);
+  return createHash("sha256").update(canonical).digest("hex").slice(0, 8);
+}
+
 // src/cache/keys.ts
 function joinKeySegments(...segments) {
   return segments.map((segment) => segment?.trim() ?? "").filter(Boolean).join("-");
@@ -17843,7 +17871,7 @@ var DERIVERS = {
     };
   },
   build: (context, root) => {
-    const scoped = joinKeySegments(root, context.suffix, context.specCacheKey);
+    const scoped = joinKeySegments(root, context.suffix, context.specCacheKey, context.envHash);
     return {
       key: joinKeySegments(scoped, context.lockHash),
       restoreKeys: ladder(scoped)
@@ -17873,7 +17901,7 @@ function parseCacheLayers(value) {
 }
 
 // src/core.ts
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 
 // node_modules/smol-toml/dist/date.js
 /*!
@@ -18889,7 +18917,7 @@ function generateSpecCacheKey(rustcKey, spec) {
     spec.profile ?? ""
   ].join(`
 `);
-  const digest = createHash("sha256").update(canonical).digest("hex");
+  const digest = createHash2("sha256").update(canonical).digest("hex");
   return `${rustcKey}-${digest.slice(0, 8)}`;
 }
 function parseRustcVersion(output) {
@@ -18966,7 +18994,8 @@ function readCacheRequest(source) {
     os: requireRunnerEnv(source, "RUNNER_OS"),
     arch: requireRunnerEnv(source, "RUNNER_ARCH"),
     suffix,
-    lockHash
+    lockHash,
+    envHash: hashBuildEnv(source.env)
   };
   for (const layer of layers) {
     const { key } = buildLayerKey(layer, {

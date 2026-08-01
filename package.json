@@ -52,6 +52,7 @@
     "unrs-resolver"
   ],
   "dependencies": {
+    "@actions/cache": "6.2.0",
     "@actions/core": "3.0.1",
     "@actions/github": "9.1.1",
     "smol-toml": "1.7.1"
