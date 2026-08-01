@@ -210,6 +210,46 @@ regenerates as `- uses: @`.
 `mise run readme` emits unpadded tables, so always follow it with
 `bun run fix:all` (Prettier realigns them) or the diff stays dirty.
 
+## `docs/` is a VitePress site with its own toolchain
+
+`docs/` holds both the repository's prose (`ARCHITECTURE.md`, `COMPARISON.md`,
+`RUNBOOKS.md`, `design/`, `plans/`) and a VitePress site that publishes it. It
+has its **own** `package.json`, `bun.lock`, `tsconfig.json`, ESLint and Prettier
+configs — `bun run <script>` from the repo root does not reach them. Build and
+lint it from inside `docs/`:
+
+```sh
+cd docs && bun run build          # vitepress build — dead links FAIL it
+cd docs && bun run fix:all        # its own eslint + prettier
+```
+
+The repo-root `hk check --all` still covers `docs/**/*.md` through `rumdl` and
+`mermaid`, so both layers apply to the Markdown.
+
+- **`base` must keep its trailing slash.** VitePress asserts it, and
+  `.vitepress/config.mts` interpolates it directly into every `head` entry —
+  `"/rust-toolchain"` makes the favicon resolve to the single path segment
+  `/rust-toolchainfavicon.svg`. `DOCS_BASE=/ bun run build` targets root-domain
+  hosting.
+- **Dev and preview are pinned to port 5273 with `strictPort`**, overridable
+  via `DOCS_PORT`. Pinned because Vite's 5173 default is claimed by every other
+  checkout; strict because the silent fallback to 5174 prints a URL nobody
+  reads.
+- **`ignoreDeadLinks: false` only validates links in Markdown content, never in
+  `themeConfig.nav`/`sidebar`.** A nav entry written ahead of its page builds
+  clean and 404s in the browser, so that block is hand-maintained. Do not flip
+  the setting to `true` to silence a failure — it hides the class of breakage
+  that is caught while leaving the invisible class untouched.
+- **A page reaching a file outside `docs/` needs an absolute repository URL.**
+  `../README.md` resolves outside the srcDir and is exactly what the dead-link
+  check exists to catch.
+- **A referenced `public/` asset is never checked.** The `head` block pointed at
+  `favicon.svg`/`favicon.ico` through an empty `public/` for as long as the
+  scaffold existed, 404ing on every page, and the build stayed green throughout.
+
+`docs/.vitepress/cache/` and `dist/` are git-ignored; the dep cache alone is
+~2.8 MB and trips `hk`'s `check-added-large-files`.
+
 ## TOML parsing
 
 Use `smol-toml` (`import { parse } from "smol-toml"`), never `@iarna/toml`.
