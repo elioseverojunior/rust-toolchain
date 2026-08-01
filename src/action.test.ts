@@ -4,7 +4,13 @@
 
 import { describe, expect, it } from "bun:test";
 
-import { run, type ActionDeps, type ExecResult } from "@/action";
+import {
+  run,
+  runPost,
+  type ActionDeps,
+  type ExecResult,
+  type PostDeps,
+} from "@/action";
 import { generateSpecCacheKey } from "@/core";
 import type { ActionOutputs } from "@/outputs";
 
@@ -29,6 +35,17 @@ const NOT_INSTALLED: ExecResult = {
   error: new Error("spawn ENOENT"),
 };
 
+interface RestoreCall {
+  paths: string[];
+  key: string;
+  restoreKeys: string[];
+}
+
+interface SaveCall {
+  paths: string[];
+  key: string;
+}
+
 interface Harness {
   deps: ActionDeps;
   calls: ExecCall[];
@@ -38,6 +55,11 @@ interface Harness {
   sleeps: number[];
   paths: string[];
   logs: string[];
+  state: Record<string, string>;
+  warnings: string[];
+  summaries: string[];
+  restores: RestoreCall[];
+  saves: SaveCall[];
 }
 
 /**
@@ -55,6 +77,7 @@ function harness(
     release?: string;
     platform?: string;
     env?: Record<string, string | undefined>;
+    restoreResult?: (key: string) => string | undefined;
   } = {},
 ): Harness {
   const calls: ExecCall[] = [];
@@ -64,6 +87,11 @@ function harness(
   const sleeps: number[] = [];
   const paths: string[] = [];
   const logs: string[] = [];
+  const state: Record<string, string> = {};
+  const warnings: string[] = [];
+  const summaries: string[] = [];
+  const restores: RestoreCall[] = [];
+  const saves: SaveCall[] = [];
   const queues = options.execResults ?? {};
 
   const deps: ActionDeps = {
@@ -98,6 +126,20 @@ function harness(
       info: (message) => {
         logs.push(message);
       },
+      saveState: (name, value) => {
+        state[name] = value;
+      },
+      getState: (name) => state[name] ?? "",
+      warning: (message) => {
+        warnings.push(message);
+      },
+      summary: {
+        addRaw: (text: string) => ({
+          write: async (): Promise<void> => {
+            summaries.push(text);
+          },
+        }),
+      },
     },
     env: options.env ?? {
       HOME: "/home/runner",
@@ -108,9 +150,32 @@ function harness(
     sleep: (ms) => {
       sleeps.push(ms);
     },
+    cache: {
+      restore: async (restorePaths, key, restoreKeys) => {
+        restores.push({ paths: restorePaths, key, restoreKeys });
+        return options.restoreResult?.(key);
+      },
+      save: async (savePaths, key) => {
+        saves.push({ paths: savePaths, key });
+      },
+    },
   };
 
-  return { deps, calls, outputs, exported, failures, sleeps, paths, logs };
+  return {
+    deps,
+    calls,
+    outputs,
+    exported,
+    failures,
+    sleeps,
+    paths,
+    logs,
+    state,
+    warnings,
+    summaries,
+    restores,
+    saves,
+  };
 }
 
 /**
@@ -127,9 +192,9 @@ function jsonOutput(h: Harness): ActionOutputs {
 }
 
 describe("run", () => {
-  it("installs the resolved toolchain without a shell", () => {
+  it("installs the resolved toolchain without a shell", async () => {
     const h = harness({ inputs: { toolchain: "nightly" } });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures).toEqual([]);
     expect(h.calls.find((c) => c.args[0] === "toolchain")).toMatchObject({
       file: "rustup",
@@ -144,9 +209,9 @@ describe("run", () => {
     });
   });
 
-  it("bounds every rustup invocation with a timeout", () => {
+  it("bounds every rustup invocation with a timeout", async () => {
     const h = harness();
-    run(h.deps);
+    await run(h.deps);
     const rustupCalls = h.calls.filter((c) => c.file === "rustup");
     expect(rustupCalls.length).toBeGreaterThan(0);
     for (const call of rustupCalls) {
@@ -154,14 +219,14 @@ describe("run", () => {
     }
   });
 
-  it("adds all targets in one invocation and all components in another", () => {
+  it("adds all targets in one invocation and all components in another", async () => {
     const h = harness({
       inputs: {
         targets: "wasm32-unknown-unknown,aarch64-apple-darwin",
         components: "clippy,rustfmt",
       },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.calls.map((c) => c.args)).toContainEqual([
       "target",
       "add",
@@ -180,27 +245,27 @@ describe("run", () => {
     ]);
   });
 
-  it("skips the target add when none were requested", () => {
+  it("skips the target add when none were requested", async () => {
     const h = harness();
-    run(h.deps);
+    await run(h.deps);
     expect(h.calls.map((c) => c.args[0])).not.toContain("target");
   });
 
   // The only component add on a bare run is the one the default profile
   // implies; nothing is added on the caller's behalf beyond that.
-  it("issues no component add of its own when none were requested", () => {
+  it("issues no component add of its own when none were requested", async () => {
     const h = harness({ inputs: { profile: "minimal" } });
-    run(h.deps);
+    await run(h.deps);
     expect(h.calls.map((c) => c.args[0])).not.toContain("component");
   });
 
-  it("sets the installed toolchain as the rustup default", () => {
+  it("sets the installed toolchain as the rustup default", async () => {
     const h = harness({ inputs: { toolchain: "nightly" } });
-    run(h.deps);
+    await run(h.deps);
     expect(h.calls.map((c) => c.args)).toContainEqual(["default", "nightly"]);
   });
 
-  it("retries a failed install with growing backoff", () => {
+  it("retries a failed install with growing backoff", async () => {
     const h = harness({
       execResults: {
         "toolchain install": [
@@ -210,25 +275,25 @@ describe("run", () => {
         ],
       },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures).toEqual([]);
     const installs = h.calls.filter((c) => c.args[0] === "toolchain");
     expect(installs).toHaveLength(3);
     expect(h.sleeps).toEqual([1000, 2000]);
   });
 
-  it("reports failure after the last install attempt fails", () => {
+  it("reports failure after the last install attempt fails", async () => {
     const h = harness({
       execResults: {
         "toolchain install": [{ status: 1 }, { status: 1 }, { status: 1 }],
       },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures).toHaveLength(1);
     expect(h.failures[0]).toMatch(/rustup toolchain install/);
   });
 
-  it("reports the spawn error when rustup is not installed", () => {
+  it("reports the spawn error when rustup is not installed", async () => {
     const h = harness({
       execResults: {
         "toolchain install": [
@@ -238,26 +303,26 @@ describe("run", () => {
         ],
       },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toMatch(/ENOENT/);
   });
 
-  it("exports RUSTUP_TOOLCHAIN so later steps use the installed toolchain", () => {
+  it("exports RUSTUP_TOOLCHAIN so later steps use the installed toolchain", async () => {
     const h = harness({ inputs: { toolchain: "nightly" } });
-    run(h.deps);
+    await run(h.deps);
     expect(h.exported.RUSTUP_TOOLCHAIN).toBe("nightly");
   });
 
-  it("sets the cachekey and name outputs", () => {
+  it("sets the cachekey and name outputs", async () => {
     const h = harness();
-    run(h.deps);
+    await run(h.deps);
     expect(h.outputs.name).toBe("stable");
     expect(h.outputs.cachekey).toBe("20250627e5b2");
   });
 
   // An empty cachekey silently collapses every consumer's cache to one entry,
   // so an unreadable rustc has to fail the step instead.
-  it("fails loudly when rustc cannot be executed", () => {
+  it("fails loudly when rustc cannot be executed", async () => {
     const h = harness({
       execResults: {
         "--version --verbose": [
@@ -265,24 +330,24 @@ describe("run", () => {
         ],
       },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.outputs.cachekey).toBeUndefined();
     expect(h.failures[0]).toMatch(/rustc/);
   });
 
-  it("fails when rustc exits non-zero", () => {
+  it("fails when rustc exits non-zero", async () => {
     const h = harness({
       execResults: { "--version --verbose": [{ status: 3, stdout: "" }] },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toMatch(/rustc/);
   });
 
-  it("reads channel and targets from rust-toolchain.toml", () => {
+  it("reads channel and targets from rust-toolchain.toml", async () => {
     const h = harness({
       toml: `[toolchain]\nchannel = "1.89.0"\ntargets = ["wasm32-unknown-unknown"]`,
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.calls.find((c) => c.args[0] === "toolchain")!.args).toEqual([
       "toolchain",
       "install",
@@ -296,40 +361,40 @@ describe("run", () => {
     expect(h.outputs.name).toBe("1.89.0");
   });
 
-  it("lets action inputs override the toml", () => {
+  it("lets action inputs override the toml", async () => {
     const h = harness({
       toml: `[toolchain]\nchannel = "1.89.0"`,
       inputs: { toolchain: "nightly" },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.outputs.name).toBe("nightly");
   });
 
-  it("falls back to defaults when there is no rust-toolchain.toml", () => {
+  it("falls back to defaults when there is no rust-toolchain.toml", async () => {
     const h = harness({ toml: null });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures).toEqual([]);
     expect(h.outputs.name).toBe("stable");
   });
 
-  it("reports a malformed rust-toolchain.toml instead of installing stable", () => {
+  it("reports a malformed rust-toolchain.toml instead of installing stable", async () => {
     const h = harness({ toml: "not = toml [[" });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toMatch(/not valid TOML/);
     expect(h.calls).toEqual([]);
   });
 
-  it("reports a channel that is not a rustup toolchain name", () => {
+  it("reports a channel that is not a rustup toolchain name", async () => {
     const h = harness({ inputs: { toolchain: "stable; id > /tmp/pwned" } });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toMatch(/not a valid rustup toolchain/);
     expect(h.calls).toEqual([]);
   });
 
-  it("passes a resolved RUSTUP_HOME to rustup", () => {
+  it("passes a resolved RUSTUP_HOME to rustup", async () => {
     const h = harness();
     h.deps.env.RUSTUP_HOME = "/mnt/rustup";
-    run(h.deps);
+    await run(h.deps);
     expect(h.deps.env.RUSTUP_HOME).toBe("/mnt/rustup");
     expect(h.failures).toEqual([]);
   });
@@ -338,16 +403,16 @@ describe("run", () => {
 // A runner image without rustup — self-hosted, or a container that never had
 // it — must still work, exactly as dtolnay/rust-toolchain does.
 describe("rustup bootstrap", () => {
-  it("does nothing when rustup already answers", () => {
+  it("does nothing when rustup already answers", async () => {
     const h = harness();
-    run(h.deps);
+    await run(h.deps);
     expect(h.calls.map((c) => c.file)).not.toContain("sh");
     expect(h.paths).toEqual([]);
   });
 
-  it("downloads and runs rustup-init on POSIX runners", () => {
+  it("downloads and runs rustup-init on POSIX runners", async () => {
     const h = harness({ execResults: { "--version": [NOT_INSTALLED] } });
-    run(h.deps);
+    await run(h.deps);
     const curl = h.calls.find((c) => c.file === "curl");
     expect(curl?.args).toContain("https://sh.rustup.rs");
     const sh = h.calls.find((c) => c.file === "sh");
@@ -359,13 +424,13 @@ describe("rustup bootstrap", () => {
     ]);
   });
 
-  it("puts the new cargo bin directory on PATH", () => {
+  it("puts the new cargo bin directory on PATH", async () => {
     const h = harness({ execResults: { "--version": [NOT_INSTALLED] } });
-    run(h.deps);
+    await run(h.deps);
     expect(h.paths).toEqual(["/home/runner/.cargo/bin"]);
   });
 
-  it("uses the Windows installer on Windows runners", () => {
+  it("uses the Windows installer on Windows runners", async () => {
     const h = harness({
       platform: "win32",
       execResults: { "--version": [NOT_INSTALLED] },
@@ -375,7 +440,7 @@ describe("rustup bootstrap", () => {
         GITHUB_WORKSPACE: "C:\\workspace",
       },
     });
-    run(h.deps);
+    await run(h.deps);
     const curl = h.calls.find((c) => c.file === "curl");
     expect(curl?.args.join(" ")).toContain("win.rustup.rs");
     const init = h.calls.find((c) => c.file.endsWith("rustup-init.exe"));
@@ -388,26 +453,26 @@ describe("rustup bootstrap", () => {
     expect(h.paths).toEqual(["C:\\Users\\runneradmin\\.cargo\\bin"]);
   });
 
-  it("reports a bootstrap whose download fails", () => {
+  it("reports a bootstrap whose download fails", async () => {
     const h = harness({
       execResults: {
         "--version": [NOT_INSTALLED],
         "--proto =https": [{ status: 7 }],
       },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toMatch(/curl/);
     expect(h.paths).toEqual([]);
   });
 
-  it("reports a rustup-init that fails to run", () => {
+  it("reports a rustup-init that fails to run", async () => {
     const h = harness({
       execResults: {
         "--version": [NOT_INSTALLED],
         "/tmp/runner/rustup-init.sh --default-toolchain": [{ status: 1 }],
       },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toMatch(/rustup-init/);
     expect(h.paths).toEqual([]);
   });
@@ -415,31 +480,31 @@ describe("rustup bootstrap", () => {
 
 // dtolnay sets these so a workflow behaves sanely without boilerplate.
 describe("cargo environment defaults", () => {
-  it("disables incremental compilation, which never pays off in CI", () => {
+  it("disables incremental compilation, which never pays off in CI", async () => {
     const h = harness();
-    run(h.deps);
+    await run(h.deps);
     expect(h.exported.CARGO_INCREMENTAL).toBe("0");
   });
 
-  it("leaves an explicit CARGO_INCREMENTAL alone", () => {
+  it("leaves an explicit CARGO_INCREMENTAL alone", async () => {
     const h = harness({
       env: { HOME: "/home/runner", CARGO_INCREMENTAL: "1" },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.exported.CARGO_INCREMENTAL).toBeUndefined();
   });
 
-  it("turns on coloured cargo output", () => {
+  it("turns on coloured cargo output", async () => {
     const h = harness();
-    run(h.deps);
+    await run(h.deps);
     expect(h.exported.CARGO_TERM_COLOR).toBe("always");
   });
 
-  it("leaves an explicit CARGO_TERM_COLOR alone", () => {
+  it("leaves an explicit CARGO_TERM_COLOR alone", async () => {
     const h = harness({
       env: { HOME: "/home/runner", CARGO_TERM_COLOR: "never" },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.exported.CARGO_TERM_COLOR).toBeUndefined();
   });
 
@@ -450,19 +515,19 @@ describe("cargo environment defaults", () => {
     ["1.67.1", "git"],
     ["1.68.0", "sparse"],
     ["1.69.0", "sparse"],
-  ])("selects the %s registry protocol on %s", (release, expected) => {
+  ])("selects the %s registry protocol on %s", async (release, expected) => {
     const h = harness({ release });
-    run(h.deps);
+    await run(h.deps);
     expect(h.exported.CARGO_REGISTRIES_CRATES_IO_PROTOCOL).toBe(expected);
   });
 
-  it("leaves the registry protocol alone from 1.70 on", () => {
+  it("leaves the registry protocol alone from 1.70 on", async () => {
     const h = harness({ release: "1.70.0" });
-    run(h.deps);
+    await run(h.deps);
     expect(h.exported.CARGO_REGISTRIES_CRATES_IO_PROTOCOL).toBeUndefined();
   });
 
-  it("leaves an explicit registry protocol alone", () => {
+  it("leaves an explicit registry protocol alone", async () => {
     const h = harness({
       release: "1.68.0",
       env: {
@@ -470,7 +535,7 @@ describe("cargo environment defaults", () => {
         CARGO_REGISTRIES_CRATES_IO_PROTOCOL: "git",
       },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.exported.CARGO_REGISTRIES_CRATES_IO_PROTOCOL).toBeUndefined();
   });
 
@@ -478,16 +543,16 @@ describe("cargo environment defaults", () => {
   // network errors with HTTP multiplexing on.
   it.each([["1.70.0"], ["1.71.1"]])(
     "disables http multiplexing on %s",
-    (release) => {
+    async (release) => {
       const h = harness({ release });
-      run(h.deps);
+      await run(h.deps);
       expect(h.exported.CARGO_HTTP_MULTIPLEXING).toBe("false");
     },
   );
 
-  it("leaves http multiplexing alone on 1.72", () => {
+  it("leaves http multiplexing alone on 1.72", async () => {
     const h = harness({ release: "1.72.0" });
-    run(h.deps);
+    await run(h.deps);
     expect(h.exported.CARGO_HTTP_MULTIPLEXING).toBeUndefined();
   });
 });
@@ -495,31 +560,31 @@ describe("cargo environment defaults", () => {
 describe("rustup compatibility details", () => {
   // rustup renames directories across layers when replacing a component;
   // this permits a copy instead, which overlayfs can do.
-  it("permits copy-rename during the install", () => {
+  it("permits copy-rename during the install", async () => {
     const h = harness();
-    run(h.deps);
+    await run(h.deps);
     const install = h.calls.find((c) => c.args[0] === "toolchain");
     expect(install?.env?.RUSTUP_PERMIT_COPY_RENAME).toBe("1");
   });
 
   // dtolnay/rust-toolchain#127: `rustup default` fails on some toolchains
   // that are nonetheless installed and usable.
-  it("carries on when rustup default fails every attempt", () => {
+  it("carries on when rustup default fails every attempt", async () => {
     const h = harness({
       // Every retry must fail, or the tolerance path is never reached.
       execResults: {
         "default stable": [{ status: 1 }, { status: 1 }, { status: 1 }],
       },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures).toEqual([]);
     expect(h.logs.join("\n")).toMatch(/rustup default did not succeed/);
     expect(h.outputs.name).toBe("stable");
   });
 
-  it("logs the installed rustc version", () => {
+  it("logs the installed rustc version", async () => {
     const h = harness();
-    run(h.deps);
+    await run(h.deps);
     expect(h.logs.join("\n")).toContain("rustc 1.89.0");
   });
 });
@@ -528,45 +593,45 @@ describe("rustup compatibility details", () => {
 // rust-toolchain.toml in the tree, including nested ones this action never
 // read. A monorepo pinning a different toolchain per crate needs to opt out.
 describe("set-rustup-toolchain", () => {
-  it("pins the toolchain for later steps by default", () => {
+  it("pins the toolchain for later steps by default", async () => {
     const h = harness({ inputs: { toolchain: "nightly" } });
-    run(h.deps);
+    await run(h.deps);
     expect(h.exported.RUSTUP_TOOLCHAIN).toBe("nightly");
   });
 
-  it("accepts an explicit true", () => {
+  it("accepts an explicit true", async () => {
     const h = harness({
       inputs: { toolchain: "nightly", "set-rustup-toolchain": "true" },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.exported.RUSTUP_TOOLCHAIN).toBe("nightly");
   });
 
-  it("leaves later steps to their own toolchain files when false", () => {
+  it("leaves later steps to their own toolchain files when false", async () => {
     const h = harness({
       inputs: { toolchain: "nightly", "set-rustup-toolchain": "false" },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures).toEqual([]);
     expect(h.exported.RUSTUP_TOOLCHAIN).toBeUndefined();
   });
 
   // Opting out changes what later steps resolve, not what this action reports:
   // the outputs must still describe the toolchain it actually installed.
-  it("still reports the installed toolchain when opted out", () => {
+  it("still reports the installed toolchain when opted out", async () => {
     const h = harness({
       inputs: { toolchain: "nightly", "set-rustup-toolchain": "false" },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.outputs.name).toBe("nightly");
     expect(h.outputs.cachekey).toBe("20250627e5b2");
     const rustc = h.calls.find((c) => c.file === "rustc");
     expect(rustc?.env?.RUSTUP_TOOLCHAIN).toBe("nightly");
   });
 
-  it("rejects a value that is not a boolean", () => {
+  it("rejects a value that is not a boolean", async () => {
     const h = harness({ inputs: { "set-rustup-toolchain": "yes please" } });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toMatch(/set-rustup-toolchain/);
   });
 });
@@ -575,9 +640,9 @@ describe("set-rustup-toolchain", () => {
 // the components it implies by name. They are best-effort: unlike a component
 // the caller listed, a missing one must not fail the job.
 describe("profile components are applied explicitly", () => {
-  it("adds the default profile's components after installing", () => {
+  it("adds the default profile's components after installing", async () => {
     const h = harness();
-    run(h.deps);
+    await run(h.deps);
     expect(h.calls.map((c) => c.args)).toContainEqual([
       "component",
       "add",
@@ -589,16 +654,16 @@ describe("profile components are applied explicitly", () => {
     ]);
   });
 
-  it("adds nothing extra for the minimal profile", () => {
+  it("adds nothing extra for the minimal profile", async () => {
     const h = harness({ inputs: { profile: "minimal" } });
-    run(h.deps);
+    await run(h.deps);
     const componentAdds = h.calls.filter((c) => c.args[0] === "component");
     expect(componentAdds).toEqual([]);
   });
 
-  it("keeps requested components in their own invocation", () => {
+  it("keeps requested components in their own invocation", async () => {
     const h = harness({ inputs: { components: "llvm-tools" } });
-    run(h.deps);
+    await run(h.deps);
     const componentAdds = h.calls
       .filter((c) => c.args[0] === "component")
       .map((c) => c.args.slice(4));
@@ -607,9 +672,9 @@ describe("profile components are applied explicitly", () => {
     expect(componentAdds).toContainEqual(["rust-docs", "rustfmt", "clippy"]);
   });
 
-  it("does not repeat a component the caller already listed", () => {
+  it("does not repeat a component the caller already listed", async () => {
     const h = harness({ inputs: { components: "clippy" } });
-    run(h.deps);
+    await run(h.deps);
     const profileAdd = h.calls
       .filter((c) => c.args[0] === "component")
       .map((c) => c.args.slice(4))
@@ -619,75 +684,75 @@ describe("profile components are applied explicitly", () => {
 
   // A release channel that lacks one of the profile's components should log and
   // carry on — the user never named it.
-  it("tolerates a profile component that cannot be installed", () => {
+  it("tolerates a profile component that cannot be installed", async () => {
     const h = harness({
       execResults: {
         "component add": [{ status: 1 }, { status: 1 }, { status: 1 }],
       },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures).toEqual([]);
     expect(h.logs.join("\n")).toMatch(/profile/i);
     expect(h.outputs.name).toBe("stable");
   });
 
   // ...but a component the caller listed by name is a hard requirement.
-  it("still fails when a requested component cannot be installed", () => {
+  it("still fails when a requested component cannot be installed", async () => {
     const h = harness({
       inputs: { components: "llvm-tools" },
       execResults: {
         "component add": [{ status: 1 }, { status: 1 }, { status: 1 }],
       },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures).toHaveLength(1);
     expect(h.failures[0]).toMatch(/component add/);
   });
 });
 
 describe("complete profile is rejected off nightly", () => {
-  it("fails before running anything when paired with a release channel", () => {
+  it("fails before running anything when paired with a release channel", async () => {
     const h = harness({
       inputs: { toolchain: "stable", profile: "complete" },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toMatch(/nightly/);
     expect(h.calls).toEqual([]);
   });
 
-  it("allows complete on nightly", () => {
+  it("allows complete on nightly", async () => {
     const h = harness({
       inputs: { toolchain: "nightly", profile: "complete" },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures).toEqual([]);
     expect(h.outputs.name).toBe("nightly");
   });
 
   // The expressive forms resolve to a numbered release, so they are rejected
   // on the resolved channel rather than the literal input.
-  it("rejects complete for a channel that resolves to a release", () => {
+  it("rejects complete for a channel that resolves to a release", async () => {
     const h = harness({
       inputs: { toolchain: "stable minus 2 releases", profile: "complete" },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toMatch(/nightly/);
   });
 });
 
 describe("spec-aware cache key output", () => {
-  it("publishes both the compatible key and the spec-bound key", () => {
+  it("publishes both the compatible key and the spec-bound key", async () => {
     const h = harness({ inputs: { targets: "wasm32-unknown-unknown" } });
-    run(h.deps);
+    await run(h.deps);
     expect(h.outputs.cachekey).toBe("20250627e5b2");
     expect(h.outputs["cachekey-full"]).toStartWith("20250627e5b2-");
   });
 
-  it("gives two different target sets two different spec keys", () => {
+  it("gives two different target sets two different spec keys", async () => {
     const a = harness({ inputs: { targets: "wasm32-unknown-unknown" } });
     const b = harness({ inputs: { targets: "aarch64-apple-darwin" } });
-    run(a.deps);
-    run(b.deps);
+    await run(a.deps);
+    await run(b.deps);
     expect(a.outputs.cachekey).toBe(b.outputs.cachekey);
     expect(a.outputs["cachekey-full"]).not.toBe(b.outputs["cachekey-full"]);
   });
@@ -701,12 +766,12 @@ components = ["rustfmt"]
 profile = "minimal"
 `;
 
-  it("publishes every resolved value as a flat output", () => {
+  it("publishes every resolved value as a flat output", async () => {
     const h = harness({
       toml,
       inputs: { target: "wasm32-unknown-unknown", components: "clippy" },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.outputs.toolchain).toBe("1.89.0");
     expect(h.outputs.targets).toBe(
       '["wasm32-unknown-unknown","aarch64-apple-darwin"]',
@@ -717,9 +782,9 @@ profile = "minimal"
     expect(h.outputs["set-rustup-toolchain"]).toBe("true");
   });
 
-  it("publishes the whole output set as json", () => {
+  it("publishes the whole output set as json", async () => {
     const h = harness({ toml, inputs: { target: "wasm32-unknown-unknown" } });
-    run(h.deps);
+    await run(h.deps);
     expect(jsonOutput(h)).toEqual({
       toolchain: "1.89.0",
       targets: ["wasm32-unknown-unknown", "aarch64-apple-darwin"],
@@ -759,12 +824,12 @@ profile = "minimal"
 
   // Without provenance a consumer cannot tell an input-supplied value from a
   // toml-supplied one, which is the whole reason the json output exists.
-  it("separates input provenance from toml provenance", () => {
+  it("separates input provenance from toml provenance", async () => {
     const h = harness({
       toml,
       inputs: { toolchain: "nightly", "set-rustup-toolchain": "false" },
     });
-    run(h.deps);
+    await run(h.deps);
     const json = jsonOutput(h);
     expect(json.toolchain).toBe("nightly");
     expect(json.inputs.toolchain).toBe("nightly");
@@ -773,9 +838,9 @@ profile = "minimal"
     expect(json["set-rustup-toolchain"]).toBe(false);
   });
 
-  it("reports empty lists and an empty target with no toml and no inputs", () => {
+  it("reports empty lists and an empty target with no toml and no inputs", async () => {
     const h = harness();
-    run(h.deps);
+    await run(h.deps);
     expect(h.outputs.targets).toBe("[]");
     expect(h.outputs.target).toBe("");
     expect(h.outputs.components).toBe("[]");
@@ -790,22 +855,22 @@ profile = "minimal"
   });
 
   // The resolved channel, not the phrase the caller wrote.
-  it("reports the resolved channel for an expressive toolchain input", () => {
+  it("reports the resolved channel for an expressive toolchain input", async () => {
     const h = harness({ inputs: { toolchain: "stable minus 2 releases" } });
-    run(h.deps);
+    await run(h.deps);
     const json = jsonOutput(h);
     expect(json.inputs.toolchain).toBe("stable minus 2 releases");
     expect(json.toolchain).toMatch(/^1\.\d+$/);
     expect(h.outputs.name).toBe(json.toolchain);
   });
 
-  it("publishes no configuration outputs when the install fails", () => {
+  it("publishes no configuration outputs when the install fails", async () => {
     const h = harness({
       execResults: {
         "toolchain install": [{ status: 1 }, { status: 1 }, { status: 1 }],
       },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.outputs.json).toBeUndefined();
     expect(h.outputs.toolchain).toBeUndefined();
     expect(h.failures).toHaveLength(1);
@@ -821,16 +886,16 @@ const cacheEnv = {
 };
 
 describe("cache key outputs", () => {
-  it("emits nothing but a disabled marker when cache is unset", () => {
+  it("emits nothing but a disabled marker when cache is unset", async () => {
     const h = harness({ inputs: { toolchain: "stable" }, env: cacheEnv });
-    run(h.deps);
+    await run(h.deps);
     expect(JSON.parse(h.outputs["cache"] ?? "null")).toEqual({
       enabled: false,
       layers: {},
     });
   });
 
-  it("derives every default layer when cache is enabled", () => {
+  it("derives every default layer when cache is enabled", async () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
@@ -840,7 +905,7 @@ describe("cache key outputs", () => {
       },
       env: cacheEnv,
     });
-    run(h.deps);
+    await run(h.deps);
     const cache = JSON.parse(h.outputs["cache"] ?? "null");
     expect(h.failures).toEqual([]);
     expect(cache.enabled).toBe(true);
@@ -850,7 +915,7 @@ describe("cache key outputs", () => {
 
   // The build key must carry the same spec digest the cachekey-full output
   // reports, or the two describe different toolchains.
-  it("keys the build layer on the published cachekey-full value", () => {
+  it("keys the build layer on the published cachekey-full value", async () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
@@ -859,12 +924,12 @@ describe("cache key outputs", () => {
       },
       env: cacheEnv,
     });
-    run(h.deps);
+    await run(h.deps);
     const cache = JSON.parse(h.outputs["cache"] ?? "null");
     expect(cache.layers.build.key).toContain(h.outputs["cachekey-full"]);
   });
 
-  it("honours an explicit layer selection", () => {
+  it("honours an explicit layer selection", async () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
@@ -874,7 +939,7 @@ describe("cache key outputs", () => {
       },
       env: cacheEnv,
     });
-    run(h.deps);
+    await run(h.deps);
     const cache = JSON.parse(h.outputs["cache"] ?? "null");
     expect(Object.keys(cache.layers)).toEqual(["registry"]);
   });
@@ -882,17 +947,17 @@ describe("cache key outputs", () => {
   // A missing lock hash makes both keys constant: they hit exactly on every
   // run, never re-save, and serve the same crates forever. Failing loudly
   // beats a cache that is silently wrong for the life of the repository.
-  it("fails when cache is enabled without a lock hash", () => {
+  it("fails when cache is enabled without a lock hash", async () => {
     const h = harness({
       inputs: { toolchain: "stable", cache: "true" },
       env: cacheEnv,
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toContain("`cache-key-hash` is required");
     expect(h.failures[0]).toContain("hashFiles");
   });
 
-  it("reports an unknown layer through setFailed", () => {
+  it("reports an unknown layer through setFailed", async () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
@@ -902,7 +967,7 @@ describe("cache key outputs", () => {
       },
       env: cacheEnv,
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toContain('"bin" is not a cache layer');
   });
 });
@@ -911,7 +976,7 @@ describe("cache input validation", () => {
   // The whole point of validating up front: a typo in a cache input must not
   // cost a rustup bootstrap, a toolchain install and four component adds
   // before it is reported. Nothing has been executed when it fails.
-  it("rejects an unknown layer before running any command", () => {
+  it("rejects an unknown layer before running any command", async () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
@@ -921,17 +986,17 @@ describe("cache input validation", () => {
       },
       env: cacheEnv,
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toContain('"bin" is not a cache layer');
     expect(h.calls).toEqual([]);
   });
 
-  it("rejects a missing lock hash before running any command", () => {
+  it("rejects a missing lock hash before running any command", async () => {
     const h = harness({
       inputs: { toolchain: "stable", cache: "true" },
       env: cacheEnv,
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toContain("`cache-key-hash` is required");
     expect(h.calls).toEqual([]);
   });
@@ -940,7 +1005,7 @@ describe("cache input validation", () => {
   // fail — it would silently produce `registry-X64-ci-<hash>`, a key that
   // collides across operating systems and whose widest rung matches every
   // entry the repository has.
-  it("fails when RUNNER_OS is blank rather than collapsing the segment", () => {
+  it("fails when RUNNER_OS is blank rather than collapsing the segment", async () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
@@ -949,12 +1014,12 @@ describe("cache input validation", () => {
       },
       env: { ...cacheEnv, RUNNER_OS: "" },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toContain("`RUNNER_OS`");
     expect(h.calls).toEqual([]);
   });
 
-  it("fails when RUNNER_ARCH is missing rather than collapsing the segment", () => {
+  it("fails when RUNNER_ARCH is missing rather than collapsing the segment", async () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
@@ -963,13 +1028,13 @@ describe("cache input validation", () => {
       },
       env: { ...cacheEnv, RUNNER_ARCH: undefined },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toContain("`RUNNER_ARCH`");
     expect(h.calls).toEqual([]);
   });
 
   // actions/cache rejects a key containing a comma outright.
-  it("rejects a cache-key-suffix containing a comma", () => {
+  it("rejects a cache-key-suffix containing a comma", async () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
@@ -979,7 +1044,7 @@ describe("cache input validation", () => {
       },
       env: cacheEnv,
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toContain("`cache-key-suffix`");
     expect(h.failures[0]).toContain("comma or whitespace");
     expect(h.calls).toEqual([]);
@@ -988,7 +1053,7 @@ describe("cache input validation", () => {
   // getInput trims the ends but not the middle, so an embedded newline
   // survives into the key and splits the README's joined restore-keys block
   // into two entries, one of them nonsense.
-  it("rejects a cache-key-suffix containing an embedded newline", () => {
+  it("rejects a cache-key-suffix containing an embedded newline", async () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
@@ -998,12 +1063,12 @@ describe("cache input validation", () => {
       },
       env: cacheEnv,
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toContain("comma or whitespace");
     expect(h.calls).toEqual([]);
   });
 
-  it("fails when a derived key would exceed the 512-character limit", () => {
+  it("fails when a derived key would exceed the 512-character limit", async () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
@@ -1013,7 +1078,7 @@ describe("cache input validation", () => {
       },
       env: cacheEnv,
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toContain("512");
     expect(h.failures[0]).toContain("`cache-key-suffix`");
     expect(h.calls).toEqual([]);
@@ -1021,7 +1086,7 @@ describe("cache input validation", () => {
 
   // The limit applies to the longest key the run will derive, which is the
   // build layer's — it carries the spec digest the registry key omits.
-  it("accounts for the spec digest the build key has yet to receive", () => {
+  it("accounts for the spec digest the build key has yet to receive", async () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
@@ -1034,13 +1099,13 @@ describe("cache input validation", () => {
       },
       env: cacheEnv,
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures[0]).toContain("`build`");
     expect(h.calls).toEqual([]);
   });
 
   // Nothing above applies when the caller never asked for cache keys.
-  it("ignores every cache input when cache is disabled", () => {
+  it("ignores every cache input when cache is disabled", async () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
@@ -1049,11 +1114,149 @@ describe("cache input validation", () => {
       },
       env: { ...cacheEnv, RUNNER_OS: "" },
     });
-    run(h.deps);
+    await run(h.deps);
     expect(h.failures).toEqual([]);
     expect(JSON.parse(h.outputs["cache"] ?? "null")).toEqual({
       enabled: false,
       layers: {},
     });
+  });
+});
+
+describe("cache lifecycle", () => {
+  const withCache = {
+    toolchain: "stable",
+    cache: "true",
+    "cache-key-hash": "a1b2c3",
+    "cache-key-suffix": "ci",
+  };
+
+  it("restores every enabled layer with its derived key and paths", async () => {
+    const h = harness({ inputs: withCache, env: cacheEnv });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(h.restores.map((r) => r.key)).toEqual([
+      expect.stringContaining("registry-Linux-X64-ci-"),
+      expect.stringContaining("build-Linux-X64-ci-"),
+    ]);
+    // The registry layer never carries the toolchain digest.
+    expect(h.restores[0]?.paths.join("\n")).toContain("registry/index");
+    expect(h.restores[1]?.paths.join("\n")).toContain("target");
+  });
+
+  it("hands the post phase everything it needs through state", async () => {
+    const h = harness({ inputs: withCache, env: cacheEnv });
+    await run(h.deps);
+
+    expect(h.state["isPost"]).toBe("true");
+    const handoff = JSON.parse(h.state["cache"] ?? "null");
+    expect(handoff.plans).toHaveLength(2);
+    expect(handoff.restored).toHaveLength(2);
+    expect(typeof handoff.budget).toBe("number");
+  });
+
+  // A partial match means the layer will be saved again under the new key, so
+  // it is not a hit from the caller's point of view.
+  it("reports cache-hit only when every layer matched exactly", async () => {
+    const exact = harness({
+      inputs: withCache,
+      env: cacheEnv,
+      restoreResult: (key) => key,
+    });
+    await run(exact.deps);
+    expect(exact.outputs["cache-hit"]).toBe("true");
+
+    const partial = harness({
+      inputs: withCache,
+      env: cacheEnv,
+      restoreResult: (key) =>
+        key.startsWith("registry") ? key : "build-older",
+    });
+    await run(partial.deps);
+    expect(partial.outputs["cache-hit"]).toBe("false");
+  });
+
+  it("neither restores nor saves state when cache is unset", async () => {
+    const h = harness({ inputs: { toolchain: "stable" }, env: cacheEnv });
+    await run(h.deps);
+    expect(h.restores).toEqual([]);
+    expect(h.state["isPost"]).toBe(undefined);
+  });
+
+  // [].every(...) is vacuously true — caching disabled must not be reported
+  // as a full hit.
+  it("reports cache-hit false when caching is disabled", async () => {
+    const h = harness({ inputs: { toolchain: "stable" }, env: cacheEnv });
+    await run(h.deps);
+    expect(h.outputs["cache-hit"]).toBe("false");
+  });
+});
+
+describe("runPost", () => {
+  const postDeps = (
+    state: Record<string, string>,
+  ): { deps: PostDeps; saves: { key: string }[]; summaries: string[] } => {
+    const saves: { key: string }[] = [];
+    const summaries: string[] = [];
+    return {
+      saves,
+      summaries,
+      deps: {
+        cache: {
+          restore: async () => undefined,
+          save: async (_paths: string[], key: string): Promise<void> => {
+            saves.push({ key });
+          },
+        },
+        core: {
+          getState: (name) => state[name] ?? "",
+          info: (): void => {},
+          warning: (): void => {},
+          summary: {
+            addRaw: (text: string) => ({
+              write: async (): Promise<void> => {
+                summaries.push(text);
+              },
+            }),
+          },
+        },
+        measure: () => 128,
+      },
+    };
+  };
+
+  it("does nothing when the main phase never enabled caching", async () => {
+    const { deps, saves, summaries } = postDeps({});
+    await runPost(deps);
+    expect(saves).toEqual([]);
+    expect(summaries).toEqual([]);
+  });
+
+  it("saves the layers that did not hit exactly and writes the summary", async () => {
+    const { deps, saves, summaries } = postDeps({
+      cache: JSON.stringify({
+        budget: 0,
+        plans: [
+          {
+            layer: "registry",
+            key: "registry-k",
+            restoreKeys: [],
+            paths: ["/c"],
+          },
+          { layer: "build", key: "build-k", restoreKeys: [], paths: ["/t"] },
+        ],
+        restored: [
+          { layer: "registry", result: "exact", restoredKey: "registry-k" },
+          { layer: "build", result: "miss" },
+        ],
+      }),
+    });
+
+    await runPost(deps);
+
+    expect(saves.map((s) => s.key)).toEqual(["build-k"]);
+    expect(summaries[0]).toContain("| registry | exact |");
+    expect(summaries[0]).toContain("| build | miss |");
   });
 });

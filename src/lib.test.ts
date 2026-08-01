@@ -18,6 +18,7 @@ describe("library barrel", () => {
       [
         // action.ts
         "run",
+        "runPost",
         // builder.ts
         "ToolchainSpec",
         "ToolchainSpecBuilder",

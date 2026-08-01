@@ -8,10 +8,21 @@ import {
   ToolchainSpecBuilder,
   type ToolchainSpec,
 } from "@rust-toolchain/builder";
+import type { CacheClient } from "@rust-toolchain/cache/client";
 import {
   buildCacheOutputs,
   readCacheRequest,
+  type CacheRequest,
 } from "@rust-toolchain/cache/inputs";
+import type { CacheLayerId } from "@rust-toolchain/cache/layers";
+import {
+  restoreLayers,
+  saveLayers,
+  type LayerPlan,
+  type RestoredLayer,
+} from "@rust-toolchain/cache/lifecycle";
+import { buildPaths, registryPaths } from "@rust-toolchain/cache/paths";
+import { renderSummary } from "@rust-toolchain/cache/summary";
 import {
   assertProfileAvailable,
   mergeConfig,
@@ -27,7 +38,11 @@ import {
   type ToolchainTomlConfig,
 } from "@rust-toolchain/core";
 import { readBooleanInput } from "@rust-toolchain/inputs";
-import { buildActionOutputs, toOutputEntries } from "@rust-toolchain/outputs";
+import {
+  buildActionOutputs,
+  toOutputEntries,
+  type CacheOutputs,
+} from "@rust-toolchain/outputs";
 
 /** Outcome of one process invocation. */
 export interface ExecResult {
@@ -61,11 +76,19 @@ export interface ActionDeps {
     exportVariable: (name: string, value: string) => void;
     addPath: (path: string) => void;
     info: (message: string) => void;
+    /** Crosses the main/post boundary — `action.yml`'s `post:` is a second,
+     * unrelated process invocation that shares nothing but this. */
+    saveState: (name: string, value: string) => void;
+    getState: (name: string) => string;
+    warning: (message: string) => void;
+    summary: { addRaw: (text: string) => { write: () => Promise<unknown> } };
   };
   env: Record<string, string | undefined>;
   /** `process.platform` — decides the rustup installer and path layout. */
   platform: string;
   sleep: (ms: number) => void;
+  /** The only real implementation wraps `@actions/cache`, in `src/index.ts`. */
+  cache: CacheClient;
 }
 
 /** Toolchain downloads are network-bound; a stalled one must not hang the job. */
@@ -293,8 +316,112 @@ function applyCargoDefaults(deps: ActionDeps, release: string): void {
   }
 }
 
+/**
+ * The filesystem paths each cache layer covers.
+ *
+ * A `Record` rather than an `if`/`switch` for the same reason `keys.ts`'s
+ * `DERIVERS` is one: adding a layer to `CACHE_LAYER_IDS` then fails to
+ * compile here until it is given a path list, instead of silently falling
+ * through to whichever branch an `if` chain happened to end on.
+ */
+function layerPathsByLayer(
+  request: CacheRequest,
+  cargoHome: string,
+): Record<CacheLayerId, string[]> {
+  return {
+    registry: registryPaths(cargoHome),
+    build: buildPaths(request.workspaces),
+  };
+}
+
+/**
+ * Turns the validated cache request and its derived keys into one
+ * restore/save plan per enabled layer.
+ *
+ * `cache.layers` is built from this same `request.layers` list by
+ * `buildCacheOutputs`, so every layer named here is guaranteed an entry —
+ * the non-null assertion documents that invariant rather than working around
+ * a real possibility of `undefined`.
+ */
+function buildLayerPlans(
+  request: CacheRequest,
+  cache: CacheOutputs,
+  cargoHome: string,
+): LayerPlan[] {
+  const pathsByLayer = layerPathsByLayer(request, cargoHome);
+  return request.layers.map((layer) => {
+    const derived = cache.layers[layer]!;
+    return {
+      layer,
+      key: derived.key,
+      restoreKeys: derived.restoreKeys,
+      paths: pathsByLayer[layer],
+    };
+  });
+}
+
+/**
+ * Folds each layer's restore outcome into the `cache` output.
+ *
+ * `result` is absent until a layer has actually been restored — Phase A
+ * emitted keys with no lifecycle behind them — so this is the only place that
+ * field is ever populated.
+ */
+function foldRestoredResults(
+  cache: CacheOutputs,
+  restored: RestoredLayer[],
+): CacheOutputs {
+  const layers: CacheOutputs["layers"] = {};
+  for (const layer of Object.keys(cache.layers) as CacheLayerId[]) {
+    const output = cache.layers[layer];
+    if (!output) continue;
+    const match = restored.find((entry) => entry.layer === layer);
+    layers[layer] = match ? { ...output, result: match.result } : output;
+  }
+  return { ...cache, layers };
+}
+
+/**
+ * Restores every enabled cache layer and hands the outcome to the post phase
+ * through `saveState`.
+ *
+ * Returns `cacheHit: false` without touching `deps.cache` or `saveState` when
+ * caching is disabled — `cacheRequest` is `undefined` in that case — so the
+ * post phase, driven only by `getState("cache")`, correctly does nothing.
+ */
+async function resolveCacheLifecycle(
+  deps: ActionDeps,
+  cacheRequest: CacheRequest | undefined,
+  specCacheKey: string,
+  cargoHome: string,
+): Promise<{ cache: CacheOutputs; cacheHit: boolean }> {
+  const cache = buildCacheOutputs(cacheRequest, specCacheKey);
+  if (!cacheRequest) return { cache, cacheHit: false };
+
+  const plans = buildLayerPlans(cacheRequest, cache, cargoHome);
+  const restored = await restoreLayers(deps.cache, plans, {
+    info: deps.core.info,
+    warning: deps.core.warning,
+  });
+
+  deps.core.saveState("isPost", "true");
+  deps.core.saveState(
+    "cache",
+    JSON.stringify({ plans, restored, budget: cacheRequest.budget }),
+  );
+
+  return {
+    cache: foldRestoredResults(cache, restored),
+    // `[].every(...)` is vacuously true, so the length guard is what stops an
+    // empty restore set from reporting a hit that never happened.
+    cacheHit:
+      restored.length > 0 &&
+      restored.every((entry) => entry.result === "exact"),
+  };
+}
+
 /** Installs the requested toolchain and publishes the action's outputs. */
-export function run(deps: ActionDeps): void {
+export async function run(deps: ActionDeps): Promise<void> {
   try {
     // First, deliberately. Every cache input is validated against nothing but
     // itself, so a typo here must fail before the rustup bootstrap and the
@@ -307,6 +434,18 @@ export function run(deps: ActionDeps): void {
       getInput: deps.core.getInput,
       env: deps.env,
     });
+
+    // Exported as early as possible: `post-if` reads this even when the job
+    // fails at a later, unrelated step, long after this action returned.
+    const cacheOnFailure = readBooleanInput(
+      deps.core,
+      "cache-on-failure",
+      false,
+    );
+    deps.core.exportVariable(
+      "RUST_TOOLCHAIN_CACHE_ON_FAILURE",
+      String(cacheOnFailure.value),
+    );
 
     const config = resolveConfiguration(deps);
     const spec = config.spec;
@@ -389,6 +528,17 @@ export function run(deps: ActionDeps): void {
     applyCargoDefaults(deps, rustc.info.version);
 
     const specCacheKey = generateSpecCacheKey(rustc.info.cacheKey, spec);
+    // Lands here, after the toolchain install, unavoidably: the `build` key
+    // carries `specCacheKey`, which does not exist until rustc has run. These
+    // are cargo caches for later `cargo` steps, not rustup itself, so the
+    // ordering costs nothing.
+    const { cache, cacheHit } = await resolveCacheLifecycle(
+      deps,
+      cacheRequest,
+      specCacheKey,
+      rustupEnv.CARGO_HOME,
+    );
+
     const outputs = buildActionOutputs({
       spec,
       inputs: config.inputs,
@@ -396,8 +546,8 @@ export function run(deps: ActionDeps): void {
       setRustupToolchain,
       cacheKey: rustc.info.cacheKey,
       specCacheKey,
-      cache: buildCacheOutputs(cacheRequest, specCacheKey),
-      cacheHit: false,
+      cache,
+      cacheHit,
     });
     for (const [name, value] of toOutputEntries(outputs)) {
       deps.core.setOutput(name, value);
@@ -405,4 +555,39 @@ export function run(deps: ActionDeps): void {
   } catch (error) {
     deps.core.setFailed(error instanceof Error ? error.message : String(error));
   }
+}
+
+/** The post phase's dependencies — a subset of the main phase's. */
+export interface PostDeps {
+  cache: CacheClient;
+  core: Pick<ActionDeps["core"], "getState" | "info" | "warning" | "summary">;
+  measure: (paths: string[]) => number;
+}
+
+/**
+ * Saves the layers the main phase restored.
+ *
+ * Runs from `action.yml`'s `post:`, so it sees none of the main phase's
+ * locals — everything it needs crossed the boundary through `saveState`.
+ */
+export async function runPost(deps: PostDeps): Promise<void> {
+  const raw = deps.core.getState("cache");
+  if (!raw) return;
+
+  const { plans, restored, budget } = JSON.parse(raw) as {
+    plans: LayerPlan[];
+    restored: RestoredLayer[];
+    budget: number;
+  };
+
+  const saved = await saveLayers({
+    client: deps.cache,
+    plans,
+    restored,
+    budget,
+    measure: deps.measure,
+    log: { info: deps.core.info, warning: deps.core.warning },
+  });
+
+  await deps.core.summary.addRaw(renderSummary(restored, saved)).write();
 }
