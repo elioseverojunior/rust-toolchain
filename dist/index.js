@@ -63152,7 +63152,6 @@ async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome
     info: deps.core.info,
     warning: deps.core.warning
   });
-  deps.core.saveState("isPost", "true");
   deps.core.saveState("cache", JSON.stringify({ plans, restored, budget: cacheRequest.budget }));
   return {
     cache: foldRestoredResults(cache, restored),
@@ -63167,6 +63166,7 @@ async function run(deps) {
     });
     const cacheOnFailure = readBooleanInput(deps.core, "cache-on-failure", false);
     deps.core.exportVariable("RUST_TOOLCHAIN_CACHE_ON_FAILURE", String(cacheOnFailure.value));
+    deps.core.saveState("isPost", "true");
     const config = resolveConfiguration(deps);
     const spec = config.spec;
     const rustupEnv = resolveRustupEnv(deps.env, deps.platform);
@@ -63225,20 +63225,31 @@ async function run(deps) {
     deps.core.setFailed(error2 instanceof Error ? error2.message : String(error2));
   }
 }
+async function writeSummarySafely(core, restored, saved) {
+  try {
+    await core.summary.addRaw(renderSummary(restored, saved)).write();
+  } catch (error2) {
+    core.warning(`could not write the job summary, continuing: ${error2 instanceof Error ? error2.message : String(error2)}`);
+  }
+}
 async function runPost(deps) {
-  const raw = deps.core.getState("cache");
-  if (!raw)
-    return;
-  const { plans, restored, budget } = JSON.parse(raw);
-  const saved = await saveLayers({
-    client: deps.cache,
-    plans,
-    restored,
-    budget,
-    measure: deps.measure,
-    log: { info: deps.core.info, warning: deps.core.warning }
-  });
-  await deps.core.summary.addRaw(renderSummary(restored, saved)).write();
+  try {
+    const raw = deps.core.getState("cache");
+    if (!raw)
+      return;
+    const { plans, restored, budget } = JSON.parse(raw);
+    const saved = await saveLayers({
+      client: deps.cache,
+      plans,
+      restored,
+      budget,
+      measure: deps.measure,
+      log: { info: deps.core.info, warning: deps.core.warning }
+    });
+    await writeSummarySafely(deps.core, restored, saved);
+  } catch (error2) {
+    deps.core.warning(`cache post-processing failed, continuing: ${error2 instanceof Error ? error2.message : String(error2)}`);
+  }
 }
 
 // src/index.ts

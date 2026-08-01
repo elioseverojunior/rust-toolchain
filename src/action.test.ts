@@ -1177,11 +1177,16 @@ describe("cache lifecycle", () => {
     expect(partial.outputs["cache-hit"]).toBe("false");
   });
 
-  it("neither restores nor saves state when cache is unset", async () => {
+  // action.yml's post-if runs on every successful job, so isPost must be set
+  // even when caching never runs — otherwise GitHub never sets STATE_isPost,
+  // and the post invocation cannot tell it should call runPost instead of
+  // running the whole main phase again.
+  it("still marks isPost even when cache is unset", async () => {
     const h = harness({ inputs: { toolchain: "stable" }, env: cacheEnv });
     await run(h.deps);
     expect(h.restores).toEqual([]);
-    expect(h.state["isPost"]).toBe(undefined);
+    expect(h.state["isPost"]).toBe("true");
+    expect(h.state["cache"]).toBe(undefined);
   });
 
   // [].every(...) is vacuously true — caching disabled must not be reported
@@ -1193,18 +1198,54 @@ describe("cache lifecycle", () => {
   });
 });
 
+// This env var is exactly what action.yml's post-if gates on — a rename or
+// an inverted value here would ship green under the 100% line/function gate,
+// since every `run` test already executes the export, just never asserts it.
+describe("cache-on-failure export", () => {
+  it("exports RUST_TOOLCHAIN_CACHE_ON_FAILURE as true when requested", async () => {
+    const h = harness({
+      inputs: { toolchain: "stable", "cache-on-failure": "true" },
+    });
+    await run(h.deps);
+    expect(h.exported["RUST_TOOLCHAIN_CACHE_ON_FAILURE"]).toBe("true");
+  });
+
+  it("defaults RUST_TOOLCHAIN_CACHE_ON_FAILURE to false", async () => {
+    const h = harness({ inputs: { toolchain: "stable" } });
+    await run(h.deps);
+    expect(h.exported["RUST_TOOLCHAIN_CACHE_ON_FAILURE"]).toBe("false");
+  });
+});
+
 describe("runPost", () => {
   const postDeps = (
     state: Record<string, string>,
-  ): { deps: PostDeps; saves: { key: string }[]; summaries: string[] } => {
+    options: { summaryFails?: boolean } = {},
+  ): {
+    deps: PostDeps;
+    restores: { key: string }[];
+    saves: { key: string }[];
+    summaries: string[];
+    warnings: string[];
+  } => {
+    const restores: { key: string }[] = [];
     const saves: { key: string }[] = [];
     const summaries: string[] = [];
+    const warnings: string[] = [];
     return {
+      restores,
       saves,
       summaries,
+      warnings,
       deps: {
         cache: {
-          restore: async () => undefined,
+          restore: async (
+            _paths: string[],
+            key: string,
+          ): Promise<string | undefined> => {
+            restores.push({ key });
+            return undefined;
+          },
           save: async (_paths: string[], key: string): Promise<void> => {
             saves.push({ key });
           },
@@ -1212,10 +1253,15 @@ describe("runPost", () => {
         core: {
           getState: (name) => state[name] ?? "",
           info: (): void => {},
-          warning: (): void => {},
+          warning: (message): void => {
+            warnings.push(message);
+          },
           summary: {
             addRaw: (text: string) => ({
               write: async (): Promise<void> => {
+                if (options.summaryFails) {
+                  throw new Error("GITHUB_STEP_SUMMARY is not set");
+                }
                 summaries.push(text);
               },
             }),
@@ -1229,6 +1275,20 @@ describe("runPost", () => {
   it("does nothing when the main phase never enabled caching", async () => {
     const { deps, saves, summaries } = postDeps({});
     await runPost(deps);
+    expect(saves).toEqual([]);
+    expect(summaries).toEqual([]);
+  });
+
+  // The main phase now sets isPost unconditionally (see "cache lifecycle" ▸
+  // "still marks isPost even when cache is unset"), so a post invocation with
+  // isPost set but no cache payload is the normal caching-disabled case, not
+  // a corrupted one — it must still perform no cache operations at all.
+  it("does nothing when isPost is set but no cache payload was recorded", async () => {
+    const { deps, restores, saves, summaries } = postDeps({
+      isPost: "true",
+    });
+    await runPost(deps);
+    expect(restores).toEqual([]);
     expect(saves).toEqual([]);
     expect(summaries).toEqual([]);
   });
@@ -1258,5 +1318,46 @@ describe("runPost", () => {
     expect(saves.map((s) => s.key)).toEqual(["build-k"]);
     expect(summaries[0]).toContain("| registry | exact |");
     expect(summaries[0]).toContain("| build | miss |");
+  });
+
+  // Design invariant 8: a cache failure never fails the build. State crosses
+  // the phase boundary as an environment variable, so a truncated or
+  // corrupted payload is a real possibility, not a hypothetical one.
+  it("warns and does not throw when the state payload is malformed", async () => {
+    const { deps, warnings } = postDeps({ cache: "{not valid json" });
+
+    await runPost(deps);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/cache post-processing failed/i);
+  });
+
+  // @actions/core's summary throws when GITHUB_STEP_SUMMARY is unset or
+  // unwritable — true on slim runners and under `act`. That must not discard
+  // the save that already happened by reporting the post step as failed.
+  it("warns but keeps the save when the summary write rejects", async () => {
+    const { deps, saves, warnings } = postDeps(
+      {
+        cache: JSON.stringify({
+          budget: 0,
+          plans: [
+            {
+              layer: "registry",
+              key: "registry-k",
+              restoreKeys: [],
+              paths: ["/c"],
+            },
+          ],
+          restored: [{ layer: "registry", result: "miss" }],
+        }),
+      },
+      { summaryFails: true },
+    );
+
+    await runPost(deps);
+
+    expect(saves.map((s) => s.key)).toEqual(["registry-k"]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/could not write the job summary/i);
   });
 });

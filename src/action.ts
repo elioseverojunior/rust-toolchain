@@ -20,6 +20,7 @@ import {
   saveLayers,
   type LayerPlan,
   type RestoredLayer,
+  type SavedLayer,
 } from "@rust-toolchain/cache/lifecycle";
 import { buildPaths, registryPaths } from "@rust-toolchain/cache/paths";
 import { renderSummary } from "@rust-toolchain/cache/summary";
@@ -383,11 +384,14 @@ function foldRestoredResults(
 
 /**
  * Restores every enabled cache layer and hands the outcome to the post phase
- * through `saveState`.
+ * through `saveState("cache", ...)`.
  *
  * Returns `cacheHit: false` without touching `deps.cache` or `saveState` when
  * caching is disabled — `cacheRequest` is `undefined` in that case — so the
- * post phase, driven only by `getState("cache")`, correctly does nothing.
+ * post phase, driven by `getState("cache")`, correctly does nothing. Does
+ * *not* set `saveState("isPost", ...)` itself: `run` sets that unconditionally
+ * regardless of whether caching is enabled, so this function skipping entirely
+ * cannot leave the post phase unable to tell it is the post phase.
  */
 async function resolveCacheLifecycle(
   deps: ActionDeps,
@@ -404,7 +408,6 @@ async function resolveCacheLifecycle(
     warning: deps.core.warning,
   });
 
-  deps.core.saveState("isPost", "true");
   deps.core.saveState(
     "cache",
     JSON.stringify({ plans, restored, budget: cacheRequest.budget }),
@@ -446,6 +449,16 @@ export async function run(deps: ActionDeps): Promise<void> {
       "RUST_TOOLCHAIN_CACHE_ON_FAILURE",
       String(cacheOnFailure.value),
     );
+
+    // Unconditional, and set here rather than inside resolveCacheLifecycle:
+    // action.yml's `post:` runs on every successful job, regardless of
+    // whether caching is enabled. GitHub only sets STATE_isPost once this
+    // line runs, and src/index.ts's dispatch reads exactly that env var to
+    // decide it is the post phase. Gating this on caching would leave every
+    // caching-disabled job's post invocation unable to tell — it would fall
+    // through to running the whole main phase a second time instead of
+    // calling `runPost`, which already no-ops correctly on empty state.
+    deps.core.saveState("isPost", "true");
 
     const config = resolveConfiguration(deps);
     const spec = config.spec;
@@ -565,29 +578,65 @@ export interface PostDeps {
 }
 
 /**
+ * Writes the job summary, warning rather than throwing when it fails.
+ *
+ * Its own guard, separate from `runPost`'s: a summary failure — typically
+ * `GITHUB_STEP_SUMMARY` unset on a slim runner or under `act` — must not
+ * discard the saves `runPost` already computed by being reported as though
+ * the whole post step failed.
+ */
+async function writeSummarySafely(
+  core: PostDeps["core"],
+  restored: RestoredLayer[],
+  saved: SavedLayer[],
+): Promise<void> {
+  try {
+    await core.summary.addRaw(renderSummary(restored, saved)).write();
+  } catch (error) {
+    core.warning(
+      `could not write the job summary, continuing: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+/**
  * Saves the layers the main phase restored.
  *
  * Runs from `action.yml`'s `post:`, so it sees none of the main phase's
- * locals — everything it needs crossed the boundary through `saveState`.
+ * locals — everything it needs crossed the boundary through `saveState` as a
+ * JSON-encoded environment variable, which is what makes the outer guard
+ * below necessary: design invariant 8 ("a cache failure never fails the
+ * build") holds inside `restoreLayers`/`saveLayers` themselves, but a
+ * truncated or malformed payload throws before either ever runs.
  */
 export async function runPost(deps: PostDeps): Promise<void> {
-  const raw = deps.core.getState("cache");
-  if (!raw) return;
+  try {
+    const raw = deps.core.getState("cache");
+    if (!raw) return;
 
-  const { plans, restored, budget } = JSON.parse(raw) as {
-    plans: LayerPlan[];
-    restored: RestoredLayer[];
-    budget: number;
-  };
+    const { plans, restored, budget } = JSON.parse(raw) as {
+      plans: LayerPlan[];
+      restored: RestoredLayer[];
+      budget: number;
+    };
 
-  const saved = await saveLayers({
-    client: deps.cache,
-    plans,
-    restored,
-    budget,
-    measure: deps.measure,
-    log: { info: deps.core.info, warning: deps.core.warning },
-  });
+    const saved = await saveLayers({
+      client: deps.cache,
+      plans,
+      restored,
+      budget,
+      measure: deps.measure,
+      log: { info: deps.core.info, warning: deps.core.warning },
+    });
 
-  await deps.core.summary.addRaw(renderSummary(restored, saved)).write();
+    await writeSummarySafely(deps.core, restored, saved);
+  } catch (error) {
+    deps.core.warning(
+      `cache post-processing failed, continuing: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
