@@ -375,13 +375,6 @@ classDiagram
         +cache: CacheClient
     }
 
-    class CacheClient {
-        +restore(paths, key, restoreKeys) Promise~string | undefined~
-        +save(paths, key) Promise~void~
-    }
-
-    ActionDeps --> CacheClient : restores/saves through
-
     class ToolchainSpec {
         +readonly channel: string
         +readonly targets: string[]
@@ -409,12 +402,18 @@ classDiagram
         +build(): ToolchainSpec
     }
 
+    class CacheClient {
+        +restore(paths, key, restoreKeys) Promise~string | undefined~
+        +save(paths, key) Promise~void~
+    }
+
     ToolchainInputs --> ResolvedToolchain : merged into
     ToolchainSpec --> ResolvedToolchain : depends on
     ToolchainSpecBuilder --> ToolchainSpec : produces
     ToolchainSpecBuilder --> ToolchainTomlConfig : reads
     ToolchainSpec --> CacheKeySpec : satisfies
     ActionDeps --> ToolchainSpec : run() builds
+    ActionDeps --> CacheClient : restores/saves through
 ```
 
 ## Source File Map
