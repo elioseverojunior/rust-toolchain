@@ -37,8 +37,16 @@ local linters = new Mapping<String, Step> {
         check = "hk util check-byte-order-marker {{ files }}"
     }
 
+    // dist/index.js is excluded: it now bundles @actions/cache, and that
+    // pulls in @azure/core-rest-pipeline, whose RestError formatter and
+    // @actions/cache's own cache-list debug message both bake a trailing
+    // space into a multi-line template literal. That is vendor string
+    // content, not formatting — stripping it here would desync the commit
+    // from a byte-identical `bun run build`, which the CI Build job diffs
+    // against verbatim.
     ["trailing-whitespace-fixer"] = new Step {
         glob = "**"
+        exclude = "dist/**"
         check = "hk util trailing-whitespace --diff {{ files }}"
         fix = "hk util trailing-whitespace --fix {{ files }}"
     }
