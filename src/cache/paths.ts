@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 
 /** One `<manifest-dir> -> <target-dir>` mapping, both resolved absolutely. */
 export interface Workspace {
@@ -19,7 +19,15 @@ export interface Workspace {
  */
 function resolveInside(root: string, part: string): string {
   const resolved = isAbsolute(part) ? part : resolve(root, part);
-  if (resolved !== root && !resolved.startsWith(`${root}/`)) {
+  // `relative` is the separator-correct containment test: it returns `""`
+  // for the root itself, a bare relative path for anything inside it, and
+  // something starting with `..` — or, on Windows, an absolute path when
+  // `resolved` is on a different drive — for anything outside. Comparing
+  // string prefixes instead needs the platform separator baked in, and
+  // hardcoding `/` silently rejects every path on a Windows runner, where
+  // `GITHUB_WORKSPACE` and `resolve()` are both backslash-joined.
+  const offset = relative(root, resolved);
+  if (offset !== "" && (offset.startsWith("..") || isAbsolute(offset))) {
     throw new Error(
       `\`cache-workspaces\` entry "${part}" resolves to "${resolved}", which ` +
         `is outside the workspace "${root}". Cache paths come from workflow ` +
@@ -84,6 +92,12 @@ export function registryPaths(cargoHome: string): string[] {
  * `<triple>/debug` — so these are negation globs, which `@actions/cache`
  * honours through `@actions/glob`. Excluding rather than deleting keeps the
  * working tree intact, so a failed save leaves nothing damaged.
+ *
+ * These stay forward-slash-joined on every platform, deliberately not
+ * `path.join`: `@actions/glob` normalises separators for matching, but a
+ * backslash in a glob pattern is an escape character on POSIX, so a
+ * backslash-joined pattern would itself need escaping. A mixed-separator
+ * path string is fine for globbing; a backslash-escaped glob is not.
  */
 export function buildPaths(workspaces: Workspace[]): string[] {
   return workspaces.flatMap(({ targetDir }) => [

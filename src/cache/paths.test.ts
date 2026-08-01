@@ -52,6 +52,15 @@ describe("parseWorkspaces", () => {
       "must name at least one",
     );
   });
+
+  // A naive `startsWith(root)` admits this: it is a prefix of the root
+  // without being inside it.
+  it("rejects a sibling directory that merely shares the root's prefix", () => {
+    expect(() => parseWorkspaces(". -> target", "/workspace")).not.toThrow();
+    expect(() =>
+      parseWorkspaces("/workspace-evil -> target", "/workspace"),
+    ).toThrow("outside the workspace");
+  });
 });
 
 describe("registryPaths", () => {
