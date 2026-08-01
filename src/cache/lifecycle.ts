@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+import type { MeasuredPaths } from "@rust-toolchain/cache/budget";
 import type { CacheClient } from "@rust-toolchain/cache/client";
 import type { CacheLayerId } from "@rust-toolchain/cache/layers";
+import { describeError } from "@rust-toolchain/errors";
 
 /** Everything needed to restore or save one layer. */
 export interface LayerPlan {
@@ -47,8 +49,23 @@ export interface SaveArgs {
    */
   restored: RestoredLayer[];
   budget: number;
-  measure: (paths: string[]) => number;
+  measure: (paths: string[]) => MeasuredPaths;
   log: LifecycleLog;
+}
+
+/**
+ * Everything the main phase hands to the post phase, as one named shape.
+ *
+ * The two phases are separate process invocations that share nothing but a
+ * JSON string in `STATE_cache`, so the write side and the read side used to
+ * name `plans`, `restored` and `budget` independently. That made a rename a
+ * silent production break with both sides' tests still green: each half agreed
+ * with itself. Naming the contract once is what makes the compiler notice.
+ */
+export interface CachePhaseState {
+  plans: LayerPlan[];
+  restored: RestoredLayer[];
+  budget: number;
 }
 
 /**
@@ -82,12 +99,53 @@ export async function restoreLayers(
       } catch (error) {
         log.warning(
           `${plan.layer}: restore failed, continuing without it — ` +
-            `${error instanceof Error ? error.message : String(error)}`,
+            describeError(error),
         );
         return { layer: plan.layer, result: "miss" };
       }
     }),
   );
+}
+
+/** A layer that was not written, and why. */
+function skipped(
+  layer: CacheLayerId,
+  reason: string,
+  bytes: number,
+): SavedLayer {
+  return { layer, saved: false, reason, bytes };
+}
+
+/** Either a size, or the reason there is not one. */
+type Measurement =
+  { measured: true; bytes: number } | { measured: false; message: string };
+
+/**
+ * Measures a layer, saying so when the number is only a lower bound.
+ *
+ * `measurePaths` reports paths it could not read rather than silently counting
+ * them as zero, and that distinction only means something if it reaches the
+ * job log: a budget checked against a floor is one that merely appears to have
+ * been applied.
+ */
+function measureForSave(
+  plan: LayerPlan,
+  { measure, log }: SaveArgs,
+): Measurement {
+  try {
+    const { bytes, unmeasured } = measure(plan.paths);
+    if (unmeasured.length > 0) {
+      log.warning(
+        `${plan.layer}: could not read ${unmeasured.length} path(s), so ` +
+          `${bytes} bytes is a lower bound on its real size and the ` +
+          "`cache-budget` check may pass an entry that should have failed " +
+          `it: ${unmeasured.join(", ")}`,
+      );
+    }
+    return { measured: true, bytes };
+  } catch (error) {
+    return { measured: false, message: describeError(error) };
+  }
 }
 
 /**
@@ -105,56 +163,43 @@ export async function restoreLayers(
 async function saveLayer(
   plan: LayerPlan,
   previous: RestoredLayer | undefined,
-  { client, budget, measure, log }: SaveArgs,
+  args: SaveArgs,
 ): Promise<SavedLayer> {
+  const { client, budget, log } = args;
+  const { layer } = plan;
+
   if (previous?.result === "exact") {
-    log.info(`${plan.layer}: unchanged since an exact hit, not saving`);
-    return {
-      layer: plan.layer,
-      saved: false,
-      reason: "unchanged since an exact hit",
-      bytes: 0,
-    };
+    log.info(`${layer}: unchanged since an exact hit, not saving`);
+    return skipped(layer, "unchanged since an exact hit", 0);
   }
 
-  let bytes: number;
-  try {
-    bytes = measure(plan.paths);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+  const measurement = measureForSave(plan, args);
+  if (!measurement.measured) {
+    const { message } = measurement;
     log.warning(
-      `${plan.layer}: could not measure its size, not saving — ${message}`,
+      `${layer}: could not measure its size, not saving — ${message}`,
     );
-    return {
-      layer: plan.layer,
-      saved: false,
-      reason: `could not measure its size — ${message}`,
-      bytes: 0,
-    };
+    return skipped(layer, `could not measure its size — ${message}`, 0);
   }
 
+  const { bytes } = measurement;
   if (budget > 0 && bytes > budget) {
     log.warning(
-      `${plan.layer}: ${bytes} bytes exceeds the ${budget}-byte ` +
-        "`cache-budget`, so it was not saved. An oversized entry evicts " +
-        "other workflows' caches. Raise `cache-budget` to keep it.",
+      `${layer}: ${bytes} bytes exceeds the ${budget}-byte \`cache-budget\`, ` +
+        "so it was not saved. An oversized entry evicts other workflows' " +
+        "caches. Raise `cache-budget` to keep it.",
     );
-    return {
-      layer: plan.layer,
-      saved: false,
-      reason: `over the ${budget}-byte budget`,
-      bytes,
-    };
+    return skipped(layer, `over the ${budget}-byte budget`, bytes);
   }
 
   try {
     await client.save(plan.paths, plan.key);
-    log.info(`${plan.layer}: saved ${bytes} bytes as ${plan.key}`);
-    return { layer: plan.layer, saved: true, bytes };
+    log.info(`${layer}: saved ${bytes} bytes as ${plan.key}`);
+    return { layer, saved: true, bytes };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log.warning(`${plan.layer}: save failed, continuing — ${message}`);
-    return { layer: plan.layer, saved: false, reason: message, bytes };
+    const message = describeError(error);
+    log.warning(`${layer}: save failed, continuing — ${message}`);
+    return skipped(layer, message, bytes);
   }
 }
 

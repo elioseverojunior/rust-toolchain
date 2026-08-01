@@ -6,6 +6,8 @@ import { createHash } from "node:crypto";
 
 import { parse } from "smol-toml";
 
+import { describeError } from "@rust-toolchain/errors";
+
 export interface ToolchainTomlConfig {
   channel?: string;
   targets?: string[];
@@ -151,7 +153,7 @@ export function parseRustToolchainToml(toml: string): ToolchainTomlConfig {
   } catch (error) {
     // Loud by design: a syntax error hides the author's intent, and installing
     // "stable" instead would run a toolchain nobody asked for.
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = describeError(error);
     throw new Error(`rust-toolchain.toml is not valid TOML: ${detail}`, {
       cause: error,
     });

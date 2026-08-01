@@ -193,11 +193,13 @@ export function readCacheRequest(
 /**
  * Completes the validated request into the per-layer keys.
  *
- * Nothing is restored or saved here: the keys go out as an output for the
- * workflow's own `actions/cache` steps. The lock hash arrives as an input
- * because `hashFiles()` is a workflow-expression function that a Node action
- * cannot call, and taking GitHub's own value keeps the keys interoperable with
- * caches the workflow already has.
+ * Deriving only: `action.ts` hands the result to `restoreLayers` and, through
+ * `saveState`, to the post phase's `saveLayers`, and publishes it as the
+ * `cache` output for a workflow that would rather drive its own
+ * `actions/cache` steps. The lock hash arrives as an input because
+ * `hashFiles()` is a workflow-expression function that a Node action cannot
+ * call, and taking GitHub's own value keeps the keys interoperable with caches
+ * the workflow already has.
  */
 export function buildCacheOutputs(
   request: CacheRequest | undefined,

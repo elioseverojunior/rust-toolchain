@@ -332,7 +332,7 @@ classDiagram
 | `src/cache/keys.ts`      | Module                              | `joinKeySegments`, `buildLayerKey`, `CacheKeyContext`, `CacheLayerKey`                                                                                                                                                              | Per-layer key and restore-key ladder derivation; the `build` key folds in `envHash`                                                                                                                                                                                                                                                                                                       |
 | `src/cache/inputs.ts`    | Module                              | `readCacheRequest`, `buildCacheOutputs`, `CacheRequest`, `CacheInputSource`                                                                                                                                                         | Validates every `cache-*` input before anything installs (`readCacheRequest`, fails fast on a bad `cache-key-hash` or an oversized key); completes the validated request into per-layer keys once the spec digest exists (`buildCacheOutputs`)                                                                                                                                            |
 | `src/cache/env.ts`       | Module (node:crypto)                | `hashBuildEnv`                                                                                                                                                                                                                      | Digests the `CARGO_*`/`CC`/`CFLAGS`/`CXX`/`CMAKE`/`RUST*` environment into the `build` key's `envHash` segment, so jobs differing only in `RUSTFLAGS` stop sharing a key                                                                                                                                                                                                                  |
-| `src/cache/paths.ts`     | Module (node:path)                  | `parseWorkspaces`, `registryPaths`, `buildPaths`, `Workspace`                                                                                                                                                                       | Reads `cache-workspaces` into resolved `<manifest-dir> -> <target-dir>` mappings, refusing anything outside the checkout; the `registry` layer's fixed paths; the `build` layer's paths with `!.../incremental` and `!.../examples` negation globs                                                                                                                                        |
+| `src/cache/paths.ts`     | Module (node:path)                  | `parseWorkspaces`, `registryPaths`, `buildPaths`, `Workspace`                                                                                                                                                                       | Reads `cache-workspaces` into resolved `<manifest-dir> -> <target-dir>` mappings, refusing anything outside the checkout; the `registry` layer's fixed paths; the `build` layer's paths as a files-only glob set — `<target>/**` plus `!<target>/**/incremental/**`, `!<target>/**/examples/**` and the two directory negations that keep the manifest free of directories                |
 | `src/cache/budget.ts`    | Module                              | `parseSize`, `measurePaths`, `StatFs`                                                                                                                                                                                               | Reads `cache-budget` into a byte count (binary suffixes, `0` disables it); sums a layer's on-disk size through an injected `StatFs` port                                                                                                                                                                                                                                                  |
 | `src/cache/client.ts`    | Module                              | `CacheClient`                                                                                                                                                                                                                       | The restore/save port. The only real implementation wraps `@actions/cache` and lives in `src/index.ts`, which nothing imports and the coverage gate does not measure                                                                                                                                                                                                                      |
 | `src/cache/lifecycle.ts` | Module                              | `restoreLayers`, `saveLayers`, `LayerPlan`, `RestoredLayer`, `SavedLayer`, `LayerResult`, `LifecycleLog`, `SaveArgs`                                                                                                                | Restores every enabled layer concurrently, downgrading any failure to a miss; decides whether each layer is worth saving — skip on an exact hit, skip when its size can't be measured, skip over budget — and saves the rest concurrently                                                                                                                                                 |
@@ -522,14 +522,27 @@ restores and saves, split across the main and post phases:
   does not degrade its own hit rate, it evicts _other_ workflows' caches). Each
   layer's save is independently caught, so one layer's failure cannot lose the
   results of the others in the same batch.
-- **Exclusions are negation globs, never deletion.** `buildPaths`
-  (`src/cache/paths.ts`) lists `target/`, then `!target/*/incremental` and
-  `!target/*/examples`; `@actions/glob` (which `@actions/cache` uses
-  internally) treats the `!`-prefixed entries as exclusions from what gets
-  archived. Nothing on disk is touched, so a save failure leaves the working
-  tree exactly as it was. `registry/src` is handled the same way in spirit but
-  more simply: `registryPaths` never lists it at all, since it is fully
-  regenerable from the `.crate` files in `registry/cache`.
+- **Exclusions are negation globs, never deletion — and they only work on a
+  files-only manifest.** `buildPaths` (`src/cache/paths.ts`) emits
+  `<target>/**`, then `!<target>/**/incremental/**` and
+  `!<target>/**/examples/**`, and finally `!<target>/` and `!<target>/**/`.
+  Those last two are not decoration. `@actions/cache` resolves the patterns
+  through `@actions/glob` with `implicitDescendants: false`, writes the matches
+  to a manifest, and runs `tar --files-from <manifest>` — with no
+  `--no-recursion`. Any directory left in the manifest is therefore expanded
+  wholesale by tar and re-includes everything the negations removed, so
+  excluding directories is what makes the other exclusions reach the archive.
+  Verified at the tar layer, not only the glob layer: the pre-fix
+  `[target, !target/*/incremental, …]` form resolved to the single entry
+  `target`, from which tar archived the whole tree. The cost of a files-only
+  manifest is that empty directories and directory permissions and mtimes are
+  not preserved, which cargo does not depend on — it decides freshness from
+  file mtimes and recreates any directory it needs. Nothing on disk is touched,
+  so a save failure leaves the working tree exactly as it was. `registryPaths`
+  keeps naming bare directories, and that asymmetry is deliberate: it carries
+  no exclusions, so tar's recursion is exactly what archives it. `registry/src`
+  is excluded there by never being listed at all, since it is fully regenerable
+  from the `.crate` files in `registry/cache`.
 - **A cache failure never fails the build.** Restore, save, size measurement
   and the job summary write are each wrapped so their own failure produces a
   `core.warning` and lets everything else continue — including `runPost`'s

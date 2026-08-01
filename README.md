@@ -488,6 +488,15 @@ restored before the toolchain is used, and saved again from a `post:` step at
 the end of the job — a layer that matched its exact key on restore is not
 re-saved, since it is unchanged.
 
+The `build` layer excludes what it can regenerate: an `incremental/` or
+`examples/` directory at any depth under a target dir, including the
+`<triple>/debug/` layout the `targets` input produces. Those are exclusions
+from the archive, never deletions — nothing on disk is touched, so a failed
+save leaves the working tree exactly as it was. The archive therefore stores
+files rather than directory entries, which means empty directories and
+directory permissions are not preserved; cargo depends on neither, deciding
+freshness from file mtimes and recreating any directory it needs.
+
 A few inputs shape that lifecycle:
 
 - **`cache-workspaces`** (default `. -> target`) — one

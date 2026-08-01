@@ -78,8 +78,10 @@ export interface CacheLayerOutput extends CacheLayerKey {
  * The cache keys this action derived, per layer.
  *
  * `layers` is partial because `cache-layers` selects which exist; a consumer
- * reads only the ones it enabled. Nothing here is restored or saved yet — these
- * are keys for the workflow's own `actions/cache` steps to use.
+ * reads only the ones it enabled. The action restores and saves these layers
+ * itself, so `result` reports what happened to each; the keys are published
+ * as well, for a workflow that would rather wire its own `actions/cache`
+ * steps against the same values.
  */
 export interface CacheOutputs {
   enabled: boolean;

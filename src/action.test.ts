@@ -1267,7 +1267,7 @@ describe("runPost", () => {
             }),
           },
         },
-        measure: () => 128,
+        measure: () => ({ bytes: 128, unmeasured: [] }),
       },
     };
   };

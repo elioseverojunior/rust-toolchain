@@ -45,12 +45,12 @@ writes another full copy of `~/.cargo` plus `target` into a repository-wide 10 G
 evicts globally by least-recent-use. An oversized entry does not degrade its own hit rate — it evicts
 other workflows' caches, so the symptom surfaces somewhere else entirely.
 
-| Failure mode                                 | Root cause                                                 | Addressed by                                                                                                                                             |
-| -------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Everything re-saves when one input moves     | One entry, one key, mixed invalidation rates               | Per-layer keys (Phase A), restored and saved independently (Phase B)                                                                                     |
-| 10 GB exhaustion and cross-workflow eviction | Full re-save per lockfile change, no size accounting       | Skip-save on an exact hit, plus a per-layer `cache-budget`                                                                                               |
-| Pruning is heuristic and silent              | Ownership inferred by string-munging filenames, `catch {}` | Negation-glob exclusions (`incremental`, `examples`) today, and failures warn rather than vanish; deterministic pruning from `cargo metadata` is Phase D |
-| Cannot tell a cold run from a broken key     | A single `cache-hit` boolean                               | `cache-hit` reports every-layer-exact, plus a per-layer job summary table naming each layer's actual result                                              |
+| Failure mode                                 | Root cause                                                 | Addressed by                                                                                                                                                                    |
+| -------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Everything re-saves when one input moves     | One entry, one key, mixed invalidation rates               | Per-layer keys (Phase A), restored and saved independently (Phase B)                                                                                                            |
+| 10 GB exhaustion and cross-workflow eviction | Full re-save per lockfile change, no size accounting       | Skip-save on an exact hit, plus a per-layer `cache-budget`                                                                                                                      |
+| Pruning is heuristic and silent              | Ownership inferred by string-munging filenames, `catch {}` | Files-only negation globs exclude `incremental` and `examples` at any depth today, and failures warn rather than vanish; deterministic pruning from `cargo metadata` is Phase D |
+| Cannot tell a cold run from a broken key     | A single `cache-hit` boolean                               | `cache-hit` reports every-layer-exact, plus a per-layer job summary table naming each layer's actual result                                                                     |
 
 The first two are one problem. Monolithic entries cause the eviction churn, so partitioning fixes both.
 

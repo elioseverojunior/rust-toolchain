@@ -156,14 +156,22 @@ subsections.
   that would otherwise have succeeded. Do not let a fix for one of these
   propagate a throw past its own boundary "to be safe"; that reintroduces the
   exact failure mode these guards exist to remove.
-- **Exclusions from a saved layer are negation globs, never deletion.**
-  `buildPaths` (`src/cache/paths.ts`) lists `target/` alongside
-  `!target/*/incremental` and `!target/*/examples`; `@actions/cache`'s
-  underlying `@actions/glob` treats the `!`-prefixed entries as archive
-  exclusions. Nothing on disk is ever touched, so a save failure cannot damage
-  the working tree. Do not "clean up" a layer by deleting files instead —
-  that changes a save-time filter into a destructive operation on the
-  checkout.
+- **Exclusions from a saved layer are negation globs, never deletion, and the
+  glob set must stay files-only.** `buildPaths` (`src/cache/paths.ts`) emits
+  `<target>/**`, `!<target>/**/incremental/**`, `!<target>/**/examples/**`,
+  `!<target>/` and `!<target>/**/`. The last two look redundant and are not:
+  `@actions/cache` runs `tar --files-from <manifest>` with no
+  `--no-recursion`, so any directory left in the manifest is expanded wholesale
+  and re-includes everything the negations removed. Deleting either directory
+  negation silently disables every exclusion above it, and no unit test of the
+  glob layer alone would notice — verify at the tar layer. The trade-off is
+  that the archive carries no directory entries, so empty directories and
+  directory permissions/mtimes are not preserved; cargo does not depend on
+  either. `registryPaths` keeps naming bare directories on purpose: it has
+  nothing to exclude, so recursion is what archives it. Nothing on disk is ever
+  touched, so a save failure cannot damage the working tree. Do not "clean up"
+  a layer by deleting files instead — that changes a save-time filter into a
+  destructive operation on the checkout.
 
 ## Action pinning overrides the global rule
 

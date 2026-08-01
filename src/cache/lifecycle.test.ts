@@ -19,7 +19,7 @@ const plans: LayerPlan[] = [
     layer: "build",
     key: "build-Linux-X64-d1-e1-a1",
     restoreKeys: ["build-Linux-X64-d1-e1-"],
-    paths: ["/w/target", "!/w/target/*/incremental"],
+    paths: ["/w/target/**", "!/w/target/**/incremental/**"],
   },
 ];
 
@@ -95,7 +95,7 @@ const saveArgs = (
     { layer: "build", result: "miss" },
   ],
   budget: 0,
-  measure: () => 10,
+  measure: () => ({ bytes: 10, unmeasured: [] }),
   log: log(),
   ...overrides,
 });
@@ -152,7 +152,11 @@ describe("saveLayers", () => {
   it("skips a layer over budget and warns with the size", async () => {
     const l = log();
     const results = await saveLayers(
-      saveArgs({ budget: 5, measure: () => 4096, log: l }),
+      saveArgs({
+        budget: 5,
+        measure: () => ({ bytes: 4096, unmeasured: [] }),
+        log: l,
+      }),
     );
     expect(results.every((r) => !r.saved)).toBe(true);
     expect(l.messages.join("\n")).toContain("4096");
@@ -161,14 +165,20 @@ describe("saveLayers", () => {
 
   it("ignores the budget when it is zero", async () => {
     const results = await saveLayers(
-      saveArgs({ budget: 0, measure: () => 10 ** 9 }),
+      saveArgs({
+        budget: 0,
+        measure: () => ({ bytes: 10 ** 9, unmeasured: [] }),
+      }),
     );
     expect(results.every((r) => r.saved)).toBe(true);
   });
 
   it("saves when the budget is enabled and the size is under it", async () => {
     const results = await saveLayers(
-      saveArgs({ budget: 1000, measure: () => 10 }),
+      saveArgs({
+        budget: 1000,
+        measure: () => ({ bytes: 10, unmeasured: [] }),
+      }),
     );
     expect(results.every((r) => r.saved)).toBe(true);
   });
@@ -208,7 +218,7 @@ describe("saveLayers", () => {
           if (paths[0] === "/c/registry/index") {
             throw new Error("permission denied");
           }
-          return 10;
+          return { bytes: 10, unmeasured: [] };
         },
         log: l,
       }),
@@ -218,5 +228,28 @@ describe("saveLayers", () => {
     expect(results[1]?.saved).toBe(true);
     expect(saved).toEqual(["build-Linux-X64-d1-e1-a1"]);
     expect(l.messages.some((m) => m.startsWith("warning:"))).toBe(true);
+  });
+
+  // A partial measurement is not a failure — the layer is still worth saving —
+  // but it does mean the number the budget was checked against is a floor
+  // rather than the size. Saying so is the difference between a budget that
+  // was applied and one that only appeared to be.
+  it("saves a partially measured layer but names what it could not read", async () => {
+    const l = log();
+    const results = await saveLayers(
+      saveArgs({
+        measure: () => ({ bytes: 10, unmeasured: ["/w/target/debug/locked"] }),
+        log: l,
+      }),
+    );
+    expect(results.every((r) => r.saved)).toBe(true);
+    const warnings = l.messages.filter((m) => m.startsWith("warning:"));
+    expect(warnings.join("\n")).toContain("/w/target/debug/locked");
+  });
+
+  it("stays quiet when everything was measured", async () => {
+    const l = log();
+    await saveLayers(saveArgs({ log: l }));
+    expect(l.messages.some((m) => m.startsWith("warning:"))).toBe(false);
   });
 });

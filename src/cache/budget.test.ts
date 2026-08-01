@@ -40,14 +40,32 @@ describe("parseSize", () => {
   });
 });
 
-const fakeFs = (tree: Record<string, number | string[]>): StatFs => ({
+/** A `stat`/`readdir` failure that is not a missing path. */
+const denied = (path: string): NodeJS.ErrnoException =>
+  Object.assign(new Error(`EACCES: permission denied, ${path}`), {
+    code: "EACCES",
+  });
+
+const missing = (path: string): NodeJS.ErrnoException =>
+  Object.assign(new Error(`ENOENT: no such file or directory, ${path}`), {
+    code: "ENOENT",
+  });
+
+const fakeFs = (
+  tree: Record<string, number | string[]>,
+  unreadable: string[] = [],
+): StatFs => ({
   readdir: (dir): string[] => {
+    if (unreadable.includes(dir)) throw denied(dir);
     const entry = tree[dir];
     return Array.isArray(entry) ? entry : [];
   },
   stat: (path): { size: number; isDirectory: () => boolean } => {
+    if (unreadable.includes(path) && tree[path] === undefined) {
+      throw denied(path);
+    }
     const entry = tree[path];
-    if (entry === undefined) throw new Error(`ENOENT: ${path}`);
+    if (entry === undefined) throw missing(path);
     return {
       size: Array.isArray(entry) ? 0 : entry,
       isDirectory: () => Array.isArray(entry),
@@ -58,7 +76,7 @@ const fakeFs = (tree: Record<string, number | string[]>): StatFs => ({
 describe("measurePaths", () => {
   it("sums a flat directory", () => {
     const fs = fakeFs({ "/t": ["a", "b"], "/t/a": 100, "/t/b": 200 });
-    expect(measurePaths(["/t"], fs)).toBe(300);
+    expect(measurePaths(["/t"], fs)).toEqual({ bytes: 300, unmeasured: [] });
   });
 
   it("recurses into subdirectories", () => {
@@ -67,19 +85,50 @@ describe("measurePaths", () => {
       "/t/deep": ["f"],
       "/t/deep/f": 42,
     });
-    expect(measurePaths(["/t"], fs)).toBe(42);
+    expect(measurePaths(["/t"], fs).bytes).toBe(42);
   });
 
   // A path that does not exist is normal: a workspace may never have been
   // built, and a missing target dir is not an error.
-  it("treats a missing path as zero", () => {
-    expect(measurePaths(["/nope"], fakeFs({}))).toBe(0);
+  it("treats a missing path as zero and does not report it", () => {
+    expect(measurePaths(["/nope"], fakeFs({}))).toEqual({
+      bytes: 0,
+      unmeasured: [],
+    });
   });
 
   // Negation entries describe what to exclude from the archive; they are not
   // paths to walk, and treating them as such would throw ENOENT on "!...".
   it("skips negation globs", () => {
     const fs = fakeFs({ "/t": ["a"], "/t/a": 10 });
-    expect(measurePaths(["/t", "!/t/*/incremental"], fs)).toBe(10);
+    expect(measurePaths(["/t", "!/t/**/incremental/**"], fs).bytes).toBe(10);
+  });
+
+  // `buildPaths` emits `<target>/**`, which no `stat` can resolve. Walking
+  // the literal prefix measures the same tree.
+  it("walks the literal root of a glob pattern", () => {
+    const fs = fakeFs({ "/t": ["a", "b"], "/t/a": 100, "/t/b": 200 });
+    expect(measurePaths(["/t/**"], fs).bytes).toBe(300);
+  });
+
+  // The bug this guards: swallowing every stat error, not only ENOENT, lets a
+  // permission failure under-report a layer — and an under-reported layer
+  // passes a budget check it should have failed.
+  it("reports a file it could not stat rather than under-counting", () => {
+    const fs = fakeFs({ "/t": ["a", "b"], "/t/a": 100 }, ["/t/b"]);
+    expect(measurePaths(["/t"], fs)).toEqual({
+      bytes: 100,
+      unmeasured: ["/t/b"],
+    });
+  });
+
+  it("reports a directory it could not list", () => {
+    const fs = fakeFs({ "/t": ["sub"], "/t/sub": ["f"], "/t/sub/f": 5 }, [
+      "/t/sub",
+    ]);
+    expect(measurePaths(["/t"], fs)).toEqual({
+      bytes: 0,
+      unmeasured: ["/t/sub"],
+    });
   });
 });

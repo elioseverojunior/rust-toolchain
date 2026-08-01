@@ -8,6 +8,7 @@ import {
   ToolchainSpecBuilder,
   type ToolchainSpec,
 } from "@rust-toolchain/builder";
+import type { MeasuredPaths } from "@rust-toolchain/cache/budget";
 import type { CacheClient } from "@rust-toolchain/cache/client";
 import {
   buildCacheOutputs,
@@ -18,6 +19,7 @@ import type { CacheLayerId } from "@rust-toolchain/cache/layers";
 import {
   restoreLayers,
   saveLayers,
+  type CachePhaseState,
   type LayerPlan,
   type RestoredLayer,
   type SavedLayer,
@@ -38,6 +40,7 @@ import {
   type RustcVersionInfo,
   type ToolchainTomlConfig,
 } from "@rust-toolchain/core";
+import { describeError } from "@rust-toolchain/errors";
 import { readBooleanInput } from "@rust-toolchain/inputs";
 import {
   buildActionOutputs,
@@ -292,6 +295,12 @@ function bootstrapRustup(
  * for toolchains whose bundled cargo has known network bugs.
  *
  * Every one is skipped when the workflow already set the variable itself.
+ *
+ * Every name exported here must also appear in `EXCLUDED` in
+ * `src/cache/env.ts`. `core.exportVariable` writes to `GITHUB_ENV`, so a
+ * second invocation of this action in the same job reads these back as if the
+ * caller had set them — and a `build` key that moves between the first and
+ * second invocation is a key nothing will ever restore.
  */
 function applyCargoDefaults(deps: ActionDeps, release: string): void {
   const setIfUnset = (name: string, value: string): void => {
@@ -408,10 +417,15 @@ async function resolveCacheLifecycle(
     warning: deps.core.warning,
   });
 
-  deps.core.saveState(
-    "cache",
-    JSON.stringify({ plans, restored, budget: cacheRequest.budget }),
-  );
+  // Typed as `CachePhaseState` rather than left to inference: `runPost` casts
+  // the parsed JSON to the same interface, so the two halves of the handoff
+  // are checked against one declaration instead of agreeing by coincidence.
+  const state: CachePhaseState = {
+    plans,
+    restored,
+    budget: cacheRequest.budget,
+  };
+  deps.core.saveState("cache", JSON.stringify(state));
 
   return {
     cache: foldRestoredResults(cache, restored),
@@ -427,8 +441,8 @@ async function resolveCacheLifecycle(
 export async function run(deps: ActionDeps): Promise<void> {
   try {
     // First, deliberately. Every cache input is validated against nothing but
-    // itself, so a typo here must fail before the rustup bootstrap and the
-    // toolchain install it would otherwise throw away.
+    // itself, so a typo here must fail before the
+    // rustup bootstrap and the toolchain install it would otherwise throw away.
     //
     // Narrowed to what that module actually needs, rather than handed the whole
     // of `deps`: taking `ActionDeps` there would make it import this file for
@@ -452,12 +466,7 @@ export async function run(deps: ActionDeps): Promise<void> {
 
     // Unconditional, and set here rather than inside resolveCacheLifecycle:
     // action.yml's `post:` runs on every successful job, regardless of
-    // whether caching is enabled. GitHub only sets STATE_isPost once this
-    // line runs, and src/index.ts's dispatch reads exactly that env var to
-    // decide it is the post phase. Gating this on caching would leave every
-    // caching-disabled job's post invocation unable to tell — it would fall
-    // through to running the whole main phase a second time instead of
-    // calling `runPost`, which already no-ops correctly on empty state.
+    // whether caching is enabled.
     deps.core.saveState("isPost", "true");
 
     const config = resolveConfiguration(deps);
@@ -496,9 +505,7 @@ export async function run(deps: ActionDeps): Promise<void> {
       } catch (error) {
         deps.core.info(
           `Could not add every component implied by the "${spec.profile}" ` +
-            `profile, continuing: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            `profile, continuing: ${describeError(error)}`,
         );
       }
     }
@@ -510,9 +517,7 @@ export async function run(deps: ActionDeps): Promise<void> {
       rustupOrThrow(deps, spec.toRustupDefaultArgs(), env);
     } catch (error) {
       deps.core.info(
-        `rustup default did not succeed, continuing: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `rustup default did not succeed, continuing: ${describeError(error)}`,
       );
     }
 
@@ -566,7 +571,7 @@ export async function run(deps: ActionDeps): Promise<void> {
       deps.core.setOutput(name, value);
     }
   } catch (error) {
-    deps.core.setFailed(error instanceof Error ? error.message : String(error));
+    deps.core.setFailed(describeError(error));
   }
 }
 
@@ -574,7 +579,7 @@ export async function run(deps: ActionDeps): Promise<void> {
 export interface PostDeps {
   cache: CacheClient;
   core: Pick<ActionDeps["core"], "getState" | "info" | "warning" | "summary">;
-  measure: (paths: string[]) => number;
+  measure: (paths: string[]) => MeasuredPaths;
 }
 
 /**
@@ -594,9 +599,7 @@ async function writeSummarySafely(
     await core.summary.addRaw(renderSummary(restored, saved)).write();
   } catch (error) {
     core.warning(
-      `could not write the job summary, continuing: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `could not write the job summary, continuing: ${describeError(error)}`,
     );
   }
 }
@@ -616,11 +619,9 @@ export async function runPost(deps: PostDeps): Promise<void> {
     const raw = deps.core.getState("cache");
     if (!raw) return;
 
-    const { plans, restored, budget } = JSON.parse(raw) as {
-      plans: LayerPlan[];
-      restored: RestoredLayer[];
-      budget: number;
-    };
+    // Cast to the same interface the main phase serialised, so a rename on
+    // either side is a compile error rather than a silent `undefined`.
+    const { plans, restored, budget } = JSON.parse(raw) as CachePhaseState;
 
     const saved = await saveLayers({
       client: deps.cache,
@@ -634,9 +635,7 @@ export async function runPost(deps: PostDeps): Promise<void> {
     await writeSummarySafely(deps.core, restored, saved);
   } catch (error) {
     deps.core.warning(
-      `cache post-processing failed, continuing: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `cache post-processing failed, continuing: ${describeError(error)}`,
     );
   }
 }
