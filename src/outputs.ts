@@ -5,6 +5,7 @@
 import type { ToolchainSpec } from "@rust-toolchain/builder";
 import type { CacheLayerKey } from "@rust-toolchain/cache/keys";
 import type { CacheLayerId } from "@rust-toolchain/cache/layers";
+import type { LayerResult } from "@rust-toolchain/cache/lifecycle";
 import type { ToolchainInputs } from "@rust-toolchain/config";
 import type { ToolchainTomlConfig } from "@rust-toolchain/core";
 
@@ -59,6 +60,21 @@ export interface TomlProvenance {
 }
 
 /**
+ * A layer's key and restore ladder, plus what actually happened to it.
+ *
+ * `result` and `bytes` are optional rather than required: Phase A emitted keys
+ * with no lifecycle behind them, and a consumer reading last week's output —
+ * before restore/save existed — must not break because these fields are now
+ * mandatory.
+ */
+export interface CacheLayerOutput extends CacheLayerKey {
+  /** Absent until the layer has been restored — Phase A emitted keys only. */
+  result?: LayerResult;
+  /** Bytes measured for the save decision; `0` when nothing was measured. */
+  bytes?: number;
+}
+
+/**
  * The cache keys this action derived, per layer.
  *
  * `layers` is partial because `cache-layers` selects which exist; a consumer
@@ -67,7 +83,7 @@ export interface TomlProvenance {
  */
 export interface CacheOutputs {
   enabled: boolean;
-  layers: Partial<Record<CacheLayerId, CacheLayerKey>>;
+  layers: Partial<Record<CacheLayerId, CacheLayerOutput>>;
 }
 
 /**
@@ -87,6 +103,7 @@ export interface ActionOutputs {
   name: string;
   cachekey: string;
   "cachekey-full": string;
+  "cache-hit": boolean;
   cache: CacheOutputs;
   inputs: InputProvenance;
   toml: TomlProvenance;
@@ -106,6 +123,16 @@ export interface ActionOutputsArgs {
   specCacheKey: string;
   /** Per-layer cache keys, or a disabled marker when `cache` is false. */
   cache: CacheOutputs;
+  /**
+   * `true` only when every enabled layer matched its exact key.
+   *
+   * A partial match through a restore key counts as false: the layer will be
+   * saved again under the new key, so it was not a full hit. Optional and
+   * defaulting to `false`: the lifecycle that computes it is orchestrated
+   * elsewhere, so a caller with nothing to report yet does not have to say so
+   * explicitly.
+   */
+  cacheHit?: boolean;
 }
 
 /**
@@ -135,6 +162,7 @@ export function buildActionOutputs(args: ActionOutputsArgs): ActionOutputs {
     name: spec.channel,
     cachekey: args.cacheKey,
     "cachekey-full": args.specCacheKey,
+    "cache-hit": args.cacheHit ?? false,
     cache: args.cache,
     inputs: {
       toolchain: inputs.toolchain ?? "",
@@ -174,6 +202,7 @@ export function toOutputEntries(outputs: ActionOutputs): [string, string][] {
     ["components", JSON.stringify(outputs.components)],
     ["profile", outputs.profile],
     ["set-rustup-toolchain", String(outputs["set-rustup-toolchain"])],
+    ["cache-hit", String(outputs["cache-hit"])],
     ["cache", JSON.stringify(outputs.cache)],
     ["json", JSON.stringify(outputs)],
   ];

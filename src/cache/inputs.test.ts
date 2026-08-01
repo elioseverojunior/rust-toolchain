@@ -119,6 +119,71 @@ describe("readCacheRequest", () => {
       ),
     ).toThrow(/`build` cache key/);
   });
+
+  describe("cache-workspaces and cache-budget", () => {
+    it("defaults to the whole workspace root mapped to target, and a 0 budget", () => {
+      const request = readCacheRequest(enabled());
+      expect(request?.workspaces).toEqual([
+        { manifestDir: process.cwd(), targetDir: `${process.cwd()}/target` },
+      ]);
+    });
+
+    it("defaults cache-budget to disabled when unset", () => {
+      const request = readCacheRequest(enabled());
+      expect(request?.budget).toBe(0);
+    });
+
+    it("resolves cache-workspaces against GITHUB_WORKSPACE", () => {
+      const s: CacheInputSource = {
+        getInput: (name) =>
+          ({ cache: "true", "cache-key-hash": "a1b2c3" })[name] ?? "",
+        env: {
+          RUNNER_OS: "Linux",
+          RUNNER_ARCH: "X64",
+          GITHUB_WORKSPACE: "/home/runner/work/repo/repo",
+        },
+      };
+      const request = readCacheRequest(s);
+      expect(request?.workspaces).toEqual([
+        {
+          manifestDir: "/home/runner/work/repo/repo",
+          targetDir: "/home/runner/work/repo/repo/target",
+        },
+      ]);
+    });
+
+    it("honours an explicit multi-workspace cache-workspaces value", () => {
+      const request = readCacheRequest(
+        enabled({
+          "cache-workspaces":
+            "crates/a -> crates/a/target\ncrates/b -> crates/b/target",
+        }),
+      );
+      expect(request?.workspaces).toEqual([
+        {
+          manifestDir: `${process.cwd()}/crates/a`,
+          targetDir: `${process.cwd()}/crates/a/target`,
+        },
+        {
+          manifestDir: `${process.cwd()}/crates/b`,
+          targetDir: `${process.cwd()}/crates/b/target`,
+        },
+      ]);
+    });
+
+    it("parses an explicit cache-budget into bytes", () => {
+      const request = readCacheRequest(enabled({ "cache-budget": "2GB" }));
+      expect(request?.budget).toBe(2 * 1024 ** 3);
+    });
+
+    // An unparseable size must fail loudly rather than silently disabling the
+    // budget check, which is how an oversized entry evicts its neighbours.
+    it("throws when cache-budget does not parse", () => {
+      expect(() =>
+        readCacheRequest(enabled({ "cache-budget": "not-a-size" })),
+      ).toThrow("`cache-budget` must be a byte count");
+    });
+  });
 });
 
 describe("buildCacheOutputs", () => {

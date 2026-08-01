@@ -41,6 +41,7 @@ const args = (
   cacheKey: "20250915abcd",
   specCacheKey: "20250915abcd-1f2e3d4c",
   cache: { enabled: false, layers: {} },
+  cacheHit: false,
   ...overrides,
 });
 
@@ -124,6 +125,22 @@ describe("buildActionOutputs", () => {
     const outputs = buildActionOutputs(args());
     expect(outputs.cachekey).toBe("20250915abcd");
     expect(outputs["cachekey-full"]).toBe("20250915abcd-1f2e3d4c");
+  });
+
+  describe("cache-hit", () => {
+    it("reports true when every enabled layer matched exactly", () => {
+      expect(buildActionOutputs(args({ cacheHit: true }))["cache-hit"]).toBe(
+        true,
+      );
+    });
+
+    // A partial match through a restore key still counts as false: the layer
+    // will be saved again under the new key, so it was not a full hit.
+    it("reports false when a layer missed or only partially matched", () => {
+      expect(buildActionOutputs(args({ cacheHit: false }))["cache-hit"]).toBe(
+        false,
+      );
+    });
   });
 
   describe("inputs provenance", () => {
@@ -251,6 +268,11 @@ describe("toOutputEntries", () => {
     ).toBe("false");
   });
 
+  it("serialises cache-hit as a string boolean", () => {
+    expect(entries({ cacheHit: true })["cache-hit"]).toBe("true");
+    expect(entries({ cacheHit: false })["cache-hit"]).toBe("false");
+  });
+
   it("emits scalars unchanged", () => {
     const flat = entries({
       spec: spec({ channel: "1.90.0", profile: "minimal" }),
@@ -287,6 +309,7 @@ describe("toOutputEntries", () => {
       "name",
       "cachekey",
       "cachekey-full",
+      "cache-hit",
       "cache",
       "inputs",
       "toml",
@@ -305,6 +328,7 @@ describe("toOutputEntries", () => {
       "components",
       "profile",
       "set-rustup-toolchain",
+      "cache-hit",
       "cache",
       "json",
     ]);

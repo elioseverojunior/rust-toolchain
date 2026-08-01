@@ -120,6 +120,36 @@ inputs:
     required: false
     default: "registry,build"
 
+  cache-workspaces:
+    description: >
+      Cargo workspaces to cache build artifacts for, one
+      `<manifest-dir> -> <target-dir>` mapping per line. Both sides resolve
+      against the workspace root, and a mapping resolving outside it is
+      rejected. Matches the syntax Swatinem/rust-cache uses, so an existing
+      value transfers unchanged.
+    required: false
+    default: ". -> target"
+
+  cache-budget:
+    description: >
+      Largest cache entry to save per layer, as a byte count with an optional
+      K, M, G or T suffix; binary rather than decimal. A layer exceeding it is
+      not saved, and the step warns with the measured size. Set to 0 to
+      disable. Defaults to 2GB because an oversized entry does not degrade its
+      own hit rate — it evicts other workflows' caches out of the repository's
+      shared budget.
+    required: false
+    default: "2GB"
+
+  cache-on-failure:
+    description: >
+      Whether to save the cache when the job failed (default false). A failed
+      job usually has a partial or poisoned `target/`, so saving it by default
+      would serve those artifacts to the next run. Turn it on for a long build
+      that fails late and would otherwise restart from nothing.
+    required: false
+    default: "false"
+
 outputs:
   cachekey:
     description: >
@@ -141,6 +171,12 @@ outputs:
       map from layer name to `{ key, restoreKeys }`. Empty when `cache` is
       false. Read it with `fromJSON()` and feed the parts straight into
       `actions/cache`.
+
+  cache-hit:
+    description: >
+      `true` only when every enabled cache layer matched its exact key. A
+      partial match through a restore key counts as false, because the layer
+      will be saved again under the new key.
 
   name:
     description: >
@@ -201,3 +237,5 @@ outputs:
 runs:
   using: "node24"
   main: "dist/index.js"
+  post: "dist/index.js"
+  post-if: "success() || env.RUST_TOOLCHAIN_CACHE_ON_FAILURE == 'true'"

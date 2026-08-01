@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+import { parseSize } from "@rust-toolchain/cache/budget";
 import { hashBuildEnv } from "@rust-toolchain/cache/env";
 import {
   buildLayerKey,
@@ -13,6 +14,7 @@ import {
   parseCacheLayers,
   type CacheLayerId,
 } from "@rust-toolchain/cache/layers";
+import { parseWorkspaces, type Workspace } from "@rust-toolchain/cache/paths";
 import { generateSpecCacheKey } from "@rust-toolchain/core";
 import { readBooleanInput } from "@rust-toolchain/inputs";
 import type { CacheOutputs } from "@rust-toolchain/outputs";
@@ -93,6 +95,8 @@ type PendingCacheKeyContext = Omit<CacheKeyContext, "specCacheKey">;
 export interface CacheRequest {
   layers: CacheLayerId[];
   context: PendingCacheKeyContext;
+  workspaces: Workspace[];
+  budget: number;
 }
 
 /**
@@ -167,6 +171,12 @@ export function readCacheRequest(
     envHash: hashBuildEnv(source.env),
   };
 
+  const workspaces = parseWorkspaces(
+    source.getInput("cache-workspaces").trim() || ". -> target",
+    (source.env.GITHUB_WORKSPACE ?? "").trim() || ".",
+  );
+  const budget = parseSize(source.getInput("cache-budget"));
+
   // Checked against a same-width stand-in for the digest, so the build layer —
   // the longer of the two — is measured as it will actually be derived.
   for (const layer of layers) {
@@ -177,7 +187,7 @@ export function readCacheRequest(
     assertKeyIsUsable(layer, key, suffix, lockHash);
   }
 
-  return { layers, context };
+  return { layers, context, workspaces, budget };
 }
 
 /**
