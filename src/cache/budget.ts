@@ -75,7 +75,9 @@ export interface MeasuredPaths {
   bytes: number;
   /**
    * Paths whose size could not be read — a permission failure, a vanished
-   * mount, a broken symlink target.
+   * mount, an I/O error. Not a broken symlink: `statSync` reports that as
+   * `ENOENT`, which `isMissing` classifies as an ordinary absent path and
+   * does not report here.
    *
    * Reported rather than swallowed because the two failure modes are not
    * equivalent: a missing path contributes a true zero, while an unreadable

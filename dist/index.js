@@ -61664,7 +61664,8 @@ var EXCLUDED = new Set([
   "RUSTUP_TOOLCHAIN",
   "CARGO_INCREMENTAL",
   "CARGO_REGISTRIES_CRATES_IO_PROTOCOL",
-  "CARGO_HTTP_MULTIPLEXING"
+  "CARGO_HTTP_MULTIPLEXING",
+  "RUST_TOOLCHAIN_CACHE_ON_FAILURE"
 ]);
 function hashBuildEnv(env) {
   const canonical = Object.entries(env).filter(([name, value]) => {

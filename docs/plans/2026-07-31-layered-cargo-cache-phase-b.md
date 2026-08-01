@@ -6,6 +6,14 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # Layered Cargo Cache — Phase B Implementation Plan
 
+**Superseded in parts — do not copy code out of this document.** It is kept as the point-in-time plan Phase B was
+built from, not as a description of what shipped. In particular the `buildPaths` exclusion globs here
+(`!<target>/*/incremental` and friends, in four places) exclude nothing: `@actions/cache` runs `tar --files-from`
+without `--no-recursion`, so any directory left in the manifest is re-expanded wholesale. The end-to-end testing story
+below is also out of date — a second invocation in the same job cannot observe its own post step's save. See
+[the Phase B design](../design/2026-07-31-layered-cargo-cache-phase-b.md) → decision 7 and Layers for the shipped
+pattern and the reasoning behind it.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

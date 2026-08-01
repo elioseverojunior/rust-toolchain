@@ -75,7 +75,7 @@ Refer to the [rustup book](https://rust-lang.github.io/rustup/concepts/index.htm
 ## Architecture
 
 - **Entrypoint (action)**: `src/index.ts` dispatches on `STATE_isPost`, wiring real dependencies into either `run()` (main phase) or `runPost()` (post phase) from `src/action.ts`. Build uses `@actions/core` for inputs, outputs, state and failures.
-- **Library API**: `src/lib.ts` is the barrel (re-exports action, builder, config, core, inputs, outputs, cache/budget, cache/client, cache/env, cache/inputs, cache/keys, cache/layers, cache/lifecycle, cache/paths and cache/summary, never `index.ts`); consumers may also import any of those fifteen modules directly.
+- **Library API**: `src/lib.ts` is the barrel (re-exports action, builder, config, core, errors, inputs, outputs, cache/budget, cache/client, cache/env, cache/inputs, cache/keys, cache/layers, cache/lifecycle, cache/paths and cache/summary, never `index.ts`); consumers may also import any of those sixteen modules directly.
 - **Path aliases** (`tsconfig.json` `paths`): library source imports itself as `@rust-toolchain/<module>` — the same specifier a consumer maps, so internal imports resolve in their project too. `@/<module>` is the short form and is **tests only**; using it in library source silently breaks source consumption.
 - **Build**: `bun run build:action`
 - **Source layout**:
@@ -94,6 +94,7 @@ Refer to the [rustup book](https://rust-lang.github.io/rustup/concepts/index.htm
   - `src/cache/client.ts` — `CacheClient`, the restore/save port. Its only real implementation wraps `@actions/cache` and lives in `src/index.ts`
   - `src/cache/lifecycle.ts` — `restoreLayers` restores every enabled layer concurrently, downgrading any failure to a miss; `saveLayers`/`saveLayer` decide whether each layer is worth saving (skip on an exact hit, skip when its size can't be measured, skip over budget) and save the rest concurrently, each independently caught
   - `src/cache/summary.ts` — `renderSummary` renders the per-layer restore/save outcome as the job summary's Markdown table — the only place a per-layer result is visible, since `cache-hit` is a single all-layers boolean
+  - `src/errors.ts` — `describeError` renders a caught `unknown` as a message; extracted because the `instanceof Error` ternary was written out nine times across `action.ts`, `cache/lifecycle.ts` and `core.ts`
   - `src/inputs.ts` — `readBooleanInput` and the `InputReader` port it takes; shared by `action.ts` and `cache/inputs.ts`, so it belongs to neither
   - `src/lib.ts` — the library barrel. Re-exports every other library module and deliberately **not** `index.ts`, whose import executes the action
   - `src/*.test.ts` — co-located tests; `tsconfig.json` includes `**/*.ts`, so `bun run typecheck` type-checks them too

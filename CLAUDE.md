@@ -159,12 +159,16 @@ subsections.
 - **Exclusions from a saved layer are negation globs, never deletion, and the
   glob set must stay files-only.** `buildPaths` (`src/cache/paths.ts`) emits
   `<target>/**`, `!<target>/**/incremental/**`, `!<target>/**/examples/**`,
-  `!<target>/` and `!<target>/**/`. The last two look redundant and are not:
+  `!<target>/` and `!<target>/**/`. **`!<target>/**/` is load-bearing**:
   `@actions/cache` runs `tar --files-from <manifest>` with no
   `--no-recursion`, so any directory left in the manifest is expanded wholesale
-  and re-includes everything the negations removed. Deleting either directory
-  negation silently disables every exclusion above it, and no unit test of the
-  glob layer alone would notice — verify at the tar layer. The trade-off is
+  and re-includes everything the negations removed, and a trailing `/` is what
+  matches directories only. Delete it and every exclusion above it silently
+  stops working, with no unit test of the glob layer alone noticing — verify at
+  the tar layer. `!<target>/` is redundant belt-and-braces: dropping it changes
+  the resolved set not at all, since the globstar already matches the root
+  through its own trailing slash. Keep it, but do not mistake the pair for two
+  independent guards. The trade-off is
   that the archive carries no directory entries, so empty directories and
   directory permissions/mtimes are not preserved; cargo does not depend on
   either. `registryPaths` keeps naming bare directories on purpose: it has

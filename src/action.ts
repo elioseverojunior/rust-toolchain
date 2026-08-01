@@ -297,10 +297,16 @@ function bootstrapRustup(
  * Every one is skipped when the workflow already set the variable itself.
  *
  * Every name exported here must also appear in `EXCLUDED` in
- * `src/cache/env.ts`. `core.exportVariable` writes to `GITHUB_ENV`, so a
- * second invocation of this action in the same job reads these back as if the
- * caller had set them — and a `build` key that moves between the first and
- * second invocation is a key nothing will ever restore.
+ * `src/cache/env.ts` — as must every name exported anywhere else in this file,
+ * `run`'s `RUST_TOOLCHAIN_CACHE_ON_FAILURE` and `RUSTUP_TOOLCHAIN` included.
+ * The rule is about `core.exportVariable`, not about this function:
+ * `RUST_TOOLCHAIN_CACHE_ON_FAILURE` leaked into the digest precisely because
+ * an earlier version of this comment scoped it here.
+ *
+ * `core.exportVariable` writes to `GITHUB_ENV`, so a second invocation of this
+ * action in the same job reads these back as if the caller had set them — and
+ * a `build` key that moves between the first and second invocation is a key
+ * nothing will ever restore.
  */
 function applyCargoDefaults(deps: ActionDeps, release: string): void {
   const setIfUnset = (name: string, value: string): void => {

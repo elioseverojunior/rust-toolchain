@@ -108,17 +108,28 @@ export function registryPaths(cargoHome: string): string[] {
  * produces `<target>/<triple>/debug/incremental`, which a single-level
  * pattern cannot reach.
  *
- * The two trailing directory negations are the ones that make the whole set
- * work, and removing them silently disables everything above. `@actions/cache`
- * resolves these patterns with `implicitDescendants: false`, writes the matches
- * to a manifest, then runs `tar --files-from <manifest>` — with no
+ * The last pattern below — the globstar with a trailing slash — is the one
+ * that makes the whole set work, and removing it silently disables everything
+ * above. (It cannot be written literally in this comment: the sequence that
+ * ends it also ends a block comment.) `@actions/cache` resolves these
+ * patterns with `implicitDescendants: false`, writes the matches to a
+ * manifest, then runs `tar --files-from <manifest>` — with no
  * `--no-recursion`. Any directory left in that manifest is therefore expanded
  * wholesale by tar, re-including every path the negations just removed, and
- * duplicating each file once per listed ancestor. Excluding directories leaves
- * a files-only manifest, which is the only shape in which a negation survives
- * to the archive. (This is also why the pre-fix `[<target>, !…]` form excluded
+ * duplicating each file once per listed ancestor. A trailing `/` matches
+ * directories only, so that one pattern strips every directory and leaves a
+ * files-only manifest — the only shape in which a negation survives to the
+ * archive. (This is also why the pre-fix `[<target>, !…]` form excluded
  * nothing: `implicitDescendants: false` made `<target>` match one entry — the
  * directory — and tar then archived the whole tree from it.)
+ *
+ * The other directory negation, `!${targetDir}/`, is belt-and-braces and is
+ * measurably redundant: dropping it changes the resolved set not at all,
+ * because the globstar one already matches the root directory through its own
+ * trailing slash. Dropping the globstar one instead puts `<target>/debug`
+ * straight back into the manifest and the bug returns. Keep both — the
+ * explicit root exclusion costs one line and does not lean on that globstar
+ * behaviour holding — but do not read the pair as two independent guards.
  *
  * The cost is that the archive carries no directory entries, so empty
  * directories and directory permissions and mtimes are not preserved.

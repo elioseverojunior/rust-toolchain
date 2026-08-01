@@ -477,7 +477,10 @@ jobs:
 
           [[ -d e2e-probe/target ]] \
             || { echo "::error::the build layer restored no target directory"; exit 1; }
-          find e2e-probe/target -type f | head -20
+          # `|| true` because `set -o pipefail` is on: once the tree is large
+          # enough, `head` closes the pipe first, `find` dies on SIGPIPE, and
+          # the step fails on a diagnostic that was never load-bearing.
+          find e2e-probe/target -type f | head -20 || true
 
       # The assertion the whole exclusion mechanism exists for, and the one
       # that would have caught its being a no-op. Both directories provably

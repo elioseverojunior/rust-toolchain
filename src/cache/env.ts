@@ -31,30 +31,47 @@ const BUILD_ENV_PREFIXES = [
  * `CARGO_TERM_COLOR` is presentation. `RUSTUP_TOOLCHAIN` is already inside
  * `cachekey-full`, and hashing it twice buys nothing.
  *
- * The second is this action's own output read back as its input, and it must
- * stay in sync with `applyCargoDefaults` in `src/action.ts` — every variable
- * that function exports belongs here. `core.exportVariable` writes to
- * `GITHUB_ENV`, so a second invocation of the action in the same job sees
- * everything the first one set. Hashing those would make the `build` key
- * depend on how many times the action had already run in the job: measured at
- * `e3b0c442` on a first invocation and `dd704211` on a second, which is a
+ * The second is this action's own output read back as its input.
+ * `core.exportVariable` writes to `GITHUB_ENV`, so a second invocation of the
+ * action in the same job sees everything the first one set, indistinguishable
+ * from values the caller supplied. Hashing those would make the `build` key
+ * depend on how many times the action had already run in the job — measured at
+ * `e3b0c442` on a first invocation and `dd704211` on a second — which is a
  * guaranteed miss on a key nothing will ever restore. The E2E job invokes the
  * action twice on purpose, so this is a configuration that exists rather than
  * one that might.
  *
- * Adding a `setIfUnset` call in `applyCargoDefaults` without adding its name
- * here silently reintroduces that drift, and no test of `applyCargoDefaults`
- * alone would notice.
+ * **The invariant is: every variable this action passes to
+ * `core.exportVariable` must appear below.** Not "every variable
+ * `applyCargoDefaults` sets" — that was the rule as first written, and it was
+ * the example rather than the category. `RUST_TOOLCHAIN_CACHE_ON_FAILURE` is
+ * exported from `run` itself, matches the `RUST` prefix, and was missed for
+ * precisely that reason, reproducing the identical drift the `CARGO_*` entries
+ * had just been added to stop.
+ *
+ * There are two call sites in `src/action.ts`, and a reader checking this list
+ * against reality should grep both:
+ *
+ * - `applyCargoDefaults` — `CARGO_INCREMENTAL`, `CARGO_TERM_COLOR`,
+ *   `CARGO_REGISTRIES_CRATES_IO_PROTOCOL`, `CARGO_HTTP_MULTIPLEXING`
+ * - `run` — `RUST_TOOLCHAIN_CACHE_ON_FAILURE`, `RUSTUP_TOOLCHAIN`
+ *
+ * `src/cache/env.test.ts`'s combined-set test asserts the digest is unchanged
+ * with all of them present at once, which is the check that catches a missed
+ * name: each variable in isolation can pass while the set as a whole drifts,
+ * since one leak is enough to move the digest.
  */
 const EXCLUDED = new Set([
   "CARGO_HOME",
   "RUSTUP_HOME",
   "CARGO_TERM_COLOR",
   "RUSTUP_TOOLCHAIN",
-  // Keep in sync with applyCargoDefaults (src/action.ts).
+  // Everything below is exported by this action itself — see above. Keep in
+  // sync with every `core.exportVariable` call in src/action.ts.
   "CARGO_INCREMENTAL",
   "CARGO_REGISTRIES_CRATES_IO_PROTOCOL",
   "CARGO_HTTP_MULTIPLEXING",
+  "RUST_TOOLCHAIN_CACHE_ON_FAILURE",
 ]);
 
 /**
