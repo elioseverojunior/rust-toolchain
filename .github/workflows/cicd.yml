@@ -331,8 +331,11 @@ jobs:
           [dependencies]
           cfg-if = "1"
           EOF
-          echo 'fn main() { println!("{}", cfg_if::cfg_if! { if #[cfg(unix)] { "unix" } else { "other" } }); }' \
-            > e2e-probe/src/main.rs
+          # Deliberately does not reference cfg-if. `cfg_if!` is an item macro,
+          # not an expression one, so the obvious one-liner does not compile —
+          # and cargo builds a declared dependency whether or not it is used,
+          # which is all this needs it for.
+          echo 'fn main() { println!("e2e probe"); }' > e2e-probe/src/main.rs
           echo 'fn main() { println!("hello"); }' > e2e-probe/examples/hello.rs
 
           cargo build --manifest-path e2e-probe/Cargo.toml --bins --examples
