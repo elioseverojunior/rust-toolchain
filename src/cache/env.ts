@@ -21,18 +21,40 @@ const BUILD_ENV_PREFIXES = [
 ] as const;
 
 /**
- * Matches a prefix but describes where or how, not what gets built.
+ * Matches a prefix but must not reach the digest.
  *
- * `CARGO_HOME` and `RUSTUP_HOME` are absolute paths that differ per machine on
- * self-hosted runners, so hashing them would churn the key without changing an
- * artifact. `CARGO_TERM_COLOR` is presentation. `RUSTUP_TOOLCHAIN` is already
- * inside `cachekey-full`, and hashing it twice buys nothing.
+ * Two groups, for two different reasons.
+ *
+ * The first describes where or how rather than what gets built. `CARGO_HOME`
+ * and `RUSTUP_HOME` are absolute paths that differ per machine on self-hosted
+ * runners, so hashing them would churn the key without changing an artifact.
+ * `CARGO_TERM_COLOR` is presentation. `RUSTUP_TOOLCHAIN` is already inside
+ * `cachekey-full`, and hashing it twice buys nothing.
+ *
+ * The second is this action's own output read back as its input, and it must
+ * stay in sync with `applyCargoDefaults` in `src/action.ts` — every variable
+ * that function exports belongs here. `core.exportVariable` writes to
+ * `GITHUB_ENV`, so a second invocation of the action in the same job sees
+ * everything the first one set. Hashing those would make the `build` key
+ * depend on how many times the action had already run in the job: measured at
+ * `e3b0c442` on a first invocation and `dd704211` on a second, which is a
+ * guaranteed miss on a key nothing will ever restore. The E2E job invokes the
+ * action twice on purpose, so this is a configuration that exists rather than
+ * one that might.
+ *
+ * Adding a `setIfUnset` call in `applyCargoDefaults` without adding its name
+ * here silently reintroduces that drift, and no test of `applyCargoDefaults`
+ * alone would notice.
  */
 const EXCLUDED = new Set([
   "CARGO_HOME",
   "RUSTUP_HOME",
   "CARGO_TERM_COLOR",
   "RUSTUP_TOOLCHAIN",
+  // Keep in sync with applyCargoDefaults (src/action.ts).
+  "CARGO_INCREMENTAL",
+  "CARGO_REGISTRIES_CRATES_IO_PROTOCOL",
+  "CARGO_HTTP_MULTIPLEXING",
 ]);
 
 /**

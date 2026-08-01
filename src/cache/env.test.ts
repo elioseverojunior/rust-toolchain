@@ -60,6 +60,34 @@ describe("hashBuildEnv", () => {
     expect(hashBuildEnv({ [name]: "/some/path" })).toBe(hashBuildEnv({}));
   });
 
+  // `applyCargoDefaults` exports these through `core.exportVariable`, which
+  // writes to GITHUB_ENV — so a second invocation of this action in the same
+  // job reads back what the first one wrote. Hashing them would make the
+  // build key depend on how many times the action had already run, and the
+  // E2E job invokes it twice by design.
+  it.each([
+    ["CARGO_INCREMENTAL", "0"],
+    ["CARGO_REGISTRIES_CRATES_IO_PROTOCOL", "sparse"],
+    ["CARGO_HTTP_MULTIPLEXING", "false"],
+  ])("excludes %s, which the action exports itself", (name, value) => {
+    expect(hashBuildEnv({ [name]: value })).toBe(hashBuildEnv({}));
+  });
+
+  // The whole set at once, which is what a second same-job invocation
+  // actually sees: measured before this fix as e3b0c442 then dd704211.
+  it("is unchanged by everything the action exports into GITHUB_ENV", () => {
+    expect(
+      hashBuildEnv({
+        RUSTFLAGS: "-C target-cpu=native",
+        CARGO_INCREMENTAL: "0",
+        CARGO_TERM_COLOR: "always",
+        CARGO_REGISTRIES_CRATES_IO_PROTOCOL: "sparse",
+        CARGO_HTTP_MULTIPLEXING: "false",
+        RUSTUP_TOOLCHAIN: "1.90",
+      }),
+    ).toBe(hashBuildEnv({ RUSTFLAGS: "-C target-cpu=native" }));
+  });
+
   it("ignores undefined values", () => {
     expect(hashBuildEnv({ RUSTFLAGS: undefined })).toBe(hashBuildEnv({}));
   });
