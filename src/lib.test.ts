@@ -13,7 +13,7 @@ import { resolveChannel } from "@/core";
 describe("library barrel", () => {
   // Pins the public surface: removing or renaming an export is a breaking
   // change for consumers and should fail here rather than in their build.
-  it("exposes every value export of the nine library modules", () => {
+  it("exposes every value export of the ten library modules", () => {
     expect(Object.keys(lib).sort()).toEqual(
       [
         // action.ts
@@ -21,6 +21,8 @@ describe("library barrel", () => {
         // builder.ts
         "ToolchainSpec",
         "ToolchainSpecBuilder",
+        // cache/env.ts
+        "hashBuildEnv",
         // cache/inputs.ts
         "readCacheRequest",
         "buildCacheOutputs",

@@ -41,6 +41,14 @@ export interface CacheKeyContext {
    * channel, targets, components and profile.
    */
   specCacheKey: string;
+  /**
+   * Digest of the build-affecting environment, from `hashBuildEnv`.
+   *
+   * Required rather than optional even though only the build layer uses it: an
+   * optional field is one a caller can forget, and forgetting it here means
+   * two jobs with different `RUSTFLAGS` silently sharing a key.
+   */
+  envHash: string;
 }
 
 /** A layer's exact key and the prefixes GitHub falls back through. */
@@ -98,7 +106,12 @@ const DERIVERS: Record<
     };
   },
   build: (context, root) => {
-    const scoped = joinKeySegments(root, context.suffix, context.specCacheKey);
+    const scoped = joinKeySegments(
+      root,
+      context.suffix,
+      context.specCacheKey,
+      context.envHash,
+    );
     return {
       key: joinKeySegments(scoped, context.lockHash),
       restoreKeys: ladder(scoped),

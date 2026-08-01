@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+import { hashBuildEnv } from "@rust-toolchain/cache/env";
 import {
   buildLayerKey,
   type CacheKeyContext,
@@ -163,6 +164,7 @@ export function readCacheRequest(
     arch: requireRunnerEnv(source, "RUNNER_ARCH"),
     suffix,
     lockHash,
+    envHash: hashBuildEnv(source.env),
   };
 
   // Checked against a same-width stand-in for the digest, so the build layer —

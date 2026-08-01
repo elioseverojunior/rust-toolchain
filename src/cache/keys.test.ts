@@ -13,6 +13,7 @@ const base: CacheKeyContext = {
   suffix: "ci",
   lockHash: "a1b2c3",
   specCacheKey: "20250915abcd-1f2e3d4c",
+  envHash: "e1e2e3e4",
 };
 
 describe("joinKeySegments", () => {
@@ -55,9 +56,13 @@ describe("buildLayerKey", () => {
 
   it("keys the build layer on the dependency set and the toolchain spec", () => {
     expect(buildLayerKey("build", base)).toEqual({
-      key: "build-Linux-X64-ci-20250915abcd-1f2e3d4c-a1b2c3",
-      restoreKeys: ["build-Linux-X64-ci-20250915abcd-1f2e3d4c-"],
+      key: "build-Linux-X64-ci-20250915abcd-1f2e3d4c-e1e2e3e4-a1b2c3",
+      restoreKeys: ["build-Linux-X64-ci-20250915abcd-1f2e3d4c-e1e2e3e4-"],
     });
+  });
+
+  it("keeps the environment digest out of the registry key", () => {
+    expect(buildLayerKey("registry", base).key).not.toContain(base.envHash);
   });
 
   // Falling back across a different toolchain would restore artifacts cargo

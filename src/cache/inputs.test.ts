@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "bun:test";
 
+import { hashBuildEnv } from "@/cache/env";
 import type { CacheInputSource } from "@/cache/inputs";
 import { buildCacheOutputs, readCacheRequest } from "@/cache/inputs";
 
@@ -28,6 +29,15 @@ const source = (
 const enabled = (extra: Record<string, string> = {}): CacheInputSource =>
   source({ cache: "true", "cache-key-hash": "a1b2c3", ...extra });
 
+/**
+ * The digest `readCacheRequest` derives from `source()`'s default env.
+ *
+ * Neither `RUNNER_OS` nor `RUNNER_ARCH` matches a build-env prefix, so this
+ * equals `hashBuildEnv({})` — computed rather than hardcoded, so it tracks
+ * `hashBuildEnv`'s own behaviour instead of a value copied from its output.
+ */
+const defaultEnvHash = hashBuildEnv({ RUNNER_OS: "Linux", RUNNER_ARCH: "X64" });
+
 describe("readCacheRequest", () => {
   // Nothing else is examined when caching is off: those inputs describe a key
   // nobody asked for, so validating them would fail runs that never cache.
@@ -45,6 +55,7 @@ describe("readCacheRequest", () => {
       arch: "X64",
       suffix: "ci",
       lockHash: "a1b2c3",
+      envHash: defaultEnvHash,
     });
   });
 
@@ -125,7 +136,7 @@ describe("buildCacheOutputs", () => {
     expect(outputs.enabled).toBe(true);
     expect(outputs.layers.registry?.key).toBe("registry-Linux-X64-ci-a1b2c3");
     expect(outputs.layers.build?.key).toBe(
-      "build-Linux-X64-ci-20250915abcd-1f2e3d4c-a1b2c3",
+      `build-Linux-X64-ci-20250915abcd-1f2e3d4c-${defaultEnvHash}-a1b2c3`,
     );
   });
 
