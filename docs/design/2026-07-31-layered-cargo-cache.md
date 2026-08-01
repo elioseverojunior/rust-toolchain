@@ -109,8 +109,8 @@ registry-<os>-<arch>-<suffix>-<lockHash>
   ↳ registry-<os>-<arch>-<suffix>-
   ↳ registry-<os>-<arch>-
 
-build-<os>-<arch>-<suffix>-<cachekeyFull>-<lockHash>
-  ↳ build-<os>-<arch>-<suffix>-<cachekeyFull>-
+build-<os>-<arch>-<suffix>-<cachekeyFull>-<envHash>-<lockHash>
+  ↳ build-<os>-<arch>-<suffix>-<cachekeyFull>-<envHash>-
 
 bin-<os>-<arch>-<toolSetHash>
   ↳ bin-<os>-<arch>-
@@ -122,6 +122,12 @@ bin-<os>-<arch>-<toolSetHash>
 - `<cachekeyFull>` is the existing `generateSpecCacheKey` output in `src/core.ts`, which already digests channel,
   targets, components and profile with the lists sorted. The build layer reuses it rather than inventing a second
   rustc identity.
+- `<envHash>` is a SHA-256 over the sorted `NAME=VALUE` pairs of every environment variable whose name begins with
+  `CARGO_`, `CC`, `CFLAGS`, `CXX`, `CMAKE` or `RUST`, truncated to 8 hex characters. It is what makes this table's
+  `RUSTFLAGS` and `CARGO_*` claim true; without it two jobs differing only in build flags share a key, and the second
+  restores artifacts cargo rejects, rebuilds everything, then cannot save because the key is taken. **Lands in Phase
+  B** — Phase A shipped the build key without it, and
+  [the Phase B design](2026-07-31-layered-cargo-cache-phase-b.md) records why it could not wait any longer than that.
 - `<toolSetHash>` is a SHA-256 over the resolved `name@version` pairs, sorted and newline-joined, truncated to the
   first 8 hex characters — the same truncation `generateSpecCacheKey` already uses, so key segments stay a uniform
   width.
