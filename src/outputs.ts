@@ -127,12 +127,12 @@ export interface ActionOutputsArgs {
    * `true` only when every enabled layer matched its exact key.
    *
    * A partial match through a restore key counts as false: the layer will be
-   * saved again under the new key, so it was not a full hit. Optional and
-   * defaulting to `false`: the lifecycle that computes it is orchestrated
-   * elsewhere, so a caller with nothing to report yet does not have to say so
-   * explicitly.
+   * saved again under the new key, so it was not a full hit. Required rather
+   * than optional: an optional field is one a caller can forget, and
+   * forgetting it here means the action silently publishes `cache-hit: false`
+   * forever — including on a genuine full hit — with no compile-time signal.
    */
-  cacheHit?: boolean;
+  cacheHit: boolean;
 }
 
 /**
@@ -162,7 +162,7 @@ export function buildActionOutputs(args: ActionOutputsArgs): ActionOutputs {
     name: spec.channel,
     cachekey: args.cacheKey,
     "cachekey-full": args.specCacheKey,
-    "cache-hit": args.cacheHit ?? false,
+    "cache-hit": args.cacheHit,
     cache: args.cache,
     inputs: {
       toolchain: inputs.toolchain ?? "",

@@ -397,6 +397,7 @@ export function run(deps: ActionDeps): void {
       cacheKey: rustc.info.cacheKey,
       specCacheKey,
       cache: buildCacheOutputs(cacheRequest, specCacheKey),
+      cacheHit: false,
     });
     for (const [name, value] of toOutputEntries(outputs)) {
       deps.core.setOutput(name, value);
