@@ -18,28 +18,22 @@ precedence = "aggregate"
 # now inserts below YAML frontmatter rather than above it, so removing an entry
 # here is safe -- it would gain a header, not lose its frontmatter.
 ignore = [
-  # Directories, spelled `**` rather than with a bare trailing slash. comply
-  # reads both since the glob fix, but the reference `reuse` tool matches a
-  # trailing-slash entry literally -- which matches no file at all, so every
-  # one of these silently ignored nothing and `dist/` got annotated.
-  ".idea/**",
-  ".remember/**",
-  ".rumdl_cache/**",
-  "coverage/**",
-  "dist/**",
-  "node_modules/**",
-  ".actrc",
-  ".bun-version",
-  ".nvmrc",
-  ".prettierrc",
-  # Symlinks into LICENSES/, so `cargo package` ships the licence texts inside
-  # each published crate. They MUST stay ignored: annotating a symlink writes
-  # through it, which would corrupt the canonical texts every other file cites.
+  "**/*.ico",
   "**/*.lock",
-  "opencode.json",
-  "package.json",
-  "tsconfig.base.json",
-  "tsconfig.json"
+  "**/*.png",
+  "**/*.svg",
+  "**/.aider.*/",
+  "**/.bun-version",
+  "**/.nvmrc",
+  "**/.prettierignore",
+  "**/.prettierrc",
+  "**/.remember/",
+  "**/.rumdl_cache/",
+  "**/dist/",
+  "**/opencode*.json",
+  "**/package*.json",
+  "**/tsconfig*.json",
+  ".actrc",
 ]
 
 # Neither the built-in tables nor the reference tool claim these two, so

@@ -400,23 +400,61 @@ shell = "bash -c"
 run = "bunx --bun npm-check-updates -u --target latest && bun install"
 
 # === Config & Release ===
-[tasks.release]
-description = "Publish new release via changesets"
-alias = []
-depends = []
-depends_post = []
-shell = "bash -c"
-run = "changeset publish"
-
-[tasks.version]
-description = "Version packages via changesets"
-alias = []
-depends = []
-depends_post = []
-shell = "bash -c"
-run = "changeset version"
+#
+# No `release` or `version` task, deliberately. Both used to exist and both ran
+# `changeset` -- against no `.changeset/` directory and no changesets dependency,
+# so each failed on invocation while implying that changesets governed this
+# repository's versioning. Nothing has ever governed it locally.
+#
+# Versioning is CI-only and has exactly one source of truth:
+# `.github/workflows/version.yml`, which `cicd.yml` calls as its `version` job.
+# It runs GitVersion, applies the rule that a tag ref outranks the derivation,
+# and publishes the result as job outputs. Tags and GitHub Releases are created
+# by `cicd.yml`'s Release job from those outputs alone.
+#
+# There is no local equivalent because GitVersion is not in `[tools]` above, and
+# adding a task that derives a version some other way would recreate the split
+# brain `version.yml` exists to prevent. To see what a run would resolve, use
+# the workflow's dry run: `gh workflow run CICD -f dry-run=true`.
 
 # === Documentation ===
+#
+# The site under `docs/` is a separate Bun project with its own `package.json`
+# and `bun.lock`, so these tasks `cd` into it. Defined here rather than called
+# as raw `bun` lines in the workflow, so local and CI build it the same way.
+
+[tasks."docs:install"]
+description = "Install the docs site's dependencies (docs/ has its own lockfile)"
+alias = []
+depends = []
+depends_post = []
+shell = "bash -c"
+run = "cd docs && bun install --frozen-lockfile"
+
+[tasks."docs:build"]
+description = "Build the VitePress site into docs/.vitepress/dist"
+alias = []
+depends = ["docs:install"]
+depends_post = []
+shell = "bash -c"
+run = "cd docs && bun run build"
+
+[tasks."docs:dev"]
+description = "Serve the docs site with hot reload on port 5273"
+alias = []
+depends = ["docs:install"]
+depends_post = []
+shell = "bash -c"
+run = "cd docs && bun run dev"
+
+[tasks."docs:preview"]
+description = "Serve the built docs site on port 5273"
+alias = []
+depends = ["docs:build"]
+depends_post = []
+shell = "bash -c"
+run = "cd docs && bun run preview"
+
 [tasks.readme]
 description = "Regenerate README.md from action.yml using action-docs"
 alias = []
