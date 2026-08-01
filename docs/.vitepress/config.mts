@@ -4,6 +4,8 @@
 
 import { defineConfig } from "vitepress";
 
+import { mermaidMarkdown, mermaidVite } from "./mermaid";
+
 const REPO = "https://github.com/elioseverojunior/rust-toolchain";
 
 // GitHub project pages serve under `/<repo>/`, so the base has to match or every
@@ -19,6 +21,13 @@ const base = process.env.DOCS_BASE ?? "/rust-toolchain/";
 // Pinned rather than left on Vite's 5173 default, which any other checkout on
 // this machine also claims. `strictPort` makes a collision fail loudly instead
 // of silently landing on 5174 and printing a URL nobody reads.
+//
+// DEV ONLY. `vitepress preview` does not run Vite's preview server -- it serves
+// the built directory with Polka -- so a `vite.preview` block here is read by
+// nothing and the command lands on its own 4173 default. Verified: with that
+// block present, `bun run preview` still printed 4173. The preview port is
+// therefore passed as a CLI flag from package.json, which honours DOCS_PORT the
+// same way this does.
 const port = Number(process.env.DOCS_PORT ?? 5273);
 
 export default defineConfig({
@@ -41,9 +50,18 @@ export default defineConfig({
   // is what this check exists to catch.
   ignoreDeadLinks: false,
 
+  // ```mermaid fences become collapsible diagrams; see .vitepress/mermaid.ts for
+  // why this is wired onto mermaid directly rather than through
+  // vitepress-plugin-mermaid, and theme/Mermaid.vue for the component itself.
+  // Without this, every fence renders as a plain highlighted code block.
+  markdown: { config: mermaidMarkdown },
+
   vite: {
+    // Spread first: `mermaidVite` carries only `build`, `optimizeDeps` and
+    // `resolve`, so the port settings below cannot collide with it. Written this
+    // way round so a future key added there does not silently outrank the ports.
+    ...mermaidVite,
     server: { port, strictPort: true },
-    preview: { port, strictPort: true },
   },
 
   head: [

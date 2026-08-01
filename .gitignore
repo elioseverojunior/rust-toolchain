@@ -47,6 +47,10 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Rumdl
 /**/.rumdl_cache/
 
+# Playwright MCP scratch output (page snapshots, screenshots). Written to the
+# working directory by the browser tooling, never part of the project.
+.playwright-mcp/
+
 # VitePress build artifacts — the dep cache alone is ~2.8 MB of prebundled
 # JS and source maps, which trips hk's check-added-large-files.
 docs/.vitepress/cache/

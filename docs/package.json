@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "vitepress dev .",
     "build": "vitepress build .",
-    "preview": "vitepress preview .",
+    "preview": "vitepress preview . --port ${DOCS_PORT:-5273}",
     "deps": "bunx --bun npm-check-updates -u --target minor && bun install",
     "deps:check": "bunx --bun npm-check-updates --target minor",
     "deps:latest": "bunx --bun npm-check-updates -u --target latest && bun install",
@@ -36,6 +36,7 @@
     "eslint-plugin-import-x": "^4.17.1",
     "globals": "^17.8.0",
     "markdown-it": "14.3.0",
+    "mermaid": "^11.16.0",
     "prettier": "^3.9.6",
     "prettier-plugin-organize-imports": "^4.3.0",
     "typescript": "~6.0",

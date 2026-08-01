@@ -21,15 +21,15 @@ GitHub Actions Runner
   │  action.yml  │  runs: node24, main AND post: dist/index.js
   └─────┬────────┘
         │
-  ┌─────┴──────────────────────┐
+  ┌─────┴───────────────────────┐
   │  src/index.ts               │  Wiring only — dispatches on
   │  STATE_isPost === "true"?   │  STATE_isPost, set unconditionally
   └───────┬──────────┬──────────┘  by the main phase's first line
           │ no        │ yes
           v            v
-  ┌───────────────┐  ┌────────────────┐
-  │ run(deps)      │  │ runPost(deps)   │
-  │ src/action.ts  │  │ src/action.ts   │
+  ┌────────────────┐  ┌────────────────┐
+  │ run(deps)      │  │ runPost(deps)  │
+  │ src/action.ts  │  │ src/action.ts  │
   └──┬───┬───┬───┬─┘  └───────┬────────┘
      │   │   │   └─────┐      │
   ┌──┘   │   └───┐     │      v
