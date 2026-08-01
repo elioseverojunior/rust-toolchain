@@ -166,6 +166,13 @@ describe("saveLayers", () => {
     expect(results.every((r) => r.saved)).toBe(true);
   });
 
+  it("saves when the budget is enabled and the size is under it", async () => {
+    const results = await saveLayers(
+      saveArgs({ budget: 1000, measure: () => 10 }),
+    );
+    expect(results.every((r) => r.saved)).toBe(true);
+  });
+
   it("treats a save failure as a warning, not a build failure", async () => {
     const l = log();
     const results = await saveLayers(
@@ -180,6 +187,36 @@ describe("saveLayers", () => {
       }),
     );
     expect(results.every((r) => !r.saved)).toBe(true);
+    expect(l.messages.some((m) => m.startsWith("warning:"))).toBe(true);
+  });
+
+  // The bug this guards: a synchronous throw from `measure` inside a
+  // `Promise.all`-mapped callback rejects the whole batch, discarding every
+  // other layer's already-decided result — including ones that saved fine.
+  it("treats a measurement failure as a warning and still saves other layers", async () => {
+    const l = log();
+    const saved: string[] = [];
+    const results = await saveLayers(
+      saveArgs({
+        client: client(
+          async () => undefined,
+          async (_p, key) => {
+            saved.push(key);
+          },
+        ),
+        measure: (paths) => {
+          if (paths[0] === "/c/registry/index") {
+            throw new Error("permission denied");
+          }
+          return 10;
+        },
+        log: l,
+      }),
+    );
+    expect(results[0]?.saved).toBe(false);
+    expect(results[0]?.reason).toContain("could not measure its size");
+    expect(results[1]?.saved).toBe(true);
+    expect(saved).toEqual(["build-Linux-X64-d1-e1-a1"]);
     expect(l.messages.some((m) => m.startsWith("warning:"))).toBe(true);
   });
 });

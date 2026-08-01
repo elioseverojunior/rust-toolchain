@@ -38,6 +38,13 @@ export interface LifecycleLog {
 export interface SaveArgs {
   client: CacheClient;
   plans: LayerPlan[];
+  /**
+   * The `restoreLayers` outcome for these same `plans`, correlated by
+   * `layer`. Callers must derive this from the identical `plans` array —
+   * passing a filtered or otherwise mismatched subset leaves a layer with no
+   * matching entry, which falls through to measure-and-save as a fail-safe
+   * default rather than being rejected.
+   */
   restored: RestoredLayer[];
   budget: number;
   measure: (paths: string[]) => number;
@@ -84,54 +91,87 @@ export async function restoreLayers(
 }
 
 /**
- * Saves the layers worth saving.
+ * Decides whether one layer is worth saving, and saves it if so.
  *
- * Two reasons to skip. An exact hit means the entry already exists under that
- * key, so writing it again is pure budget burn — the optimisation the layer
- * split makes safe, because a per-layer key covers everything that could have
- * changed its contents. Over budget means saving would evict other workflows'
- * caches, which is a cost paid by someone who did nothing wrong.
+ * Three reasons to skip. An exact hit means the entry already exists under
+ * that key, so writing it again is pure budget burn — the optimisation the
+ * layer split makes safe, because a per-layer key covers everything that
+ * could have changed its contents. A measurement failure means the size of
+ * what would be saved is unknown, and writing an entry of unknown size into a
+ * shared budget is the unsafe direction — refusing to save is the fail-safe
+ * one. Over budget means saving would evict other workflows' caches, which is
+ * a cost paid by someone who did nothing wrong.
+ */
+async function saveLayer(
+  plan: LayerPlan,
+  previous: RestoredLayer | undefined,
+  { client, budget, measure, log }: SaveArgs,
+): Promise<SavedLayer> {
+  if (previous?.result === "exact") {
+    log.info(`${plan.layer}: unchanged since an exact hit, not saving`);
+    return {
+      layer: plan.layer,
+      saved: false,
+      reason: "unchanged since an exact hit",
+      bytes: 0,
+    };
+  }
+
+  let bytes: number;
+  try {
+    bytes = measure(plan.paths);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warning(
+      `${plan.layer}: could not measure its size, not saving — ${message}`,
+    );
+    return {
+      layer: plan.layer,
+      saved: false,
+      reason: `could not measure its size — ${message}`,
+      bytes: 0,
+    };
+  }
+
+  if (budget > 0 && bytes > budget) {
+    log.warning(
+      `${plan.layer}: ${bytes} bytes exceeds the ${budget}-byte ` +
+        "`cache-budget`, so it was not saved. An oversized entry evicts " +
+        "other workflows' caches. Raise `cache-budget` to keep it.",
+    );
+    return {
+      layer: plan.layer,
+      saved: false,
+      reason: `over the ${budget}-byte budget`,
+      bytes,
+    };
+  }
+
+  try {
+    await client.save(plan.paths, plan.key);
+    log.info(`${plan.layer}: saved ${bytes} bytes as ${plan.key}`);
+    return { layer: plan.layer, saved: true, bytes };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warning(`${plan.layer}: save failed, continuing — ${message}`);
+    return { layer: plan.layer, saved: false, reason: message, bytes };
+  }
+}
+
+/**
+ * Saves every layer worth saving, concurrently.
+ *
+ * Each layer's decision is independent (see `saveLayer`), and each is caught
+ * at its own boundary, so one layer's measurement or save failure never loses
+ * the results of the others in the same `Promise.all` batch.
  */
 export async function saveLayers(args: SaveArgs): Promise<SavedLayer[]> {
-  const { client, plans, restored, budget, measure, log } = args;
+  const { plans, restored } = args;
 
   return Promise.all(
-    plans.map(async (plan): Promise<SavedLayer> => {
+    plans.map((plan) => {
       const previous = restored.find((entry) => entry.layer === plan.layer);
-      if (previous?.result === "exact") {
-        log.info(`${plan.layer}: unchanged since an exact hit, not saving`);
-        return {
-          layer: plan.layer,
-          saved: false,
-          reason: "unchanged since an exact hit",
-          bytes: 0,
-        };
-      }
-
-      const bytes = measure(plan.paths);
-      if (budget > 0 && bytes > budget) {
-        log.warning(
-          `${plan.layer}: ${bytes} bytes exceeds the ${budget}-byte ` +
-            "`cache-budget`, so it was not saved. An oversized entry evicts " +
-            "other workflows' caches. Raise `cache-budget` to keep it.",
-        );
-        return {
-          layer: plan.layer,
-          saved: false,
-          reason: `over the ${budget}-byte budget`,
-          bytes,
-        };
-      }
-
-      try {
-        await client.save(plan.paths, plan.key);
-        log.info(`${plan.layer}: saved ${bytes} bytes as ${plan.key}`);
-        return { layer: plan.layer, saved: true, bytes };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        log.warning(`${plan.layer}: save failed, continuing — ${message}`);
-        return { layer: plan.layer, saved: false, reason: message, bytes };
-      }
+      return saveLayer(plan, previous, args);
     }),
   );
 }
