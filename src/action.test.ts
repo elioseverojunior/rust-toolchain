@@ -1189,6 +1189,26 @@ describe("cache lifecycle", () => {
     expect(h.state["cache"]).toBe(undefined);
   });
 
+  // The invariant this guards is structural, not incidental. `post-if:
+  // success()` still fires when the main phase threw, because
+  // `continue-on-error: true` on the action's step keeps the job status
+  // successful. Setting isPost after any throwable statement therefore leaves
+  // STATE_isPost unset, and src/index.ts's dispatch falls into the `else`
+  // branch and re-runs the entire main phase as the post step. That dispatch
+  // lives in coverage-excluded src/index.ts and no unit test can reach it,
+  // which is exactly why the ordering inside `run` is asserted here instead.
+  it.each([
+    ["cache-budget", { ...withCache, "cache-budget": "two gigabytes" }],
+    ["cache-on-failure", { ...withCache, "cache-on-failure": "yes please" }],
+  ])("marks isPost even when %s fails validation", async (_name, inputs) => {
+    const h = harness({ inputs, env: cacheEnv });
+    await run(h.deps);
+
+    expect(h.failures).toHaveLength(1);
+    expect(h.state["isPost"]).toBe("true");
+    expect(h.state["cache"]).toBe(undefined);
+  });
+
   // [].every(...) is vacuously true — caching disabled must not be reported
   // as a full hit.
   it("reports cache-hit false when caching is disabled", async () => {

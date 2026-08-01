@@ -440,8 +440,27 @@ async function resolveCacheLifecycle(
 /** Installs the requested toolchain and publishes the action's outputs. */
 export async function run(deps: ActionDeps): Promise<void> {
   try {
-    // First, deliberately. Every cache input is validated against nothing but
-    // itself, so a typo here must fail before the
+    // The first statement in the try, before anything that can throw, and the
+    // ordering is the whole point rather than a detail.
+    //
+    // action.yml's `post:` runs on every successful job whether caching is
+    // enabled or not, and GitHub only sets STATE_isPost once this line runs.
+    // src/index.ts's dispatch reads exactly that variable to decide it is the
+    // post phase; without it, the post invocation falls into the `else` branch
+    // and re-runs the entire main phase. It is tempting to argue that a throw
+    // below makes `success()` false so `post-if` never fires — but
+    // `continue-on-error: true` on the action's step keeps the job status
+    // successful, and then a bad `cache-budget` would install the toolchain a
+    // second time as the post step. Making the invariant structural is the
+    // only defence available: the dispatch itself lives in coverage-excluded
+    // src/index.ts, so no unit test can cover it.
+    //
+    // "isPost set, no cache payload" is already the proven caching-disabled
+    // no-op — see runPost's early return and its test.
+    deps.core.saveState("isPost", "true");
+
+    // Validation first among the things that can throw. Every cache input is
+    // checked against nothing but itself, so a typo here must fail before the
     // rustup bootstrap and the toolchain install it would otherwise throw away.
     //
     // Narrowed to what that module actually needs, rather than handed the whole
@@ -463,11 +482,6 @@ export async function run(deps: ActionDeps): Promise<void> {
       "RUST_TOOLCHAIN_CACHE_ON_FAILURE",
       String(cacheOnFailure.value),
     );
-
-    // Unconditional, and set here rather than inside resolveCacheLifecycle:
-    // action.yml's `post:` runs on every successful job, regardless of
-    // whether caching is enabled.
-    deps.core.saveState("isPost", "true");
 
     const config = resolveConfiguration(deps);
     const spec = config.spec;
