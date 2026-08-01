@@ -17,9 +17,9 @@ not — a claim a reader disproves in five minutes is worth less than no claim.
 | [`dtolnay/rust-toolchain`](https://github.com/dtolnay/rust-toolchain)                                 | Install a toolchain                   | ✅ Replaced — strict superset, `cachekey` byte-compatible     |
 | [`actions-rs/toolchain`](https://github.com/actions-rs/toolchain)                                     | Install a toolchain (unmaintained)    | ✅ Replaced                                                   |
 | [`actions/cache`](https://github.com/actions/cache) hand-wired for cargo                              | Generic cache plus your own key logic | ✅ Key derivation replaced — feed `outputs.cache` in directly |
-| [`actions-rust-lang/setup-rust-toolchain`](https://github.com/actions-rust-lang/setup-rust-toolchain) | Toolchain plus a `rust-cache` wrapper | ◐ Toolchain today, caching in Phase B                         |
-| [`moonrepo/setup-rust`](https://github.com/moonrepo/setup-rust)                                       | Toolchain, cache and cargo tools      | ◐ Toolchain today, cache Phase B, tools Phase C               |
-| [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache)                                       | Restore and save the cargo cache      | ◐ Keys today, restore/save in Phase B                         |
+| [`actions-rust-lang/setup-rust-toolchain`](https://github.com/actions-rust-lang/setup-rust-toolchain) | Toolchain plus a `rust-cache` wrapper | ✅ Replaced — toolchain and caching both covered              |
+| [`moonrepo/setup-rust`](https://github.com/moonrepo/setup-rust)                                       | Toolchain, cache and cargo tools      | ◐ Toolchain and cache replaced, tools Phase C                 |
+| [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache)                                       | Restore and save the cargo cache      | ✅ Replaced — restores and saves without a separate action    |
 | [`taiki-e/install-action`](https://github.com/taiki-e/install-action)                                 | Install cargo tools quickly           | ○ Planned, Phase C                                            |
 | [`baptiste0928/cargo-install`](https://github.com/baptiste0928/cargo-install)                         | Install and cache cargo tools         | ○ Planned, Phase C                                            |
 | [`actions-rs/cargo`](https://github.com/actions-rs/cargo)                                             | Run cargo commands                    | ✗ Out of scope — use `run: cargo …`                           |
@@ -45,17 +45,20 @@ writes another full copy of `~/.cargo` plus `target` into a repository-wide 10 G
 evicts globally by least-recent-use. An oversized entry does not degrade its own hit rate — it evicts
 other workflows' caches, so the symptom surfaces somewhere else entirely.
 
-| Failure mode                                 | Root cause                                                 | Addressed by                               |
-| -------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------ |
-| Everything re-saves when one input moves     | One entry, one key, mixed invalidation rates               | Layer model (Phase A keys, Phase B saves)  |
-| 10 GB exhaustion and cross-workflow eviction | Full re-save per lockfile change, no size accounting       | Skip-save on exact hit, `cache-budget`     |
-| Pruning is heuristic and silent              | Ownership inferred by string-munging filenames, `catch {}` | Deterministic keep-set, no silent failures |
-| Cannot tell a cold run from a broken key     | A single `cache-hit` boolean                               | Per-layer outputs and a job summary        |
+| Failure mode                                 | Root cause                                                 | Addressed by                                                                                                                                             |
+| -------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Everything re-saves when one input moves     | One entry, one key, mixed invalidation rates               | Per-layer keys (Phase A), restored and saved independently (Phase B)                                                                                     |
+| 10 GB exhaustion and cross-workflow eviction | Full re-save per lockfile change, no size accounting       | Skip-save on an exact hit, plus a per-layer `cache-budget`                                                                                               |
+| Pruning is heuristic and silent              | Ownership inferred by string-munging filenames, `catch {}` | Negation-glob exclusions (`incremental`, `examples`) today, and failures warn rather than vanish; deterministic pruning from `cargo metadata` is Phase D |
+| Cannot tell a cold run from a broken key     | A single `cache-hit` boolean                               | `cache-hit` reports every-layer-exact, plus a per-layer job summary table naming each layer's actual result                                              |
 
 The first two are one problem. Monolithic entries cause the eviction churn, so partitioning fixes both.
 
-Phase A ships the partitioning as **keys**; Phase B acts on them. Until then `rust-cache` still does the
-restoring, and the two coexist fine — its `key`/`shared-key` inputs accept this action's outputs.
+Phase A shipped the partitioning as **keys**; Phase B acts on them — `cache: true` now restores every
+layer at job start and saves it again from a `post:` step, so `rust-cache` is no longer needed alongside
+it for the layers this action covers (`registry`, `build`). Nothing stops the two from coexisting —
+`rust-cache`'s `key`/`shared-key` inputs still accept this action's outputs — but a workflow no longer
+needs both.
 
 ## Against dtolnay/rust-toolchain
 
@@ -72,7 +75,7 @@ Compared against `dtolnay/rust-toolchain@master` (composite action, `action.yml`
 | Command execution                 | Shell interpolation    | argv arrays, no shell                                                 |
 | Toolchain pinning for later steps | `rustup default`       | `rustup default` **and** `RUSTUP_TOOLCHAIN`                           |
 | Cache key                         | rustc version only     | rustc version, a spec-bound key, and per-layer cargo cache keys       |
-| Tests                             | Workflow matrix        | 245 unit tests at 100% coverage, plus an `act` matrix                 |
+| Tests                             | Workflow matrix        | 338 unit tests at 100% coverage, plus an `act` matrix                 |
 
 ## Legacy parity
 

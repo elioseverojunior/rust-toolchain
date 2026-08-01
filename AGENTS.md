@@ -74,22 +74,28 @@ Refer to the [rustup book](https://rust-lang.github.io/rustup/concepts/index.htm
 
 ## Architecture
 
-- **Entrypoint (action)**: `src/index.ts` wires real dependencies into `run()` from `src/action.ts`. Build uses `@actions/core` for inputs, outputs, and failures.
-- **Library API**: `src/lib.ts` is the barrel (re-exports action, builder, config, core, inputs, outputs, cache/inputs, cache/layers and cache/keys, never `index.ts`); consumers may also import any of those nine modules directly.
+- **Entrypoint (action)**: `src/index.ts` dispatches on `STATE_isPost`, wiring real dependencies into either `run()` (main phase) or `runPost()` (post phase) from `src/action.ts`. Build uses `@actions/core` for inputs, outputs, state and failures.
+- **Library API**: `src/lib.ts` is the barrel (re-exports action, builder, config, core, inputs, outputs, cache/budget, cache/client, cache/env, cache/inputs, cache/keys, cache/layers, cache/lifecycle, cache/paths and cache/summary, never `index.ts`); consumers may also import any of those fifteen modules directly.
 - **Path aliases** (`tsconfig.json` `paths`): library source imports itself as `@rust-toolchain/<module>` — the same specifier a consumer maps, so internal imports resolve in their project too. `@/<module>` is the short form and is **tests only**; using it in library source silently breaks source consumption.
 - **Build**: `bun run build:action`
 - **Source layout**:
-  - `src/index.ts` — GitHub Action entry point; a side-effecting script (no exports) bundled to `dist/index.js`. Dependency wiring only: real `spawnSync`, `readFileSync`, `@actions/core` and a synchronous `sleep` handed to `run()`
-  - `src/action.ts` — `run(deps: ActionDeps)`, the orchestration: reads the toml, merges inputs, installs the toolchain, adds targets/components, exports `RUSTUP_TOOLCHAIN`, reads the cache key, sets outputs. Executes argv arrays with no shell, bounds each call with a timeout, and retries network-bound commands with backoff
+  - `src/index.ts` — GitHub Action entry point; a side-effecting script (no exports) bundled to `dist/index.js`. Dependency wiring only, split by `STATE_isPost`: real `spawnSync`, `readFileSync`, `@actions/core` and a synchronous `sleep` handed to `run()` for the main phase; the real `@actions/cache`-backed `CacheClient` and a `node:fs`-backed `measure()` handed to `runPost()` for the post phase. Building the `@actions/cache` adapter here, rather than in a library module, is what keeps its ~1.4 MB Azure SDK and unmockable network code out of every test process
+  - `src/action.ts` — `run(deps: ActionDeps)`, the main-phase orchestration: reads the toml, merges inputs, installs the toolchain, adds targets/components, exports `RUSTUP_TOOLCHAIN`, restores every enabled cache layer, sets outputs. Also `runPost(deps: PostDeps)`, the post-phase orchestration: replays the plans and restore results `run` saved through `saveState`, saves whatever is left to save, writes the job summary. Executes argv arrays with no shell, bounds each call with a timeout, and retries network-bound commands with backoff. A cache failure in either phase warns and never fails the build
   - `src/core.ts` — toolchain spec parsing, `rust-toolchain.toml` parsing via `smol-toml`, cachekey generation
   - `src/config.ts` — merge toml config with action inputs (scalars replaced by inputs; lists accumulate deduped, inputs leading), `ToolchainInputs` + `ResolvedToolchain` types; `resolveRustupEnv` resolves `RUSTUP_HOME`/`CARGO_HOME`, honouring caller-supplied values
   - `src/builder.ts` — fluent `ToolchainSpecBuilder` with `.withChannel()`, `.withTargets()`, `.withComponents()`, `.withProfile()`, `.build()`
-  - `src/outputs.ts` — `buildActionOutputs` maps the resolved spec plus the inputs and toml it was merged from onto the action's outputs; `toOutputEntries` flattens them to the `name, value` pairs GitHub accepts, serialising lists as JSON arrays and the whole object as `json`
+  - `src/outputs.ts` — `buildActionOutputs` maps the resolved spec plus the inputs, toml and cache lifecycle outcome it was merged from onto the action's outputs; `toOutputEntries` flattens them to the `name, value` pairs GitHub accepts, serialising lists as JSON arrays and the whole object as `json`
   - `src/cache/layers.ts` — `CACHE_LAYER_IDS`, the canonical layer list, and `parseCacheLayers`, which reads the `cache-layers` input into a deduped layer list
-  - `src/cache/keys.ts` — `joinKeySegments` (collapses empty segments) and `buildLayerKey`, which derives a layer's key and restore-key ladder
+  - `src/cache/keys.ts` — `joinKeySegments` (collapses empty segments) and `buildLayerKey`, which derives a layer's key and restore-key ladder; the `build` key folds in `envHash`
   - `src/cache/inputs.ts` — reads and validates every `cache-*` input before anything is installed (`readCacheRequest`), then completes the validated request into per-layer keys once the spec digest exists (`buildCacheOutputs`). Takes a narrow `CacheInputSource` rather than `ActionDeps`, which is what keeps it free of an import cycle back to `action.ts`
+  - `src/cache/env.ts` — `hashBuildEnv` digests the `CARGO_*`/`CC`/`CFLAGS`/`CXX`/`CMAKE`/`RUST*` environment into the `build` key's `envHash` segment, so two jobs differing only in `RUSTFLAGS` stop sharing a key
+  - `src/cache/paths.ts` — `parseWorkspaces` reads `cache-workspaces` into resolved `<manifest-dir> -> <target-dir>` mappings, rejecting anything that resolves outside the checkout; `registryPaths` and `buildPaths` name each layer's paths, the latter with `!.../incremental` and `!.../examples` negation globs
+  - `src/cache/budget.ts` — `parseSize` reads `cache-budget` into a byte count (binary suffixes, `0` disables it); `measurePaths` sums a layer's on-disk size through an injected `StatFs` port
+  - `src/cache/client.ts` — `CacheClient`, the restore/save port. Its only real implementation wraps `@actions/cache` and lives in `src/index.ts`
+  - `src/cache/lifecycle.ts` — `restoreLayers` restores every enabled layer concurrently, downgrading any failure to a miss; `saveLayers`/`saveLayer` decide whether each layer is worth saving (skip on an exact hit, skip when its size can't be measured, skip over budget) and save the rest concurrently, each independently caught
+  - `src/cache/summary.ts` — `renderSummary` renders the per-layer restore/save outcome as the job summary's Markdown table — the only place a per-layer result is visible, since `cache-hit` is a single all-layers boolean
   - `src/inputs.ts` — `readBooleanInput` and the `InputReader` port it takes; shared by `action.ts` and `cache/inputs.ts`, so it belongs to neither
-  - `src/lib.ts` — the library barrel. Re-exports the seven library modules and deliberately **not** `index.ts`, whose import executes the action
+  - `src/lib.ts` — the library barrel. Re-exports every other library module and deliberately **not** `index.ts`, whose import executes the action
   - `src/*.test.ts` — co-located tests; `tsconfig.json` includes `**/*.ts`, so `bun run typecheck` type-checks them too
 
 ## GitHub Actions

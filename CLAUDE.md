@@ -139,6 +139,29 @@ Full reasoning in `docs/ARCHITECTURE.md` → Key Design Decisions → Cache Laye
   discards on sight, paying a download only to re-save it under a new key.
   Adding a shorter fallback rung "for a better hit rate" removes the guarantee
   that a `build` restore is ever useful.
+- **The `@actions/cache` adapter lives in `src/index.ts`, not in a library
+  module.** `src/index.ts` is never imported, so it is invisible to the
+  coverage gate (see Coverage gate gotchas above). `@actions/cache` vendors
+  the Azure Storage SDK — most of the ~1.4 MB it added to `dist/index.js` —
+  plus unmockable network code; importing it from a module under test would
+  make the 100% gate unreachable. Every module that restores or saves takes
+  the `CacheClient` port (`src/cache/client.ts`) instead, so tests inject a
+  fake and the real adapter is exercised only by the actual runtime, plus
+  CI's `E2E` job.
+- **A cache failure never fails the build.** Restore, save, size measurement
+  and the job summary write are each caught at their own boundary and reduced
+  to a `core.warning` — a flaky cache service is not a reason to fail a job
+  that would otherwise have succeeded. Do not let a fix for one of these
+  propagate a throw past its own boundary "to be safe"; that reintroduces the
+  exact failure mode these guards exist to remove.
+- **Exclusions from a saved layer are negation globs, never deletion.**
+  `buildPaths` (`src/cache/paths.ts`) lists `target/` alongside
+  `!target/*/incremental` and `!target/*/examples`; `@actions/cache`'s
+  underlying `@actions/glob` treats the `!`-prefixed entries as archive
+  exclusions. Nothing on disk is ever touched, so a save failure cannot damage
+  the working tree. Do not "clean up" a layer by deleting files instead —
+  that changes a save-time filter into a destructive operation on the
+  checkout.
 
 ## Action pinning overrides the global rule
 

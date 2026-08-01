@@ -10,38 +10,54 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 A TypeScript library for reading `rust-toolchain.toml` and building `rustup` toolchain install commands, designed as a GitHub Action component. Inspired by [dtolnay/rust-toolchain](https://github.com/dtolnay/rust-toolchain).
 
+`action.yml` invokes `dist/index.js` **twice** per job — once as `main`, once
+as `post` — and `src/index.ts` is the single entry point for both, dispatching
+on `STATE_isPost`:
+
 ```text
 GitHub Actions Runner
         |
   ┌─────┴────────┐
-  │  action.yml  │  runs: node24, main: dist/index.js
+  │  action.yml  │  runs: node24, main AND post: dist/index.js
   └─────┬────────┘
         │
-  ┌─────┴─────────────┐
-  │  src/index.ts     │  Wiring — spawnSync, readFileSync,
-  │       ↓           │  @actions/core, sleep
-  │  src/action.ts    │  run(deps) — orchestration
-  └──┬───┬───┬───┬────┘
-     │   │   │   └──────────────┐
-  ┌──┘   │   └────────┐         │
-  v      v            v         v
-┌──────┐ ┌──────┐ ┌───────┐ ┌─────────┐
-│ core │ │config│ │builder│ │ outputs │
-└──┬───┘ └──┬───┘ └───┬───┘ └────┬────┘
-   │        │         │          │
-   └───┬────┘         │          │
-       v              v          v
- ┌────────────┐ ┌──────────┐ ┌─────────────┐
- │ resolve/   │ │ Toolchain│ │ flat keys + │
- │ merge/parse│ │ Spec     │ │ json output │
- └────────────┘ └────┬─────┘ └─────────────┘
-                     │
-                     v
-                ┌──────────┐
-                │ rustup   │
-                │ install  │
-                └──────────┘
+  ┌─────┴──────────────────────┐
+  │  src/index.ts               │  Wiring only — dispatches on
+  │  STATE_isPost === "true"?   │  STATE_isPost, set unconditionally
+  └───────┬──────────┬──────────┘  by the main phase's first line
+          │ no        │ yes
+          v            v
+  ┌───────────────┐  ┌────────────────┐
+  │ run(deps)      │  │ runPost(deps)   │
+  │ src/action.ts  │  │ src/action.ts   │
+  └──┬───┬───┬───┬─┘  └───────┬────────┘
+     │   │   │   └─────┐      │
+  ┌──┘   │   └───┐     │      v
+  v      v       v     v  saveLayers, then
+┌──────┐┌──────┐┌───────┐┌─────────┐  writeSummarySafely
+│ core ││config││builder││ outputs │  (src/cache/lifecycle.ts,
+└──┬───┘└──┬───┘└───┬───┘└────┬────┘   src/cache/summary.ts)
+   │       │        │         │
+   └───┬───┘        │         │
+       v            v         v
+ ┌────────────┐┌──────────┐┌─────────────┐
+ │ resolve/   ││Toolchain ││ flat keys + │
+ │ merge/parse││Spec      ││ json output │
+ └────────────┘└────┬─────┘└─────────────┘
+                    │
+                    v
+     rustup install, then
+     resolveCacheLifecycle:
+     restoreLayers (src/cache/lifecycle.ts),
+     saveState("cache", plans+restored+budget)
 ```
+
+`run` (the main phase) restores every enabled cache layer after the toolchain
+install and hands what it restored to the post phase through `saveState`;
+`runPost` (the post phase) reads that same state back through `getState` and
+saves whatever is left to save. See
+[The Two Entrypoints And The State Handoff](#the-two-entrypoints-and-the-state-handoff)
+below.
 
 `src/lib.ts` sits outside this flow: it is the library barrel for programmatic
 consumers, never loaded by the action itself.
@@ -157,12 +173,14 @@ flowchart LR
 
 ## Run Sequence
 
-`run(deps)` in `src/action.ts`, in order. Everything below the dashed line
-happens only after the toolchain is installed.
+`run(deps)` in `src/action.ts`, the main phase, in order. Everything below the
+dashed line happens only after the toolchain is installed.
 
 ```mermaid
 flowchart TD
-    A[read rust-toolchain.toml] --> B[merge inputs, validate]
+    Z[readCacheRequest, validate cache-* inputs] --> Y[export RUST_TOOLCHAIN_CACHE_ON_FAILURE,<br/>saveState isPost = true, unconditionally]
+    Y --> A[read rust-toolchain.toml]
+    A --> B[merge inputs, validate]
     B --> C[resolveChannel]
     C --> D[build ToolchainSpec]
     D --> E{rustup on PATH?}
@@ -176,7 +194,26 @@ flowchart TD
     J --> K[export RUSTUP_TOOLCHAIN<br/>unless set-rustup-toolchain: false]
     K -.-> L[rustc --version --verbose]
     L --> M[applyCargoDefaults:<br/>CARGO_INCREMENTAL, CARGO_TERM_COLOR,<br/>registry protocol, http multiplexing]
-    M --> N[buildActionOutputs + toOutputEntries:<br/>cachekey, cachekey-full, name,<br/>toolchain, targets, target, components,<br/>profile, set-rustup-toolchain, json]
+    M --> Q[resolveCacheLifecycle, when cache is on:<br/>restoreLayers per enabled layer,<br/>saveState cache = plans + restored + budget]
+    Q --> N[buildActionOutputs + toOutputEntries:<br/>cachekey, cachekey-full, name,<br/>toolchain, targets, target, components,<br/>profile, set-rustup-toolchain, cache,<br/>cache-hit, json]
+```
+
+## Post-Phase Sequence
+
+`runPost(deps)`, invoked by `action.yml`'s `post:` when `post-if` is true —
+`success()` or `cache-on-failure: true`. It sees none of the main phase's
+locals; everything it needs crossed through `saveState`/`getState`.
+
+```mermaid
+flowchart TD
+    S0[getState cache] --> S1{state present?}
+    S1 -->|no, caching was off<br/>or run never got that far| S2[return, no-op]
+    S1 -->|yes| S3[JSON.parse plans, restored, budget]
+    S3 --> S4[saveLayers, one decision per layer:<br/>skip on an exact restore hit,<br/>skip when measure throws,<br/>skip over cache-budget,<br/>otherwise client.save]
+    S4 --> S5[writeSummarySafely:<br/>renderSummary as the job summary]
+    S3 -.throw: malformed state.-> S6[caught, core.warning,<br/>never setFailed]
+    S4 -.throw: unexpected failure.-> S6
+    S5 -.throw: GITHUB_STEP_SUMMARY unset.-> S7[caught inside writeSummarySafely,<br/>core.warning, saves already kept]
 ```
 
 Every `rustup` step is an argv array executed without a shell, bounded by a
@@ -231,11 +268,19 @@ classDiagram
     class ActionDeps {
         +exec(file, args, opts) ExecResult
         +readFile(path) string
-        +core: getInput/setOutput/setFailed/exportVariable/addPath/info
+        +core: getInput/setOutput/setFailed/exportVariable/addPath/info/saveState/getState/warning/summary
         +env: Record~string, string~
         +platform: string
         +sleep(ms) void
+        +cache: CacheClient
     }
+
+    class CacheClient {
+        +restore(paths, key, restoreKeys) Promise~string | undefined~
+        +save(paths, key) Promise~void~
+    }
+
+    ActionDeps --> CacheClient : restores/saves through
 
     class ToolchainSpec {
         +readonly channel: string
@@ -274,20 +319,28 @@ classDiagram
 
 ## Source File Map
 
-| File                  | Type                            | Exports                                                                                                            | Responsibilities                                                                                                                                                                                           |
-| --------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/index.ts`        | Entry (node:child_process)      | none — side-effecting script                                                                                       | Dependency wiring only: hands real `spawnSync`, `readFileSync`, `@actions/core` and a synchronous `sleep` to `run()`                                                                                       |
-| `src/action.ts`       | Module                          | `run`, `ActionDeps`, `ExecResult`, `ExecOptions`                                                                   | Orchestration behind injected dependencies — rustup bootstrap, install, targets, components, default, `RUSTUP_TOOLCHAIN`, cargo env defaults, cache keys, outputs; argv only, timeouts, retries            |
-| `src/core.ts`         | Module (smol-toml, node:crypto) | `parseRustToolchainToml`, `resolveChannel`, `generateCacheKey`, `generateSpecCacheKey`, `parseRustcVersion`, types | TOML parsing, channel resolution/scaling/validation, cache key computation                                                                                                                                 |
-| `src/config.ts`       | Module                          | `mergeConfig`, `resolveRustupEnv`, types                                                                           | Merge toml config with action inputs (scalars replaced by inputs; lists accumulate deduped, inputs leading) and validate identifiers; resolve `RUSTUP_HOME`/`CARGO_HOME`, honouring caller-supplied values |
-| `src/builder.ts`      | Classes                         | `ToolchainSpec`, `ToolchainSpecBuilder`                                                                            | Fluent builder pattern, rustup argv generation                                                                                                                                                             |
-| `src/outputs.ts`      | Module                          | `buildActionOutputs`, `toOutputEntries`, `ActionOutputs`, `ActionOutputsArgs`, `BooleanInput`, provenance types    | Maps the resolved spec plus its two sources onto the action's output surface; serialises lists as JSON arrays and the whole object as `json`                                                               |
-| `src/cache/layers.ts` | Module                          | `CACHE_LAYER_IDS`, `CacheLayerId`, `parseCacheLayers`                                                              | The canonical layer list and the `cache-layers` input parser                                                                                                                                               |
-| `src/cache/keys.ts`   | Module                          | `joinKeySegments`, `buildLayerKey`, `CacheKeyContext`, `CacheLayerKey`                                             | Per-layer key and restore-key ladder derivation                                                                                                                                                            |
-| `src/lib.ts`          | Barrel                          | re-exports `action`, `builder`, `cache/layers`, `cache/keys`, `config`, `core`, `outputs` — never `index`          | The library surface under one specifier, for consumers that would rather import `@rust-toolchain` than seven modules                                                                                       |
+| File                     | Type                                | Exports                                                                                                                                                                                                                             | Responsibilities                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------ | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`           | Entry (node:child_process, node:fs) | none — side-effecting script                                                                                                                                                                                                        | Dependency wiring only, dispatching on `STATE_isPost`: for the main phase, hands real `spawnSync`, `readFileSync`, `@actions/core` and a synchronous `sleep` to `run()`; for the post phase, hands the real `@actions/cache` client and a `node:fs`-backed `measure()` to `runPost()`. Invisible to the coverage gate — see [Cache Lifecycle](#the-actionscache-adapter-lives-in-indexts) |
+| `src/action.ts`          | Module                              | `run`, `runPost`, `ActionDeps`, `PostDeps`, `ExecResult`, `ExecOptions`                                                                                                                                                             | Main phase (`run`) — rustup bootstrap, install, targets, components, default, `RUSTUP_TOOLCHAIN`, cargo env defaults, cache-lifecycle restore, outputs. Post phase (`runPost`) — replays the state `run` saved through `saveState` and saves whatever is left to save. Argv only, timeouts, retries                                                                                       |
+| `src/core.ts`            | Module (smol-toml, node:crypto)     | `parseRustToolchainToml`, `resolveChannel`, `generateCacheKey`, `generateSpecCacheKey`, `parseRustcVersion`, types                                                                                                                  | TOML parsing, channel resolution/scaling/validation, cache key computation                                                                                                                                                                                                                                                                                                                |
+| `src/config.ts`          | Module                              | `mergeConfig`, `resolveRustupEnv`, `parseCommaList`, types                                                                                                                                                                          | Merge toml config with action inputs (scalars replaced by inputs; lists accumulate deduped, inputs leading) and validate identifiers; resolve `RUSTUP_HOME`/`CARGO_HOME`, honouring caller-supplied values                                                                                                                                                                                |
+| `src/builder.ts`         | Classes                             | `ToolchainSpec`, `ToolchainSpecBuilder`                                                                                                                                                                                             | Fluent builder pattern, rustup argv generation                                                                                                                                                                                                                                                                                                                                            |
+| `src/outputs.ts`         | Module                              | `buildActionOutputs`, `toOutputEntries`, `ActionOutputs`, `ActionOutputsArgs`, `BooleanInput`, `CacheOutputs`, `CacheLayerOutput`, provenance types                                                                                 | Maps the resolved spec plus its sources and the cache lifecycle's outcome onto the action's output surface; serialises lists as JSON arrays and the whole object as `json`                                                                                                                                                                                                                |
+| `src/inputs.ts`          | Module                              | `readBooleanInput`, `InputReader`                                                                                                                                                                                                   | Shared YAML-boolean input parsing, used by both `action.ts` and `cache/inputs.ts` — belongs to neither on its own                                                                                                                                                                                                                                                                         |
+| `src/cache/layers.ts`    | Module                              | `CACHE_LAYER_IDS`, `CacheLayerId`, `parseCacheLayers`                                                                                                                                                                               | The canonical layer list (`registry`, `build`) and the `cache-layers` input parser                                                                                                                                                                                                                                                                                                        |
+| `src/cache/keys.ts`      | Module                              | `joinKeySegments`, `buildLayerKey`, `CacheKeyContext`, `CacheLayerKey`                                                                                                                                                              | Per-layer key and restore-key ladder derivation; the `build` key folds in `envHash`                                                                                                                                                                                                                                                                                                       |
+| `src/cache/inputs.ts`    | Module                              | `readCacheRequest`, `buildCacheOutputs`, `CacheRequest`, `CacheInputSource`                                                                                                                                                         | Validates every `cache-*` input before anything installs (`readCacheRequest`, fails fast on a bad `cache-key-hash` or an oversized key); completes the validated request into per-layer keys once the spec digest exists (`buildCacheOutputs`)                                                                                                                                            |
+| `src/cache/env.ts`       | Module (node:crypto)                | `hashBuildEnv`                                                                                                                                                                                                                      | Digests the `CARGO_*`/`CC`/`CFLAGS`/`CXX`/`CMAKE`/`RUST*` environment into the `build` key's `envHash` segment, so jobs differing only in `RUSTFLAGS` stop sharing a key                                                                                                                                                                                                                  |
+| `src/cache/paths.ts`     | Module (node:path)                  | `parseWorkspaces`, `registryPaths`, `buildPaths`, `Workspace`                                                                                                                                                                       | Reads `cache-workspaces` into resolved `<manifest-dir> -> <target-dir>` mappings, refusing anything outside the checkout; the `registry` layer's fixed paths; the `build` layer's paths with `!.../incremental` and `!.../examples` negation globs                                                                                                                                        |
+| `src/cache/budget.ts`    | Module                              | `parseSize`, `measurePaths`, `StatFs`                                                                                                                                                                                               | Reads `cache-budget` into a byte count (binary suffixes, `0` disables it); sums a layer's on-disk size through an injected `StatFs` port                                                                                                                                                                                                                                                  |
+| `src/cache/client.ts`    | Module                              | `CacheClient`                                                                                                                                                                                                                       | The restore/save port. The only real implementation wraps `@actions/cache` and lives in `src/index.ts`, which nothing imports and the coverage gate does not measure                                                                                                                                                                                                                      |
+| `src/cache/lifecycle.ts` | Module                              | `restoreLayers`, `saveLayers`, `LayerPlan`, `RestoredLayer`, `SavedLayer`, `LayerResult`, `LifecycleLog`, `SaveArgs`                                                                                                                | Restores every enabled layer concurrently, downgrading any failure to a miss; decides whether each layer is worth saving — skip on an exact hit, skip when its size can't be measured, skip over budget — and saves the rest concurrently                                                                                                                                                 |
+| `src/cache/summary.ts`   | Module                              | `renderSummary`                                                                                                                                                                                                                     | Renders the per-layer restore/save outcome as the job summary's Markdown table                                                                                                                                                                                                                                                                                                            |
+| `src/lib.ts`             | Barrel                              | re-exports `action`, `builder`, `cache/budget`, `cache/client`, `cache/env`, `cache/inputs`, `cache/keys`, `cache/layers`, `cache/lifecycle`, `cache/paths`, `cache/summary`, `config`, `core`, `inputs`, `outputs` — never `index` | The library surface under one specifier, for consumers that would rather import `@rust-toolchain` than fifteen modules                                                                                                                                                                                                                                                                    |
 
 `src/lib.ts` is the barrel; individual modules can still be imported directly
-and are cheaper, since the barrel loads all seven.
+and are cheaper, since the barrel loads all fifteen.
 
 ### Why the barrel excludes `src/index.ts`
 
@@ -403,7 +456,8 @@ order still hits the same key. See [COMPARISON.md](COMPARISON.md#cache-key).
 ### Cache Layers
 
 `cache: true` derives a key and restore-key ladder per cache layer, published
-through the `cache` output. Phase A ships two layers, defined in
+through the `cache` output. Phase A shipped the keys; Phase B (below) restores
+and saves against them. Two layers exist today, defined in
 `src/cache/layers.ts` and keyed in `src/cache/keys.ts`:
 
 - **`registry`** — the downloaded crate sources under `~/.cargo/registry` and
@@ -412,13 +466,15 @@ through the `cache` output. Phase A ships two layers, defined in
   archive it did not build, so tying the key to the compiler would force a
   re-download on every toolchain bump for no benefit.
 - **`build`** — the compiled artifacts under `target/`. Its key is
-  `build-<os>-<arch>-<suffix>-<cachekeyFull>-<lockHash>`, carrying the resolved
-  spec because those artifacts are toolchain-specific. Its restore ladder stops
-  one rung short of the bare `registry`-style prefix — the ladder is
-  `build-<os>-<arch>-<suffix>-<cachekeyFull>-` and nothing looser — because an
-  entry built by a different toolchain is not a useful restore: `cargo` would
-  discard it on sight, and the run pays the download cost only to re-save it
-  under a new key regardless.
+  `build-<os>-<arch>-<suffix>-<specCacheKey>-<envHash>-<lockHash>`, carrying
+  the resolved spec and the digest of the build-affecting environment
+  (`hashBuildEnv`, `src/cache/env.ts`) because those artifacts are both
+  toolchain- and environment-specific. Its restore ladder stops one rung short
+  of the bare `registry`-style prefix — the ladder is
+  `build-<os>-<arch>-<suffix>-<specCacheKey>-<envHash>-` and nothing looser —
+  because an entry built by a different toolchain or environment is not a
+  useful restore: `cargo` would discard it on sight, and the run pays the
+  download cost only to re-save it under a new key regardless.
 
 The layers are split by how often each one invalidates, which is the whole
 point of separating them: a `rustc` bump invalidates `build` but not
@@ -432,12 +488,101 @@ function, unreachable from a Node action. Taking the workflow's own value also
 keeps these keys interoperable with a hash the workflow may already use
 elsewhere.
 
-This action never calls `actions/cache` itself — it only derives keys for the
-workflow's own cache steps (see the [README's caching
-recipe](../README.md#deriving-cargo-cache-keys)). See
+`envHash` was added after the key format above already shipped, which means it
+changed every existing `build` key the moment it did: a workflow upgrading
+across that boundary sees exactly one cold `build` restore, then resumes
+hitting normally. See the upgrade note in [README → Deriving cargo cache keys
+yourself](../README.md#deriving-cargo-cache-keys-yourself).
+
+`cache: true` restores and saves both layers itself — see [Cache Lifecycle](#cache-lifecycle)
+below. A workflow can still derive the keys alone and wire its own
+`actions/cache` steps (see the [README's key-only
+recipe](../README.md#deriving-cargo-cache-keys-yourself)). See
 [`docs/design/2026-07-31-layered-cargo-cache.md`](design/2026-07-31-layered-cargo-cache.md)
 for the full design rationale, including the `bin` layer that a later phase
 adds for cargo-installed tools.
+
+### Cache Lifecycle
+
+`resolveCacheLifecycle` in `src/action.ts` turns the derived keys into actual
+restores and saves, split across the main and post phases:
+
+- **Restore** (`restoreLayers`, `src/cache/lifecycle.ts`) runs every enabled
+  layer's `client.restore` concurrently, in the main phase, right after the
+  toolchain is installed — the `build` key needs `specCacheKey`, which does
+  not exist until rustc has run. Any failure — a service outage, a reserved-key
+  race — becomes a warning and an ordinary miss; a cache being unavailable must
+  not fail a job that would otherwise succeed.
+- **Save** (`saveLayers`/`saveLayer`, `src/cache/lifecycle.ts`) runs from the
+  post phase, once the whole job has finished. Three independent reasons skip
+  a layer: it matched its restore key exactly (unchanged, saving it again is
+  pure budget burn); its size could not be measured (`measurePaths` threw —
+  writing an entry of unknown size into a shared budget is the unsafe
+  direction); or its measured size exceeds `cache-budget` (an oversized entry
+  does not degrade its own hit rate, it evicts _other_ workflows' caches). Each
+  layer's save is independently caught, so one layer's failure cannot lose the
+  results of the others in the same batch.
+- **Exclusions are negation globs, never deletion.** `buildPaths`
+  (`src/cache/paths.ts`) lists `target/`, then `!target/*/incremental` and
+  `!target/*/examples`; `@actions/glob` (which `@actions/cache` uses
+  internally) treats the `!`-prefixed entries as exclusions from what gets
+  archived. Nothing on disk is touched, so a save failure leaves the working
+  tree exactly as it was. `registry/src` is handled the same way in spirit but
+  more simply: `registryPaths` never lists it at all, since it is fully
+  regenerable from the `.crate` files in `registry/cache`.
+- **A cache failure never fails the build.** Restore, save, size measurement
+  and the job summary write are each wrapped so their own failure produces a
+  `core.warning` and lets everything else continue — including `runPost`'s
+  outer `try`/`catch` around a malformed state payload, and
+  `writeSummarySafely`'s own inner one around a summary write that throws when
+  `GITHUB_STEP_SUMMARY` is unset (slim runners, `act`).
+- **The job summary** (`renderSummary`, `src/cache/summary.ts`) is the only
+  place a per-layer result is visible — `cache-hit` is a single all-layers
+  boolean, so telling a cold run from a broken key needs the table naming each
+  layer's actual restore result and save outcome.
+
+### The Two Entrypoints And The State Handoff
+
+`action.yml` declares both `main` and `post` as `dist/index.js` — the same
+bundle, invoked twice. `src/index.ts` is the only place that tells the two
+invocations apart, by checking `process.env.STATE_isPost`, which GitHub Actions
+populates from whatever the main phase's `saveState("isPost", ...)` wrote.
+
+That call is the first thing `run` does — unconditionally, before reading any
+cache input, before installing anything — specifically so a
+caching-**disabled** job's post invocation can still tell it is the post
+phase. Gating it on `cache: true` was tried and reverted: on the default
+configuration `STATE_isPost` would never be set, the post invocation would
+fall through to `run`'s own branch in `src/index.ts`, and the whole toolchain
+install would run a second time — capable of turning an already-succeeded job
+into a failed one. `runPost` already no-ops correctly on empty state, which is
+what makes the unconditional `saveState` safe for every configuration.
+
+The second piece of state, `"cache"`, crosses the same boundary as a
+JSON-encoded string: `{ plans, restored, budget }`, written by
+`resolveCacheLifecycle` only when caching is enabled, and read back by
+`runPost` through `getState("cache")`. An empty value there — caching was off,
+or the run never reached the lifecycle — is `runPost`'s own no-op signal,
+independent of `isPost`. Because the two phases are separate process
+invocations, nothing else survives between them: no closures, no module-level
+state, only what was explicitly written to and read from these two keys.
+
+### The `@actions/cache` Adapter Lives In `index.ts`
+
+`CacheClient` (`src/cache/client.ts`) is a two-method port —
+`restore`/`save` — with no real implementation anywhere under `src/`. The only
+one wraps `@actions/cache` and is built inline in `src/index.ts`, which
+nothing imports and the coverage gate does not measure (see `CLAUDE.md` →
+Coverage gate gotchas). That placement is deliberate, not an oversight:
+`@actions/cache` vendors the Azure Storage SDK — most of the roughly 1.4 MB
+this feature added to `dist/index.js` — plus genuinely unmockable network
+code. A library module importing it directly would pull that weight, and that
+network code, into every test process, making the 100% coverage gate
+unreachable for anything downstream of it. Every module that needs to restore
+or save takes a `CacheClient` as a dependency instead, so tests inject a fake
+and the real adapter is exercised only by the actual GitHub Actions runtime —
+and by CI's `E2E` job, the one place restore and save meet the real cache
+service (see [README → Built to be trusted](../README.md#built-to-be-trusted)).
 
 ### Toolchain Pinning
 

@@ -59,9 +59,9 @@ Honest status, because a claim you disprove in five minutes is worse than no cla
 | [`dtolnay/rust-toolchain`](https://github.com/dtolnay/rust-toolchain)                                 | Install a toolchain                           | ✅ **Replaced today** — superset, `cachekey` byte-compatible            |
 | [`actions-rs/toolchain`](https://github.com/actions-rs/toolchain)                                     | Install a toolchain (unmaintained since 2021) | ✅ **Replaced today**                                                   |
 | [`actions/cache`](https://github.com/actions/cache) hand-wired for cargo                              | Generic cache + your own key logic            | ✅ **Key derivation replaced today** — feed `outputs.cache` straight in |
-| [`actions-rust-lang/setup-rust-toolchain`](https://github.com/actions-rust-lang/setup-rust-toolchain) | Toolchain + a `rust-cache` wrapper            | ◐ Toolchain today · caching in **Phase B**                              |
-| [`moonrepo/setup-rust`](https://github.com/moonrepo/setup-rust)                                       | Toolchain + cache + cargo tools               | ◐ Toolchain today · cache **Phase B** · tools **Phase C**               |
-| [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache)                                       | Restore/save the cargo cache                  | ◐ Keys today · restore/save in **Phase B**                              |
+| [`actions-rust-lang/setup-rust-toolchain`](https://github.com/actions-rust-lang/setup-rust-toolchain) | Toolchain + a `rust-cache` wrapper            | ✅ **Replaced** — toolchain and caching both covered                    |
+| [`moonrepo/setup-rust`](https://github.com/moonrepo/setup-rust)                                       | Toolchain + cache + cargo tools               | ◐ Toolchain + cache **replaced today** · tools **Phase C**              |
+| [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache)                                       | Restore/save the cargo cache                  | ✅ **Replaced** — `cache: true` restores and saves, no separate action  |
 | [`taiki-e/install-action`](https://github.com/taiki-e/install-action)                                 | Install cargo tools fast                      | ○ Planned — **Phase C**                                                 |
 | [`baptiste0928/cargo-install`](https://github.com/baptiste0928/cargo-install)                         | Install + cache cargo tools                   | ○ Planned — **Phase C**                                                 |
 | [`actions-rs/cargo`](https://github.com/actions-rs/cargo)                                             | Run cargo commands                            | ✗ Not a goal — use `run: cargo …`                                       |
@@ -69,19 +69,24 @@ Honest status, because a claim you disprove in five minutes is worse than no cla
 
 ✅ replaced · ◐ partially replaced, rest on the roadmap · ○ planned · ✗ deliberately out of scope
 
-**Today** this is a strict superset of `dtolnay/rust-toolchain` plus cache-key derivation, so it retires
-your toolchain action and your key-computation step in one move. It does **not** yet restore or save
-caches — see [Roadmap](#roadmap).
+**Today** this is a strict superset of `dtolnay/rust-toolchain` that also restores and saves your cargo
+caches itself — `cache: true` needs no `actions/cache` step and no `Swatinem/rust-cache`. It retires your
+toolchain action, your cache action and your key-computation step in one move. See
+[Roadmap](#roadmap) for what's still ahead.
 
 ## Built to be trusted
 
-- **245 tests, 100% line/function/statement coverage**, enforced in CI — the gate fails the build, it is
+- **338 tests, 100% line/function/statement coverage**, enforced in CI — the gate fails the build, it is
   not a badge
 - **No shell, ever** — every command is an argv array. Channel, targets, components and profile can come
   from an untrusted workspace `rust-toolchain.toml`, so none of them is ever interpolated into a string
 - **Every command is bounded** by a timeout, and network-bound ones retry three times with backoff
-- **Verified end-to-end on a real runner** via [`act`](https://github.com/nektos/act), not only in unit
-  tests — including that the documented cache recipe actually evaluates
+- **A cache failure never fails the build** — restoring, saving, measuring a layer's size and writing the
+  job summary each warn and continue on their own failure
+- **Verified end-to-end on real runners**, not only in unit tests — locally via
+  [`act`](https://github.com/nektos/act), and in CI's own `E2E` job on all three operating systems, which
+  invokes the action twice in the same job to prove a second run is well-behaved and its outputs are
+  stable
 - **REUSE-compliant licensing**, `gitleaks`, CodeQL, and OpenSSF Scorecard in CI
 - **Committed, reproducible bundle** — CI fails on `dist/` drift, so what runs is what you reviewed
 
@@ -99,6 +104,7 @@ caches — see [Roadmap](#roadmap).
 - **Installs rustup when missing** — bootstraps via `rustup-init` on self-hosted runners and slim containers, on POSIX and Windows
 - **Cargo defaults** — sets `CARGO_INCREMENTAL=0` and `CARGO_TERM_COLOR=always`, plus the registry-protocol and HTTP-multiplexing workarounds for 1.66–1.71, never overwriting values you set yourself
 - **Resilient** — argv arrays with no shell, validated inputs, a timeout on every command, and three retries with backoff on network-bound ones
+- **Caching is restored and saved automatically** — `cache: true` restores every enabled layer at the start of the job and saves it again from a `post:` step; no `actions/cache` step, no `Swatinem/rust-cache`. `cache-workspaces` (default `. -> target`) names the `<manifest-dir> -> <target-dir>` pairs to save, `cache-budget` (default `2GB`, `0` disables it) caps what a single layer will save, and `cache-hit` reports `true` only when **every** enabled layer matched its exact key — a partial match through a restore key counts as `false`, because that layer is saved again under the new key
 
 See [docs/COMPARISON.md](docs/COMPARISON.md) for a feature-by-feature comparison against the wider
 Rust action ecosystem.
@@ -126,7 +132,7 @@ The caching story ships in phases, each independently useful. Phase A is release
 | Phase | What it adds                                                                                                   | Status          |
 | ----- | -------------------------------------------------------------------------------------------------------------- | --------------- |
 | **A** | Layered cache **key derivation** — `registry` and `build` keys with restore-key ladders, as the `cache` output | ✅ **Released** |
-| **B** | Restore and save — a `post:` step that caches the layers itself, so `Swatinem/rust-cache` comes out too        | Planned         |
+| **B** | Restore and save — a `post:` step that caches the layers itself, so `Swatinem/rust-cache` comes out too        | ✅ **Released** |
 | **C** | `cargo-tools` — installs and caches cargo binaries, keyed on resolved versions                                 | Planned         |
 | **D** | Deterministic pruning and a size budget, replacing heuristic cache cleaning                                    | Planned         |
 | **E** | Per-layer job summary and reporting                                                                            | Planned         |
@@ -148,7 +154,10 @@ This action partitions by **what actually invalidates each layer**:
   ladder that never falls back across a toolchain boundary — artifacts from another rustc are ones
   cargo discards on sight, so restoring them costs download time to gain nothing.
 
-Phase A gives you those keys today; wire them into `actions/cache` yourself. Phase B does the wiring.
+Phase A shipped those keys. Phase B does the wiring: `cache: true` restores every enabled layer at job
+start and saves it again from a `post:` step, with no `actions/cache` step of your own. The per-layer keys
+are still published for a workflow that wants to wire its own `actions/cache` steps as well — see
+[Deriving cargo cache keys yourself](#deriving-cargo-cache-keys-yourself) below.
 
 ## Quick Start
 
@@ -241,10 +250,13 @@ Install a Rust toolchain with rustup, driven by the rust-toolchain.toml you alre
 | `components`           | <p>Comma, space, or newline-separated list of components to install (e.g., clippy, rustfmt). Accepts multiline YAML for readability. Merged with rust-toolchain.toml components, deduped, with these leading the list.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `false`  | `""`             |
 | `profile`              | <p>Rust profile to use. Valid options are <code>minimal</code>, <code>default</code> and <code>complete</code>; anything else is rejected. Overrides the rust-toolchain.toml profile. Defaults to <code>default</code> (rustc, cargo, rust-std, rust-docs, rustfmt, clippy), matching rustup's own default. rustup ignores the profile when the toolchain is already installed, so the action also adds the profile's components explicitly. <code>complete</code> requires <code>toolchain: nightly</code> — it needs miri and rustc-codegen-cranelift, which rustup publishes for nightly only, and pairing it with another channel fails the step immediately.</p>                                                                                                                                                        | `false`  | `""`             |
 | `set-rustup-toolchain` | <p>Whether to export <code>RUSTUP_TOOLCHAIN</code> for the rest of the job (default true). It sits at precedence 2 in rustup's override chain, above every <code>rust-toolchain.toml</code> in the tree, which is what makes an action input actually win in later steps. Set to false in a monorepo where nested crates pin their own toolchains and each <code>rust-toolchain.toml</code> should keep applying to its own directory. Every output still describes the toolchain this action installed either way.</p>                                                                                                                                                                                                                                                                                                      | `false`  | `true`           |
-| `cache`                | <p>Whether to derive cargo cache keys (default false). When true, the <code>cache</code> output carries a key and restore-key ladder per layer for the workflow's own <code>actions/cache</code> steps. This action does not restore or save anything itself.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `false`  | `false`          |
+| `cache`                | <p>Whether to cache cargo's registry and target directory (default false). When true, the action restores every enabled layer (see <code>cache-layers</code>) before the toolchain is used, and saves it again from a <code>post:</code> step at the end of the job — no <code>actions/cache</code> step and no <code>Swatinem/rust-cache</code> are needed. The <code>cache</code> output still carries each layer's key and restore-key ladder, for a workflow that would rather wire its own <code>actions/cache</code> steps instead.</p>                                                                                                                                                                                                                                                                                | `false`  | `false`          |
 | `cache-key-hash`       | <p>A hash of the dependency set, required when <code>cache</code> is true. Pass the workflow expression <code>hashFiles('**/Cargo.lock')</code> wrapped in the usual interpolation braces — <code>hashFiles</code> is a workflow expression function that a Node action cannot call, and using GitHub's own value keeps these keys interoperable with caches you already have. Without it the keys never change: they hit exactly on every run and serve the same crates for the life of the repository. The README's caching section shows the full step. Note this text deliberately avoids writing the interpolation braces literally: an expression inside action metadata is not an expression context, and <code>act</code> rejects the whole action with "expressions are not allowed here" before any code runs.</p> | `false`  | `""`             |
 | `cache-key-suffix`     | <p>An optional discriminator added to every cache key, e.g. a job name. Omitting it collapses the slot rather than leaving an empty segment, so the key reads <code>registry-Linux-X64-&lt;hash&gt;</code> and not <code>registry-Linux-X64--&lt;hash&gt;</code>. Set it when jobs differ in <code>RUSTFLAGS</code> or other <code>CARGO_*</code> settings: those are not part of the derived key, so such jobs otherwise share a <code>build</code> key, each rebuilding and then re-saving a full <code>target/</code> over the other. May not contain a comma or whitespace.</p>                                                                                                                                                                                                                                          | `false`  | `""`             |
 | `cache-layers`         | <p>Which cache layers to derive keys for, comma, space or newline separated. Defaults to all of them. <code>registry</code> covers the downloaded crates and is keyed on the dependency set alone; <code>build</code> covers the target directory and is keyed on the dependency set plus the resolved toolchain, so a rustc bump does not invalidate the crates it never touched.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                       | `false`  | `registry,build` |
+| `cache-workspaces`     | <p>Cargo workspaces to cache build artifacts for, one <code>&lt;manifest-dir&gt; -&gt; &lt;target-dir&gt;</code> mapping per line. Both sides resolve against the workspace root, and a mapping resolving outside it is rejected. Matches the syntax Swatinem/rust-cache uses, so an existing value transfers unchanged.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `false`  | `. -> target`    |
+| `cache-budget`         | <p>Largest cache entry to save per layer, as a byte count with an optional K, M, G or T suffix; binary rather than decimal. A layer exceeding it is not saved, and the step warns with the measured size. Set to 0 to disable. Defaults to 2GB because an oversized entry does not degrade its own hit rate — it evicts other workflows' caches out of the repository's shared budget.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                   | `false`  | `2GB`            |
+| `cache-on-failure`     | <p>Whether to save the cache when the job failed (default false). A failed job usually has a partial or poisoned <code>target/</code>, so saving it by default would serve those artifacts to the next run. Turn it on for a long build that fails late and would otherwise restart from nothing.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `false`  | `false`          |
 
 ## Outputs
 
@@ -252,7 +264,8 @@ Install a Rust toolchain with rustup, driven by the rust-toolchain.toml you alre
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cachekey`             | <p>12-character cache key derived from rustc version date and commit hash, compatible with dtolnay/rust-toolchain's cachekey output for seamless cache interoperability.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `cachekey-full`        | <p>The cachekey above extended with a digest of the resolved channel, targets, components and profile. Two jobs on the same compiler but with different targets share a <code>cachekey</code> and would restore each other's artifacts; this key keeps them apart. Targets and components are sorted, so writing the same set in a different order still hits the same key.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `cache`                | <p>The derived cache keys as one JSON object: <code>enabled</code>, plus a <code>layers</code> map from layer name to <code>{ key, restoreKeys }</code>. Empty when <code>cache</code> is false. Read it with <code>fromJSON()</code> and feed the parts straight into <code>actions/cache</code>.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `cache`                | <p>The derived cache keys as one JSON object: <code>enabled</code>, plus a <code>layers</code> map from layer name to <code>{ key, restoreKeys }</code> — and, once a layer has actually been restored, <code>result</code> (<code>exact</code>, <code>partial</code> or <code>miss</code>). Empty when <code>cache</code> is false. Read it with <code>fromJSON()</code>; a workflow wiring its own <code>actions/cache</code> steps instead of relying on the lifecycle can feed the parts straight in.</p>                                                                                                                                                                                                                                                                                                                                                                                       |
+| `cache-hit`            | <p><code>true</code> only when every enabled cache layer matched its exact key. A partial match through a restore key counts as false, because the layer will be saved again under the new key.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `name`                 | <p>Resolved Rust toolchain channel name (e.g., stable, nightly-2025-01-01, 1.89.0).</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `toolchain`            | <p>The resolved channel, after merging <code>rust-toolchain.toml</code> with the inputs and expanding any expressive form — <code>stable minus 2 releases</code> comes back as the <code>1.NN</code> it became. Same value as <code>name</code>, which is kept under that name for dtolnay/rust-toolchain compatibility.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `targets`              | <p>The target triples actually installed, as a JSON array string (e.g. <code>["wasm32-unknown-unknown","aarch64-apple-darwin"]</code>). A JSON array rather than a delimited string so <code>fromJSON()</code> reads it directly and no consumer has to guess the separator. Inputs lead the list, then any the toml added.</p>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -308,7 +321,7 @@ This action is a `node24` action.
     # Default: true
 
     cache:
-    # Whether to derive cargo cache keys (default false). When true, the `cache` output carries a key and restore-key ladder per layer for the workflow's own `actions/cache` steps. This action does not restore or save anything itself.
+    # Whether to cache cargo's registry and target directory (default false). When true, the action restores every enabled layer (see `cache-layers`) before the toolchain is used, and saves it again from a `post:` step at the end of the job — no `actions/cache` step and no `Swatinem/rust-cache` are needed. The `cache` output still carries each layer's key and restore-key ladder, for a workflow that would rather wire its own `actions/cache` steps instead.
     #
     # Required: false
     # Default: false
@@ -330,6 +343,24 @@ This action is a `node24` action.
     #
     # Required: false
     # Default: registry,build
+
+    cache-workspaces:
+    # Cargo workspaces to cache build artifacts for, one `<manifest-dir> -> <target-dir>` mapping per line. Both sides resolve against the workspace root, and a mapping resolving outside it is rejected. Matches the syntax Swatinem/rust-cache uses, so an existing value transfers unchanged.
+    #
+    # Required: false
+    # Default: . -> target
+
+    cache-budget:
+    # Largest cache entry to save per layer, as a byte count with an optional K, M, G or T suffix; binary rather than decimal. A layer exceeding it is not saved, and the step warns with the measured size. Set to 0 to disable. Defaults to 2GB because an oversized entry does not degrade its own hit rate — it evicts other workflows' caches out of the repository's shared budget.
+    #
+    # Required: false
+    # Default: 2GB
+
+    cache-on-failure:
+    # Whether to save the cache when the job failed (default false). A failed job usually has a partial or poisoned `target/`, so saving it by default would serve those artifacts to the next run. Turn it on for a long build that fails late and would otherwise restart from nothing.
+    #
+    # Required: false
+    # Default: false
 ```
 
 <!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v0.1" -->
@@ -436,11 +467,63 @@ So in the example above, `wasm32-unknown-unknown` is traceable to the workflow
 and `aarch64-apple-darwin` to the checked-in toml — a distinction the merged
 `targets` list alone cannot make.
 
-### Deriving cargo cache keys
+### Caching, restored and saved automatically
 
-Set `cache: true` and the action derives a key and restore-key ladder per
-layer. It does not restore or save anything itself — the keys go to your own
-`actions/cache` steps.
+Set `cache: true` and the action runs the whole lifecycle itself — no
+`actions/cache` step, no `Swatinem/rust-cache`:
+
+```yaml
+- uses: elioseverojunior/rust-toolchain@v0.1
+  with:
+    toolchain: stable
+    cache: true
+    cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}
+    cache-key-suffix: ci
+```
+
+That is the whole recipe. Every enabled layer (`registry`, `build`) is
+restored before the toolchain is used, and saved again from a `post:` step at
+the end of the job — a layer that matched its exact key on restore is not
+re-saved, since it is unchanged.
+
+A few inputs shape that lifecycle:
+
+- **`cache-workspaces`** (default `. -> target`) — one
+  `<manifest-dir> -> <target-dir>` mapping per line, for a workspace whose
+  `target/` is not at the repository root. Both sides resolve against
+  `GITHUB_WORKSPACE`; a mapping resolving outside it is rejected rather than
+  trusted, since the value comes from workflow input.
+- **`cache-budget`** (default `2GB`, binary suffixes `K`/`M`/`G`/`T`, `0`
+  disables it) — the largest a single layer's save may be. An oversized entry
+  does not degrade its own hit rate; it evicts _other_ workflows' caches out
+  of the repository-wide budget, so exceeding it warns and skips that layer's
+  save instead of writing it anyway.
+- **`cache-on-failure`** (default `false`) — save even when the job failed.
+  Off by default, because a failed job usually leaves a partial or poisoned
+  `target/`, and saving that by default would serve it to the next run.
+- **`cache-hit`** output — `true` only when **every** enabled layer matched
+  its exact key. A partial match through a restore key reports `false`: that
+  layer's contents came from an older key and will be saved again under the
+  new one, so it was not a full hit.
+
+A cache failure never fails the build. Restoring, saving, measuring a layer's
+size, and writing the job summary each warn and continue on their own
+failure rather than calling `setFailed` — a flaky cache service is not a
+reason to fail a job that would otherwise have succeeded.
+
+#### Deriving cargo cache keys yourself
+
+Prefer to wire your own `actions/cache` steps for these same paths — a
+monorepo with cache handling of its own, say? There is currently no way to get
+the per-layer `cache` output without `cache: true`, and `cache: true` always
+runs its own restore-then-save lifecycle too — so the steps below run
+alongside it, not instead of it, and end up restoring and saving the same
+paths a second time. That is redundant rather than broken (`@actions/cache`
+rejects a second save under a key that already exists, and either side's
+failure only warns), but it does mean this recipe is best suited to keying
+_other_ paths off the same derived values, or to a workflow that has a
+specific reason to control the restore/save itself and is fine accepting the
+duplication.
 
 ```yaml
 - id: rust
@@ -482,12 +565,19 @@ bumping stable does not re-download crates. `build` holds compiled artifacts,
 so its key carries the resolved toolchain and its ladder never falls back past
 one.
 
-`RUSTFLAGS` and the `CARGO_*` variables are **not** part of the derived key.
-Cargo fingerprints them itself, so a job that changes them rebuilds rather than
-reusing the wrong artifacts — but it then re-saves a full `target/` under the
-same `build` key as the job it differs from, which is the write amplification
-this layering exists to remove. Give such jobs distinct `cache-key-suffix`
-values.
+`RUSTFLAGS` and the rest of the `CARGO_*`/`CC`/`CFLAGS`/`CXX`/`CMAKE`/`RUST*`
+environment **are** part of the `build` key, hashed together into one segment.
+Two jobs that differ only in `RUSTFLAGS` therefore no longer share a `build`
+key — each used to rebuild into the shared entry and then overwrite the
+other's save, the exact write amplification the layer split exists to remove.
+`cache-key-suffix` is still there for a discriminator that isn't an
+environment variable, e.g. distinguishing two jobs that both build the same
+crate with the same flags but for different purposes.
+
+**Upgrading from a `cache: true` release older than this environment hash?**
+The `build` key changed the moment it shipped — every job's key includes a
+segment it did not have before — so the first run after upgrading is a cold
+`build` miss. Every run after that restores normally.
 
 ## Programmatic Usage
 
@@ -575,8 +665,8 @@ Three things that commonly go wrong:
 package name to `index.ts`; here that file is the GitHub Action entry point — it
 exports nothing and calls `run()` at the top level, so importing it executes the
 action and shells out to `rustup`. `src/lib.ts` exists precisely so there is a
-side-effect-free barrel to map instead, and it re-exports the seven library
-modules but never `index.ts`. A test asserts that.
+side-effect-free barrel to map instead, and it re-exports every other library
+module but never `index.ts`. A test asserts that.
 
 **Do not use `@/…` from outside this repo.** `@/*` is mapped here as a short
 form, but it is confined to tests. It is deliberately absent from library
@@ -593,6 +683,17 @@ as deprecated.
 
 Both `tsc --noEmit` and `bun run` resolve the mapping above, so the same config
 covers type-checking and execution.
+
+### `run()` Is Async, and `ActionDeps` Grew
+
+A consumer constructing `ActionDeps` directly — rather than importing it as a
+library to read outputs — is affected by the cache lifecycle in two ways:
+`run(deps: ActionDeps): Promise<void>` is now `async`, and `ActionDeps["core"]`
+now requires `saveState`, `getState`, `warning` and `summary` alongside the
+members it already had, plus a new top-level `cache: CacheClient`. Both are
+breaking changes for that call site; a caller that only imports the pure
+modules (`builder`, `core`, `config`, `outputs`, the `cache/*` helpers) is
+unaffected.
 
 ## `rust-toolchain.toml` Example
 

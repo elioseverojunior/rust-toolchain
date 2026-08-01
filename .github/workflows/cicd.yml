@@ -294,6 +294,72 @@ jobs:
           rustc --version | grep -q "1\.90" \
             || { echo "::error::rustc is not the 1.90 the toml asked for"; exit 1; }
 
+      # A second invocation, same job, identical inputs. This is the only
+      # place restore and save meet the real cache service, but a save from
+      # THIS job's own post step has not happened yet when this step runs —
+      # `post:` only runs after every other step in the job finishes. So this
+      # cannot observe a hit on an entry the first invocation above saved;
+      # that would need a second, later *job* (a subsequent push or re-run
+      # reusing the same `cache-key-suffix`), which is not something a single
+      # job can force or observe.
+      #
+      # What a second same-job invocation genuinely proves: restoring twice in
+      # a row, with nothing saved in between, is deterministic — the second
+      # call sees exactly the cache-service state the first one did and
+      # reaches the same verdict — and the action is well-behaved when
+      # invoked twice in one job. Whether that verdict is a hit or a miss
+      # depends on this branch's cache history, not on anything this job does,
+      # so the assertions below check agreement between the two runs rather
+      # than asserting a specific outcome.
+      - name: Run Rust Toolchain Action Again (Same Job, Nothing Saved In Between)
+        id: rust-toolchain-warm
+        uses: ./
+        with:
+          cache: true
+          cache-key-hash: ${{ hashFiles('bun.lock') }}
+          cache-key-suffix: ci
+
+      - name: Verify The Cache Round-Trips
+        shell: bash
+        env:
+          FIRST_HIT: ${{ steps.rust-toolchain.outputs.cache-hit }}
+          SECOND_HIT: ${{ steps.rust-toolchain-warm.outputs.cache-hit }}
+          FIRST_REGISTRY_KEY: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.registry.key }}
+          SECOND_REGISTRY_KEY: ${{ fromJSON(steps.rust-toolchain-warm.outputs.cache).layers.registry.key }}
+        run: |
+          set -eo pipefail
+
+          echo "first  cache-hit: $FIRST_HIT"
+          echo "second cache-hit: $SECOND_HIT"
+          echo "first  registry key: $FIRST_REGISTRY_KEY"
+          echo "second registry key: $SECOND_REGISTRY_KEY"
+
+          # Identical inputs must derive an identical key — the cheap half of
+          # the round-trip, but still worth checking against a real runner
+          # rather than only unit tests.
+          [[ "$FIRST_REGISTRY_KEY" == "$SECOND_REGISTRY_KEY" ]] \
+            || { echo "::error::registry key changed between two identical invocations"; exit 1; }
+
+          # Nothing saved anything between the two restores, so whatever the
+          # cache service told the first invocation, it must tell the second
+          # one too. A mismatch here means restoring is not idempotent, or
+          # cache-hit is not being derived deterministically from the restore
+          # outcome — either way a real defect, regardless of whether this
+          # branch's cache happens to be warm or cold today.
+          [[ "$FIRST_HIT" == "$SECOND_HIT" ]] \
+            || { echo "::error::cache-hit differs between two same-job invocations ($FIRST_HIT vs $SECOND_HIT) with nothing saved in between"; exit 1; }
+
+          # The negation globs are only exercised when something was actually
+          # restored into target/ — from a real, separate prior job that saved
+          # under this branch's build key. On a cold key (no prior save exists
+          # yet) target/ is simply absent and this check is vacuously
+          # satisfied; that is expected on the first run after this feature
+          # ships, not a defect.
+          if [[ -d target ]] && find target -type d -name incremental | grep -q .; then
+            echo "::error::an incremental directory survived into the restored cache"
+            exit 1
+          fi
+
   # ──────────────────────────────────────────────
   #  6.  Release — only on push to default branch
   # ──────────────────────────────────────────────

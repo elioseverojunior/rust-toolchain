@@ -76,10 +76,13 @@ inputs:
 
   cache:
     description: >
-      Whether to derive cargo cache keys (default false). When true, the
-      `cache` output carries a key and restore-key ladder per layer for the
-      workflow's own `actions/cache` steps. This action does not restore or
-      save anything itself.
+      Whether to cache cargo's registry and target directory (default false).
+      When true, the action restores every enabled layer (see `cache-layers`)
+      before the toolchain is used, and saves it again from a `post:` step at
+      the end of the job — no `actions/cache` step and no
+      `Swatinem/rust-cache` are needed. The `cache` output still carries each
+      layer's key and restore-key ladder, for a workflow that would rather
+      wire its own `actions/cache` steps instead.
     required: false
     default: "false"
 
@@ -168,9 +171,11 @@ outputs:
   cache:
     description: >
       The derived cache keys as one JSON object: `enabled`, plus a `layers`
-      map from layer name to `{ key, restoreKeys }`. Empty when `cache` is
-      false. Read it with `fromJSON()` and feed the parts straight into
-      `actions/cache`.
+      map from layer name to `{ key, restoreKeys }` — and, once a layer has
+      actually been restored, `result` (`exact`, `partial` or `miss`). Empty
+      when `cache` is false. Read it with `fromJSON()`; a workflow wiring its
+      own `actions/cache` steps instead of relying on the lifecycle can feed
+      the parts straight in.
 
   cache-hit:
     description: >
