@@ -202,6 +202,11 @@ jobs:
 
       # No `with:` beyond the cache inputs on purpose — this asserts the
       # TOML-first contract, which is the action's headline behaviour.
+      #
+      # `cache-workspaces` points at the probe crate created below rather than
+      # at the repository root. This repository has no Rust crate, so the
+      # default `. -> target` names a directory that never exists — which is
+      # how an exclusion assertion here stayed vacuous through eight reviews.
       - name: Run Rust Toolchain Action
         id: rust-toolchain
         uses: ./
@@ -209,6 +214,7 @@ jobs:
           cache: true
           cache-key-hash: ${{ hashFiles('bun.lock') }}
           cache-key-suffix: ci
+          cache-workspaces: e2e-probe -> e2e-probe/target
 
       # Values arrive through env rather than interpolated into the script, so
       # an output containing shell metacharacters cannot execute.
@@ -294,78 +300,210 @@ jobs:
           rustc --version | grep -q "1\.90" \
             || { echo "::error::rustc is not the 1.90 the toml asked for"; exit 1; }
 
-      # A second invocation, same job, identical inputs. This is the only
-      # place restore and save meet the real cache service, but a save from
-      # THIS job's own post step has not happened yet when this step runs —
-      # `post:` only runs after every other step in the job finishes. So this
-      # cannot observe a hit on an entry the first invocation above saved;
-      # that would need a second, later *job* (a subsequent push or re-run
-      # reusing the same `cache-key-suffix`), which is not something a single
-      # job can force or observe.
+      # A real crate, so there is a real `target/` for the post step to save.
+      # Without one the build layer resolves to nothing, `saveCache` refuses an
+      # empty path set, and the whole save path is never executed — which is
+      # how the negation globs shipped excluding nothing.
       #
-      # What a second same-job invocation genuinely proves: restoring twice in
-      # a row, with nothing saved in between, is deterministic — the second
-      # call sees exactly the cache-service state the first one did and
-      # reaches the same verdict — and the action is well-behaved when
-      # invoked twice in one job. Whether that verdict is a hit or a miss
-      # depends on this branch's cache history, not on anything this job does,
-      # so the assertions below check agreement between the two runs rather
-      # than asserting a specific outcome.
-      - name: Run Rust Toolchain Action Again (Same Job, Nothing Saved In Between)
-        id: rust-toolchain-warm
+      # `cfg-if` is deliberate, not decoration: it is tiny and dependency-free,
+      # and downloading it is what populates `$CARGO_HOME/registry`, without
+      # which the registry layer has nothing to save either.
+      #
+      # CARGO_INCREMENTAL=1 overrides the `0` the action exports into
+      # GITHUB_ENV (a step's own `env:` wins), so `incremental/` actually
+      # exists to be excluded. The build key is unaffected: CARGO_INCREMENTAL
+      # is on `hashBuildEnv`'s deny-list precisely because the action sets it
+      # itself. `--examples` gives the other exclusion something to bite on.
+      - name: Build A Probe Crate
+        shell: bash
+        env:
+          CARGO_INCREMENTAL: "1"
+        run: |
+          set -eo pipefail
+
+          mkdir -p e2e-probe/src e2e-probe/examples
+          cat > e2e-probe/Cargo.toml <<'EOF'
+          [package]
+          name = "e2e-probe"
+          version = "0.0.0"
+          edition = "2021"
+
+          [dependencies]
+          cfg-if = "1"
+          EOF
+          echo 'fn main() { println!("{}", cfg_if::cfg_if! { if #[cfg(unix)] { "unix" } else { "other" } }); }' \
+            > e2e-probe/src/main.rs
+          echo 'fn main() { println!("hello"); }' > e2e-probe/examples/hello.rs
+
+          cargo build --manifest-path e2e-probe/Cargo.toml --bins --examples
+
+          # The exclusion assertion in the warm job is only meaningful if the
+          # things it looks for exist here first. Fail loudly rather than
+          # leaving that job asserting on something that can never be present.
+          find e2e-probe/target -type d -name incremental | grep -q . \
+            || { echo "::error::no incremental/ was produced, so the exclusion assertion downstream would be vacuous"; exit 1; }
+          find e2e-probe/target -type d -name examples | grep -q . \
+            || { echo "::error::no examples/ was produced, so the exclusion assertion downstream would be vacuous"; exit 1; }
+
+      # A second invocation in the same job. It cannot observe a hit on
+      # anything this job saves — `post:` runs only after every other step in
+      # the job finishes — so the warm-restore proof lives in the separate
+      # `E2E Warm Cache` job below, which `needs:` this one.
+      #
+      # What this invocation does prove is that the derived keys do not move
+      # between two invocations. They did: the action exports CARGO_INCREMENTAL
+      # and friends through GITHUB_ENV, so the second invocation used to read
+      # its own predecessor's output back as caller-supplied environment and
+      # derive a different `envHash` — e3b0c442 then dd704211 — and therefore a
+      # `build` key nothing would ever restore.
+      #
+      # The suffix differs on purpose. With an identical suffix both
+      # invocations' post steps race to save the `registry` layer under the
+      # same key, one loses, and every CI run across three operating systems
+      # emits a warning that means nothing — which is how a warning channel
+      # stops being read.
+      - name: Run Rust Toolchain Action Again (Same Job, Different Suffix)
+        id: rust-toolchain-second
+        uses: ./
+        with:
+          cache: true
+          cache-key-hash: ${{ hashFiles('bun.lock') }}
+          cache-key-suffix: ci-second
+          cache-workspaces: e2e-probe -> e2e-probe/target
+
+      - name: Verify The Keys Do Not Move Between Invocations
+        shell: bash
+        env:
+          FIRST_BUILD_KEY: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.build.key }}
+          SECOND_BUILD_KEY: ${{ fromJSON(steps.rust-toolchain-second.outputs.cache).layers.build.key }}
+          FIRST_REGISTRY_KEY: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.registry.key }}
+          SECOND_REGISTRY_KEY: ${{ fromJSON(steps.rust-toolchain-second.outputs.cache).layers.registry.key }}
+        run: |
+          set -eo pipefail
+
+          echo "first  build key: $FIRST_BUILD_KEY"
+          echo "second build key: $SECOND_BUILD_KEY"
+          echo "first  registry key: $FIRST_REGISTRY_KEY"
+          echo "second registry key: $SECOND_REGISTRY_KEY"
+
+          # The two invocations differ in exactly one input, so their keys must
+          # differ in exactly one segment. Anything else means a segment moved
+          # on its own — and the only segment that can is `envHash`, which the
+          # action's own GITHUB_ENV exports used to shift.
+          [[ "${FIRST_BUILD_KEY/-ci-/-ci-second-}" == "$SECOND_BUILD_KEY" ]] \
+            || { echo "::error::the build key changed by more than the suffix between two same-job invocations; envHash is not stable across the action's own exports"; exit 1; }
+          [[ "${FIRST_REGISTRY_KEY/-ci-/-ci-second-}" == "$SECOND_REGISTRY_KEY" ]] \
+            || { echo "::error::the registry key changed by more than the suffix between two same-job invocations"; exit 1; }
+
+  # ──────────────────────────────────────────────
+  #  5b. E2E Warm Cache — the only proof the save path works
+  # ──────────────────────────────────────────────
+  #
+  # `needs: [e2e]`, and that is the entire point. A job's `post:` steps run
+  # after every other step in that job, so no invocation inside `e2e` can ever
+  # observe an entry `e2e` itself saved. A dependent job can: it does not start
+  # until `e2e` has fully completed, post steps included.
+  #
+  # Until this job existed, `saveCache`, the manifest, the negation patterns
+  # and tar had never run successfully anywhere — which is how a `buildPaths`
+  # that excluded nothing survived eight reviews. The two assertions below are
+  # the only end-to-end evidence that the save half of the lifecycle works at
+  # all.
+  e2e-warm:
+    name: E2E Warm Cache
+    needs: [e2e]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+
+      # Byte-identical to the E2E job's, because the toolchain it resolves
+      # feeds `cachekey-full`, which is a segment of the build key. A different
+      # channel here would derive a different key and miss by construction.
+      - name: Write rust-toolchain.toml
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          cat > rust-toolchain.toml <<'EOF'
+          [toolchain]
+          channel = "1.90"
+          profile = "minimal"
+          components = ["clippy"]
+          EOF
+
+      # Same suffix, same lock hash, same workspace mapping as the E2E job's
+      # first invocation — so this restores exactly what that job's post step
+      # saved. The probe crate is deliberately *not* recreated: restoring is
+      # what has to put `e2e-probe/target` on disk, and building it first would
+      # let a broken restore pass unnoticed.
+      - name: Restore The Cache Saved By The Previous Job
+        id: rust-toolchain
         uses: ./
         with:
           cache: true
           cache-key-hash: ${{ hashFiles('bun.lock') }}
           cache-key-suffix: ci
+          cache-workspaces: e2e-probe -> e2e-probe/target
 
-      - name: Verify The Cache Round-Trips
+      - name: Verify The Warm Restore
         shell: bash
         env:
-          FIRST_HIT: ${{ steps.rust-toolchain.outputs.cache-hit }}
-          SECOND_HIT: ${{ steps.rust-toolchain-warm.outputs.cache-hit }}
-          FIRST_REGISTRY_KEY: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.registry.key }}
-          SECOND_REGISTRY_KEY: ${{ fromJSON(steps.rust-toolchain-warm.outputs.cache).layers.registry.key }}
+          CACHE_HIT: ${{ steps.rust-toolchain.outputs.cache-hit }}
+          CACHE_JSON: ${{ steps.rust-toolchain.outputs.cache }}
         run: |
           set -eo pipefail
 
-          echo "first  cache-hit: $FIRST_HIT"
-          echo "second cache-hit: $SECOND_HIT"
-          echo "first  registry key: $FIRST_REGISTRY_KEY"
-          echo "second registry key: $SECOND_REGISTRY_KEY"
+          echo "cache-hit: $CACHE_HIT"
+          echo "cache: $CACHE_JSON"
 
-          # Identical inputs must derive an identical key — the cheap half of
-          # the round-trip, but still worth checking against a real runner
-          # rather than only unit tests.
-          [[ "$FIRST_REGISTRY_KEY" == "$SECOND_REGISTRY_KEY" ]] \
-            || { echo "::error::registry key changed between two identical invocations"; exit 1; }
+          # The previous job saved both layers, so both must match exactly.
+          # Anything less means the save path failed somewhere the warnings
+          # were not read.
+          [[ "$CACHE_HIT" == "true" ]] \
+            || { echo "::error::cache-hit is '$CACHE_HIT'; the previous job's post step did not save both layers under the keys this job derives"; exit 1; }
 
-          # Nothing saved anything between the two restores, so whatever the
-          # cache service told the first invocation, it must tell the second
-          # one too. A mismatch here means restoring is not idempotent, or
-          # cache-hit is not being derived deterministically from the restore
-          # outcome — either way a real defect, regardless of whether this
-          # branch's cache happens to be warm or cold today.
-          [[ "$FIRST_HIT" == "$SECOND_HIT" ]] \
-            || { echo "::error::cache-hit differs between two same-job invocations ($FIRST_HIT vs $SECOND_HIT) with nothing saved in between"; exit 1; }
+          [[ -d e2e-probe/target ]] \
+            || { echo "::error::the build layer restored no target directory"; exit 1; }
+          find e2e-probe/target -type f | head -20
 
-          # The negation globs are only exercised when something was actually
-          # restored into target/ — from a real, separate prior job that saved
-          # under this branch's build key. On a cold key (no prior save exists
-          # yet) target/ is simply absent and this check is vacuously
-          # satisfied; that is expected on the first run after this feature
-          # ships, not a defect.
-          if [[ -d target ]] && find target -type d -name incremental | grep -q .; then
-            echo "::error::an incremental directory survived into the restored cache"
+      # The assertion the whole exclusion mechanism exists for, and the one
+      # that would have caught its being a no-op. Both directories provably
+      # existed when the previous job saved — that job fails if they do not —
+      # so their absence here is the exclusion working rather than an artefact
+      # of nothing having been built.
+      - name: Verify The Exclusions Reached The Archive
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          if find e2e-probe/target -type d -name incremental | grep -q .; then
+            echo "::error::an incremental directory survived into the restored cache; the negation globs excluded nothing"
+            find e2e-probe/target -type d -name incremental
             exit 1
           fi
+          if find e2e-probe/target -type d -name examples | grep -q .; then
+            echo "::error::an examples directory survived into the restored cache; the negation globs excluded nothing"
+            find e2e-probe/target -type d -name examples
+            exit 1
+          fi
+          echo "no incremental/ or examples/ under the restored target dir"
 
   # ──────────────────────────────────────────────
   #  6.  Release — only on push to default branch
   # ──────────────────────────────────────────────
   release:
     name: Release
-    needs: [build, e2e]
+    needs: [build, e2e, e2e-warm]
     if: >
       github.ref_name == github.event.repository.default_branch
       && github.event_name == 'push'
