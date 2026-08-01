@@ -1,0 +1,21 @@
+{
+  "extends": ["./tsconfig.base.json"],
+  "compilerOptions": {
+    // `DOM` on top of the base's `ESNext`: .vitepress code runs in the browser,
+    // so anything reaching for `document`/`Element` needs these lib types.
+    "lib": ["ESNext", "DOM"],
+    "types": ["node"]
+  },
+  // `.mts` as well as `.ts`: config.mts is the site's entry point and was
+  // excluded by the previous `["**/*.ts"]`, so the file most likely to break a
+  // build was the one file never checked.
+  //
+  // There are no `.vue` sources any more -- the only SFC was the mermaid
+  // renderer -- so `jsx: "preserve"` and the `*.vue` module shim that lived in
+  // .vitepress/env.d.ts went with it. If an SFC is ever reintroduced, note that
+  // plain `tsc` cannot check one: that needs vue-tsc, which resolves
+  // TypeScript's internal layout and did not support the TS 7 package exports
+  // when this was last looked at.
+  "include": [".vitepress/**/*.ts", ".vitepress/**/*.mts"],
+  "exclude": ["node_modules", ".vitepress/dist", ".vitepress/cache"]
+}

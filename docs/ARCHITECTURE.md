@@ -466,7 +466,7 @@ It must not appear in library source: a consumer almost certainly has their own
 `@/` pointing at their own `src`, so the import would resolve into their tree.
 
 See
-[README → Consuming from Another TypeScript Project](../README.md#consuming-from-another-typescript-project).
+[README → Consuming from Another TypeScript Project](https://github.com/elioseverojunior/rust-toolchain/blob/main/README.md#consuming-from-another-typescript-project).
 
 ## Build Pipeline
 
@@ -608,12 +608,12 @@ elsewhere.
 changed every existing `build` key the moment it did: a workflow upgrading
 across that boundary sees exactly one cold `build` restore, then resumes
 hitting normally. See the upgrade note in [README → Deriving cargo cache keys
-yourself](../README.md#deriving-cargo-cache-keys-yourself).
+yourself](https://github.com/elioseverojunior/rust-toolchain/blob/main/README.md#deriving-cargo-cache-keys-yourself).
 
 `cache: true` restores and saves both layers itself — see [Cache Lifecycle](#cache-lifecycle)
 below. A workflow can still derive the keys alone and wire its own
 `actions/cache` steps (see the [README's key-only
-recipe](../README.md#deriving-cargo-cache-keys-yourself)). See
+recipe](https://github.com/elioseverojunior/rust-toolchain/blob/main/README.md#deriving-cargo-cache-keys-yourself)). See
 [`docs/design/2026-07-31-layered-cargo-cache.md`](design/2026-07-31-layered-cargo-cache.md)
 for the full design rationale, including the `bin` layer that a later phase
 adds for cargo-installed tools.
@@ -714,7 +714,7 @@ and by CI's `E2E` and `E2E Warm Cache` jobs, the only place restore and save
 meet the real cache service. It takes two jobs rather than one: `post:` runs
 after every other step in its own job, so nothing a job saves is visible to
 that same job, and the warm restore has to happen in a dependent job (see
-[README → Built to be trusted](../README.md#built-to-be-trusted)).
+[README → Built to be trusted](https://github.com/elioseverojunior/rust-toolchain/blob/main/README.md#built-to-be-trusted)).
 
 ### Toolchain Pinning
 
