@@ -104,10 +104,8 @@ git check-ignore -v .act/.secrets .act/.vars .act/.env .act/event.json .act/READ
 
 # === Tool Installation ===
 [tasks.setup]
-alias = ["install", "dev:setup", "dev:up", "dev"]
+alias = ["install", "dev:setup", "dev:up"]
 description = "Install all mise-managed tools"
-depends = []
-depends_post = []
 shell = "bash -c"
 run = '''
 #!/usr/bin/env bash
@@ -128,8 +126,6 @@ echo "Done, mise tools are installed/synced...."
 [tasks.update-actions-pins]
 alias = ["update-actions", "uap"]
 description = "Update SHA pins for GitHub Actions to latest release"
-depends = []
-depends_post = []
 shell = "bash -c"
 run = '''
 #!/usr/bin/env bash
@@ -145,106 +141,75 @@ unset GITHUB_TOKEN
 [tasks."update-actions-pins:write"]
 alias = ["update-actions:write", "uapw"]
 description = "Update SHA pins for GitHub Actions and write changes"
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "mise run update-actions-pins --write"
 
 [tasks."update-actions-pins:major"]
 alias = ["update-actions:major", "uapm", "uapwm"]
 description = "Update SHA pins and apply major version bumps"
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "mise run update-actions-pins --write --apply-major"
 
-[tasks.install-additional-deps]
-description = "Install Project Dependencies"
-depends_post = []
-run = '''
-echo "installing project '$PROJECT_NAME' dependencies for architecture '$ARCH'"
-'''
+[tasks.hk]
+alias = ["hk:check"]
+description = "Run every hk lint over the whole repo -- exactly the CI Lint job"
+run = "hk check --all"
 
 # === Testing ===
+[tasks.test]
+description = "Run the test suite"
+run = "bun run test"
+
+[tasks."test:coverage"]
+alias = ["coverage"]
+description = "Run the test suite under the 100% line/function/statement gate"
+run = "bun run test:coverage"
+
 [tasks."test:watch"]
 description = "Run the test suite in watch mode"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "bun test --watch"
 
 # === Building ===
+# `build:action` is an alias, not a second task. It used to `depends` on a task
+# that ran `bun run build`, which runs package.json's `build`, which runs its
+# `build:action` -- four hops to reach one `bun build`.
 [tasks.build]
-description = "Build both CLI and GitHub Action bundles"
-alias = []
-depends = ["build:action"]
-depends_post = []
-shell = "bash -c"
-run = "true"
-
-[tasks."build:action"]
-description = "Build GitHub Action bundle for node20 runtime"
-alias = []
-depends = []
-depends_post = []
-shell = "bash -c"
+alias = ["build:action"]
+description = "Bundle the action into dist/index.js for the node24 runtime"
 run = "bun run build"
 
 # === Linting & Formatting ===
 [tasks.lint]
 description = "Run all linting (ESLint + Prettier check)"
-alias = []
 depends = ["eslint:lint", "prettier:format"]
-depends_post = []
-shell = "bash -c"
-run = "true"
-
-[tasks."lint:fix"]
-description = "Fix all linting issues (ESLint fix + Prettier write)"
-alias = []
-depends = ["eslint:lint:fix", "prettier:format:fix"]
-depends_post = []
 shell = "bash -c"
 run = "true"
 
 [tasks."eslint:lint"]
 description = "Run ESLint with zero warnings allowed"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "eslint --max-warnings 0 --ignore-pattern dist/ ."
 
 [tasks."eslint:lint:fix"]
 description = "Run ESLint with auto-fix"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "eslint --fix --max-warnings 0 --ignore-pattern dist/ ."
 
 [tasks."prettier:format"]
 description = "Check code formatting with Prettier"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "prettier --check ."
 
 [tasks."prettier:format:fix"]
 description = "Format code with Prettier (write changes)"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "prettier --write ."
 
 [tasks."fix:all"]
+alias = ["lint:fix"]
 description = "Run all auto-fixes (ESLint + Prettier)"
-alias = []
 depends = ["eslint:lint:fix", "prettier:format:fix"]
-depends_post = []
 shell = "bash -c"
 run = "true"
 
@@ -268,8 +233,6 @@ usage = 'arg "[paths]" var=#true help="workflow files to lint; defaults to every
 [tasks.markdownlint]
 alias = ["mdlint", "rumdl"]
 description = "Lint Markdown files with rumdl"
-depends = []
-depends_post = []
 shell = "bash -c"
 run = '''
 #!/usr/bin/env bash
@@ -282,8 +245,6 @@ npx rumdl check "$@"
 [tasks.mermaidlint]
 alias = ["mermaid", "mmd"]
 description = "Validate mermaid diagrams in Markdown with mermaid's own parser"
-depends = []
-depends_post = []
 shell = "bash -c"
 run = '''
 #!/usr/bin/env bash
@@ -296,8 +257,6 @@ bun scripts/lint-mermaid.ts "$@"
 [tasks."markdownlint:fix"]
 alias = ["mdlint:fix", "rumdl:fix"]
 description = "Fix Markdown files with rumdl"
-depends = []
-depends_post = []
 shell = "bash -c"
 run = '''
 #!/usr/bin/env bash
@@ -352,50 +311,33 @@ usage = 'arg "[paths]" var=#true help="Paths to lint; defaults to the whole repo
 # === Type Checking ===
 [tasks.typecheck]
 description = "Run TypeScript type checking"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "tsc -p tsconfig.json --noEmit"
 
 [tasks."typecheck:watch"]
 description = "Run TypeScript type checking in watch mode"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "tsc -p tsconfig.json --noEmit --watch"
 
 # === Dependencies ===
 [tasks.deps]
 description = "Update dependencies and reinstall"
-alias = []
 depends = ["deps:update"]
-depends_post = []
 shell = "bash -c"
 run = "bun install"
 
 [tasks."deps:update"]
 description = "Update dependencies to latest minor versions"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "bunx --bun npm-check-updates -u --target minor"
 
 [tasks."deps:check"]
 description = "Check for available dependency updates"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "bunx --bun npm-check-updates --target minor"
 
 [tasks."deps:latest"]
 description = "Update dependencies to latest versions"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "bunx --bun npm-check-updates -u --target latest && bun install"
 
@@ -420,10 +362,7 @@ run = "bunx --bun npm-check-updates -u --target latest && bun install"
 # `vnull`.
 
 [tasks."git:tags:fetch"]
-alias = []
 description = "Force-refresh tags from origin so GitVersion sees the graph CI sees"
-depends = []
-depends_post = []
 hide = true
 shell = "bash -c"
 run = '''
@@ -442,7 +381,6 @@ git fetch --tags --force --quiet origin 2>/dev/null || {
 '''
 
 [tasks."version:json"]
-alias = []
 # Every version answer in this file routes through here, so refreshing tags at
 # this one point makes all of them correct by construction rather than each
 # remembering to do it.
@@ -472,16 +410,11 @@ gitversion /nocache /output json \
 [tasks.version]
 alias = ["semver"]
 description = "Print GitVersion's SemVer for the working tree, e.g. 0.2.1-2 -- what a push to main would release"
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "mise run version:json | jq -r '.SemVer'"
 
 [tasks."version:tag"]
-alias = []
 description = "Print the exact tag name derived from version:json, e.g. v0.2.1-2"
-depends = []
-depends_post = []
 hide = true
 shell = "bash -c"
 run = '''
@@ -502,10 +435,7 @@ echo "v${VERSION}"
 '''
 
 [tasks."version:tags:floating"]
-alias = []
 description = "Print the floating tag names for a version, e.g. v0.2.1 v0.2 v0 -- the set the Release job force-pushes"
-depends = []
-depends_post = []
 hide = true
 shell = "bash -c"
 usage = 'arg "[tag]" help="tag to derive from, e.g. v0.2.1-2; defaults to the version:tag derivation"'
@@ -537,8 +467,6 @@ printf 'v%s\nv%s.%s\nv%s\n' "${BASE}" "${MAJOR}" "${MINOR}" "${MAJOR}" | awk '!s
 [tasks."docs:install"]
 alias = ["docsi"]
 description = "Install the docs site dependencies (docs/ has its own lockfile)"
-depends = []
-depends_post = []
 dir = "docs"
 # `--frozen-lockfile`, where the upstream this was ported from uses a plain
 # `bun install`: cicd.yml asserts `git diff --exit-code -- docs/bun.lock` after
@@ -550,7 +478,6 @@ run = "bun install --frozen-lockfile"
 alias = ["docsb"]
 description = "Build the VitePress site into docs/.vitepress/dist. Set DOCS_BASE=/ for a custom domain; the default /rust-toolchain/ matches GitHub project pages"
 depends = ["docs:install"]
-depends_post = []
 dir = "docs"
 run = "bun run build"
 
@@ -558,7 +485,6 @@ run = "bun run build"
 alias = ["docs", "docsd"]
 description = "Serve the docs site with hot reload on http://localhost:5273"
 depends = ["docs:install"]
-depends_post = []
 dir = "docs"
 run = "bun run dev"
 
@@ -566,7 +492,6 @@ run = "bun run dev"
 alias = ["docstc"]
 description = "Type-check the site's .ts/.mts sources. Nothing else does: vitepress build transpiles without type-checking, so an error in config.mts only ever surfaced in an editor"
 depends = ["docs:install"]
-depends_post = []
 dir = "docs"
 run = "bun run typecheck"
 
@@ -574,58 +499,45 @@ run = "bun run typecheck"
 alias = ["docsp"]
 description = "Serve the built docs site on http://localhost:5273, to check the production build before publishing"
 depends = ["docs:build"]
-depends_post = []
 dir = "docs"
 run = "bun run preview"
 
 [tasks.readme]
 description = "Regenerate README.md from action.yml using action-docs"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "bunx action-docs --no-banner --update-readme README.md"
 
 # === CI / Development ===
+# Reachable again: `setup` used to carry `dev` in its alias list, which shadowed
+# this task entirely -- `mise run dev` installed tools and ran no checks. The
+# description also promised tests it never ran, because no test task existed.
 [tasks.dev]
-description = "Run development checks (test + lint + typecheck)"
-alias = []
-depends = ["lint", "typecheck"]
-depends_post = []
-shell = "bash -c"
+description = "Run the quick development checks: lint, typecheck, test"
+depends = ["lint", "typecheck", "test"]
 run = "true"
 
+# Mirrors what CI actually gates on. It used to depend on `lint` (ESLint +
+# Prettier only) and skip tests entirely, so it passed while the Lint job --
+# which runs `hk check --all`, adding actionlint, rumdl, mermaid, gitleaks and
+# whitespace hygiene -- failed, and it never ran the coverage gate at all.
 [tasks.ci]
-description = "Run full CI pipeline"
-alias = []
-depends = ["lint", "typecheck", "build"]
-depends_post = []
-shell = "bash -c"
+description = "Run everything CI gates on: hk, typecheck, coverage, bundle"
+depends = ["hk", "typecheck", "test:coverage", "build"]
 run = "true"
 
-# === GitHub Token Helpers ===
 [tasks."gh:token"]
 description = "Get GitHub token from gh auth"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "gh auth token"
 
 [tasks."gh:token:set"]
 description = "Set GITHUB_TOKEN from gh auth for current shell"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = "export GITHUB_TOKEN=$(gh auth token) && echo 'GITHUB_TOKEN set from gh auth'"
 
 # === Doctor / Diagnostics ===
 [tasks.doctor]
 description = "Diagnose toolchain and project state"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = """
 #!/usr/bin/env bash
@@ -658,9 +570,6 @@ printf "  %-20s : %s\n" "GITHUB_TOKEN" "${GITHUB_TOKEN:-NOT SET (run 'mise run g
 # === Commitlint ===
 [tasks.commitlint]
 description = "Lint commit message against conventional commits"
-alias = []
-depends = []
-depends_post = []
 shell = "bash -c"
 run = """
 #!/usr/bin/env bash
@@ -681,14 +590,6 @@ else
 fi
 """
 
-# === Commitlint Config ===
-[tasks."commitlint:config"]
-description = "Generate commitlint config from commit-types.toml"
-alias = []
-depends = []
-depends_post = []
-shell = "bash -c"
-run = "npx @commitlint/config-conventional > commitlint.config.js"
 
 [tasks.scorecard]
 alias = ["sco"]
