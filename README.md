@@ -127,15 +127,17 @@ and `@v0.1` keeps working.
 
 ## Roadmap
 
-The caching story ships in phases, each independently useful. Phase A is released.
+The caching story ships in phases, each independently useful. Phases A and B are released — B
+absorbed two pieces originally planned for later phases, so C, D and E below are restated to match
+what actually shipped rather than what was originally scoped.
 
-| Phase | What it adds                                                                                                   | Status          |
-| ----- | -------------------------------------------------------------------------------------------------------------- | --------------- |
-| **A** | Layered cache **key derivation** — `registry` and `build` keys with restore-key ladders, as the `cache` output | ✅ **Released** |
-| **B** | Restore and save — a `post:` step that caches the layers itself, so `Swatinem/rust-cache` comes out too        | ✅ **Released** |
-| **C** | `cargo-tools` — installs and caches cargo binaries, keyed on resolved versions                                 | Planned         |
-| **D** | Deterministic pruning and a size budget, replacing heuristic cache cleaning                                    | Planned         |
-| **E** | Per-layer job summary and reporting                                                                            | Planned         |
+| Phase | What it adds                                                                                                                                                                                                                                           | Status                    |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- |
+| **A** | Layered cache **key derivation** — `registry` and `build` keys with restore-key ladders, as the `cache` output                                                                                                                                         | ✅ **Released**           |
+| **B** | Restore and save, a per-layer size budget, and a per-layer job summary — `cache: true` restores at job start, saves from a `post:` step, skips an oversized layer, and reports what actually happened to each one. `Swatinem/rust-cache` comes out too | ✅ **Released**           |
+| **C** | `cargo-tools` — installs and caches cargo binaries, keyed on resolved versions                                                                                                                                                                         | Planned                   |
+| **D** | Deterministic pruning from `cargo metadata`, replacing Phase B's negation-glob exclusions                                                                                                                                                              | Planned                   |
+| **E** | Per-layer job summary and reporting                                                                                                                                                                                                                    | ✅ **Shipped in Phase B** |
 
 ### Why layers, and why it matters
 
@@ -510,6 +512,13 @@ A cache failure never fails the build. Restoring, saving, measuring a layer's
 size, and writing the job summary each warn and continue on their own
 failure rather than calling `setFailed` — a flaky cache service is not a
 reason to fail a job that would otherwise have succeeded.
+
+> **Upgrading from an older `cache: true` release?** The `build` key now also
+> hashes `RUSTFLAGS` and the rest of the build-affecting environment, which
+> changed every existing `build` key the moment it shipped. Your first run
+> after upgrading is a one-time cold `build` miss, not a broken cache — every
+> run after that restores normally. Details below, under [Deriving cargo
+> cache keys yourself](#deriving-cargo-cache-keys-yourself).
 
 #### Deriving cargo cache keys yourself
 

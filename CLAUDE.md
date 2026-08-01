@@ -119,7 +119,9 @@ Full reasoning in `docs/ARCHITECTURE.md` → Key Design Decisions.
 
 ## Cache invariants — do not "simplify" these
 
-Full reasoning in `docs/ARCHITECTURE.md` → Key Design Decisions → Cache Layers.
+Full reasoning in `docs/ARCHITECTURE.md` → Key Design Decisions, in the Cache
+Layers, Cache Lifecycle, and `@actions/cache` Adapter Lives In `index.ts`
+subsections.
 
 - **Empty key segments collapse; they never leave an empty slot.**
   `joinKeySegments` (`src/cache/keys.ts`) filters blanks before joining, so an
