@@ -66,57 +66,104 @@ consumers, never loaded by the action itself.
 
 ```mermaid
 graph TD
-    subgraph "Source Layer"
-        A[src/core.ts]
-        B[src/config.ts]
-        C[src/builder.ts]
-        O[src/outputs.ts]
-        R[src/action.ts]
-        L[src/lib.ts]
+    subgraph Entry
         I[src/index.ts]
     end
 
-    subgraph "Build Output"
-        E[dist/index.js]
+    subgraph Orchestration
+        R[src/action.ts]
+        L[src/lib.ts]
     end
 
-    subgraph "External"
+    subgraph "Cache — src/cache/"
+        CIN[inputs.ts]
+        CLF[lifecycle.ts]
+        CSM[summary.ts]
+        CKY[keys.ts]
+        CLY[layers.ts]
+        CEV[env.ts]
+        CPA[paths.ts]
+        CBU[budget.ts]
+        CCL[client.ts]
+    end
+
+    subgraph Foundation
+        CORE[src/core.ts]
+        CFG[src/config.ts]
+        BLD[src/builder.ts]
+        OUT[src/outputs.ts]
+        INP[src/inputs.ts]
+        ERR[src/errors.ts]
+    end
+
+    subgraph External
         TK["@actions/core"]
-    end
-
-    subgraph "Tests"
-        F[src/core.test.ts]
-        G[src/config.test.ts]
-        H[src/builder.test.ts]
-        J[src/action.test.ts]
-        K[src/outputs.test.ts]
-        M[src/lib.test.ts]
+        AC["@actions/cache"]
     end
 
     I --> R
+    I --> CBU
     I --> TK
-    R --> A
-    R --> B
-    R --> C
-    R --> O
-    O --> A
-    O --> B
-    O --> C
-    C --> B
-    B --> A
-    I --> E
-    F --> A
-    G --> B
-    H --> C
-    J --> R
-    K --> O
-    M --> L
+    I --> AC
+
+    R --> CIN
+    R --> CLF
+    R --> CSM
+    R --> CLY
+    R --> CPA
+    R --> CBU
+    R --> CCL
+    R --> CORE
+    R --> CFG
+    R --> BLD
+    R --> OUT
+    R --> INP
+    R --> ERR
+
+    CIN --> CKY
+    CIN --> CLY
+    CIN --> CEV
+    CIN --> CPA
+    CIN --> CBU
+    CIN --> CORE
+    CIN --> INP
+    CIN --> OUT
+
+    CKY --> CLY
+    CLY --> CFG
+    CLF --> CCL
+    CLF --> CLY
+    CLF --> CBU
+    CLF --> ERR
+    CSM --> CLF
+
+    OUT --> CKY
+    OUT --> CLY
+    OUT --> CLF
+    OUT --> BLD
+    OUT --> CFG
+    OUT --> CORE
+
+    INP --> OUT
+    BLD --> CFG
+    CFG --> CORE
+    CORE --> ERR
+
     L --> R
-    L --> A
-    L --> B
-    L --> C
-    L --> O
 ```
+
+Two edges carry most of the design. `src/index.ts` is the only module that
+touches `@actions/cache`: everything below it depends on the `CacheClient`
+interface in `src/cache/client.ts`, which is type-only, so the tests never load
+the real SDK. And `src/action.ts` fans out to the cache modules rather than the
+reverse — no cache module imports the orchestrator, which is what lets each one
+be tested against plain values.
+
+The barrel `src/lib.ts` re-exports all sixteen library modules; only its edge to
+`src/action.ts` is drawn, since the other fifteen would say nothing but "the
+barrel exports everything". It deliberately does **not** re-export
+`src/index.ts`, whose import would execute the action — `src/lib.test.ts`
+asserts that exclusion.
 
 ## Data Flow
 
@@ -170,6 +217,59 @@ flowchart LR
 
     CMD -->|exports RUSTUP_TOOLCHAIN| STEPS[Later workflow steps]
 ```
+
+The cache lane hangs off `generateSpecCacheKey`: the same digest that keeps two
+toolchains' outputs apart is what keeps their `target/` directories apart.
+
+```mermaid
+flowchart LR
+    CINPUTS["cache-* inputs"]
+    PROCENV2[process.env]
+    SPECKEY2[generateSpecCacheKey]
+
+    subgraph Derive
+        RESOLVE[readCacheRequest]
+        LAYERS[parseCacheLayers]
+        ENVHASH[hashBuildEnv]
+        PATHS[parseWorkspaces + buildPaths]
+        KEYS[buildLayerKey]
+        COUTS[buildCacheOutputs]
+    end
+
+    subgraph Lifecycle
+        RESTORE[restoreLayers]
+        SAVE[saveLayers]
+        BUDGET[measurePaths + parseSize]
+    end
+
+    CINPUTS --> RESOLVE
+    RESOLVE --> LAYERS
+    RESOLVE --> PATHS
+    PROCENV2 --> ENVHASH
+
+    LAYERS --> KEYS
+    ENVHASH -->|envHash, build layer only| KEYS
+    SPECKEY2 -->|specCacheKey, build layer only| KEYS
+
+    KEYS -->|key + restoreKeys| RESTORE
+    KEYS --> COUTS
+    PATHS --> RESTORE
+    RESTORE -->|main phase| CLIENT["CacheClient — @actions/cache"]
+    RESTORE -->|exact / partial / miss| COUTS
+    COUTS --> COUT["cache + cache-hit outputs"]
+
+    RESTORE -->|CachePhaseState via saveState| SAVE
+    PATHS --> BUDGET
+    BUDGET -->|over budget, skip layer| SAVE
+    SAVE -->|post phase, exact hits skipped| CLIENT
+    SAVE --> SUMMARY[renderSummary]
+```
+
+`readCacheRequest` and `buildCacheOutputs` are the seam: the main phase derives
+every layer's key and path set up front, publishes them through the `cache`
+output whether or not the lifecycle runs, and hands the same values to the post
+phase as `CachePhaseState`. A workflow that would rather drive `actions/cache`
+itself reads that output and ignores the rest.
 
 ## Run Sequence
 
@@ -398,16 +498,32 @@ flowchart LR
 
 All tests use Bun's built-in test runner with 100% coverage enforced by `bunfig.toml`.
 
-| File                       | Tests                                                                                                                                                                                                 | Coverage Target                   |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `src/action.test.ts`       | `run` against injected fakes — argv shape, timeouts, retry/backoff, spawn errors, rustup bootstrap (POSIX + Windows), cargo env defaults, tolerated `rustup default`, `set-rustup-toolchain`, outputs | 100%                              |
-| `src/core.test.ts`         | `parseRustToolchainToml`, `resolveChannel` (release-day table, bare-minor scaling, rejected names), `generateCacheKey`, `generateSpecCacheKey`, `parseRustcVersion`                                   | 100% lines, functions, statements |
-| `src/config.test.ts`       | `mergeConfig` — toml vs input priority, target alias, default channel, identifier validation; `resolveRustupEnv` — env overrides, blank handling, `HOME` fallback, Windows paths                      | 100%                              |
-| `src/builder.test.ts`      | `ToolchainSpecBuilder` fluent chain, `ToolchainSpec` direct construction, argv generation and batching, install flags                                                                                 | 100%                              |
-| `src/outputs.test.ts`      | `buildActionOutputs` — resolved values, empty-list and absent-profile edges, `inputs`/`toml` provenance; `toOutputEntries` — JSON array serialisation, string booleans, `json` key order              | 100%                              |
-| `src/cache/layers.test.ts` | `CACHE_LAYER_IDS`, `parseCacheLayers` — separators, dedup, unknown-layer and empty-selection rejection                                                                                                | 100%                              |
-| `src/cache/keys.test.ts`   | `joinKeySegments` — segment collapsing; `buildLayerKey` — registry vs. build key shape, restore-key ladders                                                                                           | 100%                              |
-| `src/lib.test.ts`          | Barrel surface pinned export by export, and the guard that `src/lib.ts` never re-exports `src/index.ts`; both path aliases resolve                                                                    | 100%                              |
+| File                          | Tests                                                                                                                                                                                                 | Coverage Target                   |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `src/action.test.ts`          | `run` against injected fakes — argv shape, timeouts, retry/backoff, spawn errors, rustup bootstrap (POSIX + Windows), cargo env defaults, tolerated `rustup default`, `set-rustup-toolchain`, outputs | 100%                              |
+| `src/core.test.ts`            | `parseRustToolchainToml`, `resolveChannel` (release-day table, bare-minor scaling, rejected names), `generateCacheKey`, `generateSpecCacheKey`, `parseRustcVersion`                                   | 100% lines, functions, statements |
+| `src/config.test.ts`          | `mergeConfig` — toml vs input priority, target alias, default channel, identifier validation; `resolveRustupEnv` — env overrides, blank handling, `HOME` fallback, Windows paths                      | 100%                              |
+| `src/builder.test.ts`         | `ToolchainSpecBuilder` fluent chain, `ToolchainSpec` direct construction, argv generation and batching, install flags                                                                                 | 100%                              |
+| `src/outputs.test.ts`         | `buildActionOutputs` — resolved values, empty-list and absent-profile edges, `inputs`/`toml` provenance; `toOutputEntries` — JSON array serialisation, string booleans, `json` key order              | 100%                              |
+| `src/cache/layers.test.ts`    | `CACHE_LAYER_IDS`, `parseCacheLayers` — separators, dedup, unknown-layer and empty-selection rejection                                                                                                | 100%                              |
+| `src/cache/keys.test.ts`      | `joinKeySegments` — segment collapsing; `buildLayerKey` — registry vs. build key shape, restore-key ladders                                                                                           | 100%                              |
+| `src/cache/env.test.ts`       | `hashBuildEnv` — prefix matching, the exclusion deny-list, order independence, and stability across the action's own `exportVariable` calls                                                           | 100%                              |
+| `src/cache/paths.test.ts`     | `parseWorkspaces` — mapping syntax and escape rejection; `registryPaths`; `buildPaths` — the files-only manifest shape that makes the negation globs effective                                        | 100%                              |
+| `src/cache/budget.test.ts`    | `parseSize` — binary suffixes and unparseable input; `measurePaths` — byte totals and the `unmeasured` fallback                                                                                       | 100%                              |
+| `src/cache/inputs.test.ts`    | `readCacheRequest` — every `cache-*` input, defaults and validation; `buildCacheOutputs` — the `cache` JSON object and `cache-hit`                                                                    | 100%                              |
+| `src/cache/lifecycle.test.ts` | `restoreLayers` — exact/partial/miss classification; `saveLayers` — skip-on-exact-hit, budget refusal, per-layer failure isolation                                                                    | 100%                              |
+| `src/cache/summary.test.ts`   | `renderSummary` — the job-summary table rendered from `CachePhaseState`                                                                                                                               | 100%                              |
+| `src/inputs.test.ts`          | `readBooleanInput` — defaults, casing, and rejection of non-boolean text                                                                                                                              | 100%                              |
+| `src/errors.test.ts`          | `describeError` — `Error` instances and arbitrary thrown values                                                                                                                                       | 100%                              |
+| `src/lib.test.ts`             | Barrel surface pinned export by export, and the guard that `src/lib.ts` never re-exports `src/index.ts`; both path aliases resolve                                                                    | 100%                              |
+
+Sixteen test files cover seventeen library modules. `src/cache/client.ts`
+declares the `CacheClient` interface and nothing else, so it compiles to no
+executable statements and never reaches the coverage report — the port exists
+precisely so the tests can drive the lifecycle without `@actions/cache`.
+`src/index.ts` is absent for the opposite reason: it is excluded through
+`coveragePathIgnorePatterns` because nothing imports it, which is why
+orchestration lives in `src/action.ts` behind the injected `ActionDeps`.
 
 The release-cycle cases are pinned against real rust-lang.org release dates
 rather than against this codebase's own arithmetic, so a drifting epoch fails
@@ -808,8 +924,22 @@ flowchart LR
 
 ### Runtime Dependencies
 
-| Package           | Purpose                                     |
-| ----------------- | ------------------------------------------- |
-| `@actions/core`   | Inputs, outputs, `exportVariable`, failures |
-| `@actions/github` | Workflow context                            |
-| `smol-toml`       | `rust-toolchain.toml` parsing               |
+| Package           | Purpose                                                             |
+| ----------------- | ------------------------------------------------------------------- |
+| `@actions/core`   | Inputs, outputs, `exportVariable`, `saveState`/`getState`, failures |
+| `@actions/cache`  | `restoreCache`/`saveCache` behind the `CacheClient` port            |
+| `smol-toml`       | `rust-toolchain.toml` parsing                                       |
+| `@actions/github` | Declared for workflow `context`, but no module imports it today     |
+
+`@actions/cache` is reached only through `CacheClient` (`src/cache/client.ts`),
+a type-only interface wired to the real SDK in `src/index.ts`. That indirection
+is why it costs nothing at test time and why it appears in exactly one import
+site. It is also the single largest contributor to the bundle: adding it took
+`dist/index.js` from roughly 789 KB to 2,209,190 bytes, a cost accepted
+deliberately in the Phase B design rather than reimplementing the cache
+protocol.
+
+`@actions/github` is declared in `package.json` but imported nowhere, so the
+bundler drops it — it contributes zero bytes to `dist/index.js`. It is kept
+because `AGENTS.md` directs contributors to it rather than to raw
+`process.env`/`GITHUB_*` access when workflow context is eventually needed.
