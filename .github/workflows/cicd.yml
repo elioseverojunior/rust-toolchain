@@ -10,15 +10,26 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Resolve the version and run every check, but create no tag, release or docs deployment"
+        required: false
+        type: boolean
+        # DEFAULTS TO TRUE, unlike most boolean inputs. Until the Release job
+        # admitted workflow_dispatch it was push-only, so this input reached
+        # nothing and its default was inert either way. It is live now: with
+        # `false`, clicking "Run workflow" on main cuts a real release, deletes
+        # and re-pushes four tags and publishes the site. Defaulting to a dry
+        # run makes the destructive path the one you opt into. Releases still
+        # happen automatically on every push to main, which is the normal route
+        # -- a manual dispatch is for previewing what one would do.
+        default: true
 
 permissions: read-all
 
 concurrency:
   group: cicd-${{ github.ref_name }}
   cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch }}
-
-env:
-  GITVERSION_SPEC: ${{ vars.GITVERSION_SPEC || '6.x' }}
 
 jobs:
   # ──────────────────────────────────────────────
@@ -27,6 +38,14 @@ jobs:
   setup:
     name: Setup
     runs-on: ubuntu-latest
+    # Resolved here, once, because a job-level `if:` cannot read the `env`
+    # context -- only `github`, `needs`, `inputs` and `vars`. Every job that
+    # gates on the dry run therefore lists `setup` in its OWN `needs`, even
+    # when it already depends on it transitively: `needs.<job>.outputs` is
+    # readable only from jobs named directly in `needs`, and an undefined
+    # output reads as the empty string rather than erroring.
+    outputs:
+      dry-run: ${{ steps.mode.outputs.dry-run }}
 
     steps:
       - name: Checkout
@@ -39,6 +58,45 @@ jobs:
 
       - name: Setup Environment
         uses: ./.github/actions/setup
+
+      # `inputs` exists only on workflow_dispatch and workflow_call. On a push
+      # it is null, so a bare `!inputs.dry-run` evaluates to `!null` -- which is
+      # TRUE, and reads as "not a dry run" purely by accident. Guarding on the
+      # event name first makes the push case explicit rather than lucky.
+      #
+      # `A && B || false` rather than `A && B`: an expression whose `&&` short
+      # circuits yields the falsy operand itself, so on a push this would emit
+      # the empty string. Consumers compare against the literal 'true', so the
+      # empty string is still correct -- but 'false' is what the log should say.
+      - name: Resolve Run Mode
+        id: mode
+        env:
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry-run) || false }}
+        run: |
+          set -Eeuo pipefail
+          echo "dry-run=${DRY_RUN}" >> "$GITHUB_OUTPUT"
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "::notice::Dry run: the version will be resolved and every check will run, but no tag, release or docs deployment will be created."
+          fi
+
+  # ──────────────────────────────────────────────
+  #  1b. Version — the single source of truth
+  # ──────────────────────────────────────────────
+  # The ONLY GitVersion invocation in this repository. The Release job below
+  # reads `needs.version.outputs.*` rather than running the tool a second time:
+  # two derivations from the same history agree until they do not, and the
+  # disagreement surfaces as a release tagged one number and announced as
+  # another. `version.yml` also applies the rule that a tag ref outranks the
+  # derivation, so that decision is made once for every consumer.
+  version:
+    name: Version
+    needs: [setup]
+    # A called workflow cannot request more than the calling job grants, and
+    # `version.yml` asks for `contents: read`. Stated here rather than inherited
+    # from the workflow-level `read-all` so the grant travels with the call.
+    permissions:
+      contents: read
+    uses: ./.github/workflows/version.yml
 
   # ──────────────────────────────────────────────
   #  2.  Lint — HK project lints
@@ -111,12 +169,12 @@ jobs:
         uses: ./.github/actions/setup
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+        uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
         with:
           languages: javascript-typescript
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+        uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
 
   # ──────────────────────────────────────────────
   #  4.  Build
@@ -509,14 +567,33 @@ jobs:
   # ──────────────────────────────────────────────
   release:
     name: Release
-    needs: [build, e2e, e2e-warm]
+    # `setup` and `version` are listed even though `build` already depends on
+    # both: `needs.<job>.outputs` is readable only from jobs named directly
+    # here, and a missing name yields the empty string instead of an error.
+    needs: [setup, version, build, e2e, e2e-warm]
+    # `workflow_dispatch` is admitted so the dry run has something to exercise.
+    # Before, this job was push-only, which meant the `dry-run` input could
+    # never reach any job that acts on it -- the guard rail existed as an input
+    # and gated nothing anywhere. The irreversible steps below are each guarded
+    # on `needs.setup.outputs.dry-run`, so a dispatched run resolves the version,
+    # composes the changelog and reports what it WOULD create.
     if: >
       github.ref_name == github.event.repository.default_branch
-      && github.event_name == 'push'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+
+    env:
+      # Read by the guarded steps below. A step-level `if:` can read `needs`,
+      # but these are single `run:` blocks whose destructive commands sit
+      # partway down -- branching in bash keeps the derivation visible in a dry
+      # run, which is the entire point of one.
+      DRY_RUN: ${{ needs.setup.outputs.dry-run }}
+      # NOT `VERSION`: the Tag step's `tagger()` takes a positional argument by
+      # that name, and a job-level env of the same name is what it would shadow.
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
 
     steps:
       - name: Checkout
@@ -530,28 +607,30 @@ jobs:
       - name: Setup Environment
         uses: ./.github/actions/setup
 
-      - name: Cache GitVersion Tool
-        id: cache-gitversion
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            /opt/hostedtoolcache/GitVersion.Tool
-            ~/.dotnet/tools
-          key: gitversion-${{ runner.os }}-${{ runner.arch }}-${{ env.GITVERSION_SPEC }}
-          restore-keys: |
-            gitversion-${{ runner.os }}-${{ runner.arch }}-
-            gitversion-${{ runner.os }}-
+      # No GitVersion steps here any more. The `version` job calls
+      # `.github/workflows/version.yml`, which is the one place the tool runs;
+      # everything below reads `needs.version.outputs.*`. Reinstating a local
+      # `gittools/actions` invocation would recreate the split brain that
+      # workflow exists to prevent -- and would also drop its tag-authority
+      # rule, so a run triggered by a tag would publish the number GitVersion
+      # guessed rather than the one the tag names.
 
-      - name: Install GitVersion
-        id: install-gitversion
-        uses: gittools/actions/gitversion/setup@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
-        with:
-          versionSpec: ${{ env.GITVERSION_SPEC }}
-          preferLatestVersion: true
-
-      - name: Determine Version
-        id: gitversion
-        uses: gittools/actions/gitversion/execute@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
+      - name: Report Resolved Version
+        run: |
+          set -Eeuo pipefail
+          {
+            echo "### Release"
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| **Version** | \`v${RELEASE_VERSION}\` |"
+            echo "| **Source** | \`${VERSION_SOURCE}\` |"
+            echo "| **Mode** | ${MODE} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Resolved v${RELEASE_VERSION} from ${VERSION_SOURCE} (dry-run=${DRY_RUN})"
+        env:
+          VERSION_SOURCE: ${{ needs.version.outputs.source }}
+          MODE: ${{ needs.setup.outputs.dry-run == 'true' && 'dry run — nothing will be created' || 'release' }}
 
       - name: Determine Working Branch
         id: working-branch
@@ -559,17 +638,17 @@ jobs:
         run: |
           set -eo pipefail
           if [[ "${{ github.ref_name }}" == "${{ github.event.repository.default_branch }}" ]]; then
-            WORKING_BRANCH="release/v${{ steps.gitversion.outputs.semVer }}"
+            WORKING_BRANCH="release/v${{ needs.version.outputs.version }}"
           else
-            WORKING_BRANCH="prerelease/v${{ steps.gitversion.outputs.semVer }}"
+            WORKING_BRANCH="prerelease/v${{ needs.version.outputs.version }}"
           fi
           echo "branch=${WORKING_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "Working Branch: ${WORKING_BRANCH}"
 
       - name: Skip prerelease versions
-        if: steps.gitversion.outputs.PreReleaseLabel != ''
+        if: needs.version.outputs.preReleaseLabel != ''
         run: |
-          echo "Skipping release for prerelease version: ${{ steps.gitversion.outputs.semVer }}"
+          echo "Skipping release for prerelease version: ${{ needs.version.outputs.version }}"
           exit 0
 
       - name: Update Workflow Files With New Version
@@ -583,11 +662,11 @@ jobs:
           echo "Creating/Updating Working branch: ${{ steps.working-branch.outputs.branch }}"
           git checkout -B "${{ steps.working-branch.outputs.branch }}"
 
-          echo "Updating Workflow files to version v${{ steps.gitversion.outputs.semVer }}"
+          echo "Updating Workflow files to version v${{ needs.version.outputs.version }}"
 
           REPO_OWNER="${{ github.repository_owner }}"
           REPO_NAME="${{ github.event.repository.name }}"
-          NEW_VERSION="v${{ steps.gitversion.outputs.semVer }}"
+          NEW_VERSION="v${{ needs.version.outputs.version }}"
 
           find .github -type f \( -name "*.yml" -o -name "*.yaml" \) ! -name "_release.yml" \
             | while read -r file; do
@@ -595,9 +674,18 @@ jobs:
           done
 
           git add .github
-          git commit -m "chore: Update action references to v${{ steps.gitversion.outputs.semVer }} [skip ci]" \
+          git commit -m "chore: Update action references to v${{ needs.version.outputs.version }} [skip ci]" \
             || echo "No changes to commit"
-          git push -u origin "${{ steps.working-branch.outputs.branch }}" --force
+
+          # The commit above is local to this runner and disappears with it, so
+          # only the push is guarded. A dry run still proves the rewrite applied
+          # cleanly, which is the part that can actually be wrong.
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "::notice::Dry run: skipping push of ${{ steps.working-branch.outputs.branch }}"
+            git --no-pager show --stat --oneline HEAD
+          else
+            git push -u origin "${{ steps.working-branch.outputs.branch }}" --force
+          fi
 
       - name: Tag
         id: tag
@@ -608,8 +696,21 @@ jobs:
           echo "::group::Tag Information"
           echo "::group::Tagger Function"
           function tagger() {
-            VERSION="$1"
+            # `local`, not a bare assignment. Without it this writes the
+            # runner-wide VERSION, which the job env also defines -- the two
+            # would silently fight over one name.
+            local VERSION="$1"
             echo "Releasing Version: ${VERSION}"
+
+            # Every branch below deletes or force-pushes something, so the dry
+            # run reports the plan and returns before any of it. Reporting the
+            # whole ladder is the point: this function is called four times, and
+            # what a release actually moves is the set of tags it names here.
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "::notice::Dry run: would tag and push ${VERSION}"
+              return 0
+            fi
+
             TAG_EXISTS=$(git ls-remote -q --tags | grep -q "refs/tags/${VERSION}$" && echo true || echo false)
             if [[ "${TAG_EXISTS}" = true ]];
             then
@@ -636,22 +737,22 @@ jobs:
           }
           echo "::endgroup::"
 
-          echo "::group::Tagging Version v${{ steps.gitversion.outputs.semVer }}"
-          tagger "v${{ steps.gitversion.outputs.semVer }}"
+          echo "::group::Tagging Version v${{ needs.version.outputs.version }}"
+          tagger "v${{ needs.version.outputs.version }}"
           echo "::endgroup::"
 
           if [[ "${{ github.ref_name  }}" == "${{ github.event.repository.default_branch }}" && "${{ github.event_name }}" != "pull_request" ]];
           then
-            echo "::group::Tagging Version v${{ steps.gitversion.outputs.majorMinorPatch }}"
-            tagger "v${{ steps.gitversion.outputs.majorMinorPatch }}"
+            echo "::group::Tagging Version v${{ needs.version.outputs.majorMinorPatch }}"
+            tagger "v${{ needs.version.outputs.majorMinorPatch }}"
             echo "::endgroup::"
 
-            echo "::group::Tagging Version v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}"
-            tagger "v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}"
+            echo "::group::Tagging Version v${{ needs.version.outputs.major }}.${{ needs.version.outputs.minor }}"
+            tagger "v${{ needs.version.outputs.major }}.${{ needs.version.outputs.minor }}"
             echo "::endgroup::"
 
-            echo "::group::Tagging Version v${{ steps.gitversion.outputs.major }}"
-            tagger "v${{ steps.gitversion.outputs.major }}"
+            echo "::group::Tagging Version v${{ needs.version.outputs.major }}"
+            tagger "v${{ needs.version.outputs.major }}"
             echo "::endgroup::"
           fi
           echo "::endgroup::"
@@ -698,10 +799,10 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::GitVersion Tags Output"
-          LATEST_SEMVER="v${{ steps.gitversion.outputs.semVer }}"
-          LATEST_MMP="v${{ steps.gitversion.outputs.majorMinorPatch }}"
-          LATEST_MM="v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}"
-          LATEST_M="v${{ steps.gitversion.outputs.major }}"
+          LATEST_SEMVER="v${{ needs.version.outputs.version }}"
+          LATEST_MMP="v${{ needs.version.outputs.majorMinorPatch }}"
+          LATEST_MM="v${{ needs.version.outputs.major }}.${{ needs.version.outputs.minor }}"
+          LATEST_M="v${{ needs.version.outputs.major }}"
 
           echo ""
           echo "  SemVer:          ${LATEST_SEMVER:-none}"
@@ -726,7 +827,7 @@ jobs:
           fi
           {
             echo "released-semver=${RELEASED_SEMVER_GIT:-}"
-            echo "next-semver=v${{ steps.gitversion.outputs.semVer }}"
+            echo "next-semver=v${{ needs.version.outputs.version }}"
             echo "is-first-release=${IS_FIRST_RELEASE}"
           } >> "$GITHUB_OUTPUT"
           echo "::endgroup::"
@@ -818,11 +919,11 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
-            const semVer = `v${{ steps.gitversion.outputs.semVer }}`;
-            const major = `${{ steps.gitversion.outputs.Major }}`;
-            const minor = `${{ steps.gitversion.outputs.Minor }}`;
-            const patch = `${{ steps.gitversion.outputs.Patch }}`;
-            const shortSha = `${{ steps.gitversion.outputs.ShortSha }}`;
+            const semVer = `v${{ needs.version.outputs.version }}`;
+            const major = `${{ needs.version.outputs.major }}`;
+            const minor = `${{ needs.version.outputs.minor }}`;
+            const patch = `${{ needs.version.outputs.patch }}`;
+            const shortSha = `${{ needs.version.outputs.shortSha }}`;
             const branch = `${{ steps.working-branch.outputs.branch }}`;
             const tagUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/tree/${semVer}`;
 
@@ -893,6 +994,11 @@ jobs:
         run: |
           set -eo pipefail
 
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "::notice::Dry run: would create release v${RELEASE_VERSION} targeting ${{ steps.working-branch.outputs.branch }}"
+            exit 0
+          fi
+
           # Clean up draft releases
           gh release list \
             --json tagName,isDraft \
@@ -903,8 +1009,48 @@ jobs:
           done
 
           # Create release targeting the working branch
-          gh release create "v${{ steps.gitversion.outputs.semVer }}" \
+          gh release create "v${RELEASE_VERSION}" \
             --target "${{ steps.working-branch.outputs.branch }}" \
             --generate-notes \
             --verify-tag \
             --latest
+
+  # ──────────────────────────────────────────────
+  #  7.  Docs — publish the VitePress site
+  # ──────────────────────────────────────────────
+  # A job-level `uses:`, not steps: a step cannot call a workflow. gh-pages.yml
+  # owns the build so that one definition serves both entry points -- its own
+  # `pull_request` trigger builds the site before merge, and this call builds
+  # and publishes it after a release. cicd.yml deliberately builds no docs of
+  # its own, so those two paths never overlap.
+  gh-pages:
+    name: Publish Docs Site
+    # All three are named because `needs.<job>.outputs` is readable only from
+    # jobs listed here -- depending on them transitively is not enough, and the
+    # miss is silent: the output resolves to the empty string. `setup` carries
+    # the dry-run mode, `version` the number for the summary, and `release`
+    # orders this after the tag exists so the site never cites a version that
+    # failed to ship.
+    needs: [setup, version, release]
+    if: >
+      success()
+      && github.ref_name == github.event.repository.default_branch
+    # The called workflow's `publish` job asks for `contents: write`, and a
+    # called workflow cannot request more than the calling job grants. No
+    # `pages:`/`id-token:`: those belong to the Pages ARTIFACT deployment path,
+    # and this repository serves Pages from the `gh-pages` BRANCH instead.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/gh-pages.yml
+    secrets: inherit
+    with:
+      # THE dry-run guard for the docs. Compared against the string 'true'
+      # rather than negated: the previous form was `!inputs.dry-run`, and on a
+      # push `inputs` is null, so it evaluated `!null` -- true by accident
+      # rather than intent, and true even on a dispatched dry run.
+      #
+      # Required, not optional: gh-pages.yml's `publish` job gates on
+      # `inputs.publish` and defaults it to false, so calling without this
+      # builds the site and deploys nothing.
+      publish: ${{ needs.setup.outputs.dry-run != 'true' }}
+      version: ${{ needs.version.outputs.version }}

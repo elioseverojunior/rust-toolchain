@@ -1,12 +1,8 @@
 ---
-# SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
-#
-# SPDX-License-Identifier: MIT OR Apache-2.0
-#
-# The licence header lives inside the frontmatter as YAML comments, not above it
-# as an HTML comment: VitePress only reads frontmatter when it opens the file,
-# so anything preceding the delimiter turns this page back into a normal
-# document and the `home` layout never applies.
+# The frontmatter must open the file. The licence header sits BELOW it, where
+# `comply annotate` places it (see REUSE.toml) -- anything preceding the `---`
+# delimiter stops VitePress reading this as frontmatter at all, and the `home`
+# layout silently never applies.
 layout: home
 
 hero:
@@ -38,3 +34,9 @@ features:
   - title: A drop-in superset
     details: The cachekey output matches dtolnay/rust-toolchain byte for byte, and cache-workspaces takes the same syntax as Swatinem/rust-cache, so an existing value transfers unchanged.
 ---
+
+<!--
+SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+
+SPDX-License-Identifier: MIT OR Apache-2.0
+-->

@@ -7,7 +7,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 ---
 
 name: Feature request
-about: Suggest an idea for comply
+about: Suggest an idea for rust-toolchain
 title: ''
 labels: enhancement
 assignees: ''
