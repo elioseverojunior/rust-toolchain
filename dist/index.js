@@ -61605,26 +61605,46 @@ function parseSize(value) {
   const suffix = match2[2]?.toUpperCase();
   return suffix ? amount * MULTIPLIER[suffix] : amount;
 }
+var GLOB_METACHARACTER = /[*?[\]]/;
+function globRoot(pattern) {
+  const segments = pattern.split("/");
+  const wildcard = segments.findIndex((segment) => GLOB_METACHARACTER.test(segment));
+  return wildcard === -1 ? pattern : segments.slice(0, wildcard).join("/");
+}
+function isMissing(error2) {
+  return typeof error2 === "object" && error2 !== null && error2.code === "ENOENT";
+}
 function measurePaths(paths, fs8) {
-  let total = 0;
-  const pending = paths.filter((path12) => !path12.startsWith("!"));
+  let bytes = 0;
+  const unmeasured = [];
+  const pending = paths.filter((path12) => !path12.startsWith("!")).map((path12) => globRoot(path12));
   while (pending.length > 0) {
     const current = pending.pop();
     let entry;
     try {
       entry = fs8.stat(current);
-    } catch {
+    } catch (error2) {
+      if (!isMissing(error2))
+        unmeasured.push(current);
       continue;
     }
     if (!entry.isDirectory()) {
-      total += entry.size;
+      bytes += entry.size;
       continue;
     }
-    for (const child2 of fs8.readdir(current)) {
+    let children;
+    try {
+      children = fs8.readdir(current);
+    } catch (error2) {
+      if (!isMissing(error2))
+        unmeasured.push(current);
+      continue;
+    }
+    for (const child2 of children) {
       pending.push(`${current}/${child2}`);
     }
   }
-  return total;
+  return { bytes, unmeasured };
 }
 
 // src/cache/env.ts
@@ -61641,7 +61661,10 @@ var EXCLUDED = new Set([
   "CARGO_HOME",
   "RUSTUP_HOME",
   "CARGO_TERM_COLOR",
-  "RUSTUP_TOOLCHAIN"
+  "RUSTUP_TOOLCHAIN",
+  "CARGO_INCREMENTAL",
+  "CARGO_REGISTRIES_CRATES_IO_PROTOCOL",
+  "CARGO_HTTP_MULTIPLEXING"
 ]);
 function hashBuildEnv(env) {
   const canonical = Object.entries(env).filter(([name, value]) => {
@@ -61701,11 +61724,12 @@ function parseCacheLayers(value) {
 }
 
 // src/cache/paths.ts
-import { isAbsolute, relative as relative3, resolve as resolve2 } from "node:path";
+import { isAbsolute, relative as relative3, resolve as resolve2, sep as sep8 } from "node:path";
 function resolveInside(root, part) {
-  const resolved = isAbsolute(part) ? part : resolve2(root, part);
+  const resolved = isAbsolute(part) ? resolve2(part) : resolve2(root, part);
   const offset = relative3(root, resolved);
-  if (offset !== "" && (offset.startsWith("..") || isAbsolute(offset))) {
+  const escapes = offset === ".." || offset.startsWith(`..${sep8}`);
+  if (offset !== "" && (escapes || isAbsolute(offset))) {
     throw new Error(`\`cache-workspaces\` entry "${part}" resolves to "${resolved}", which ` + `is outside the workspace "${root}". Cache paths come from workflow ` + "input, so one escaping the checkout is refused rather than trusted.");
   }
   return resolved;
@@ -61736,9 +61760,11 @@ function registryPaths(cargoHome) {
 }
 function buildPaths(workspaces) {
   return workspaces.flatMap(({ targetDir }) => [
-    targetDir,
-    `!${targetDir}/*/incremental`,
-    `!${targetDir}/*/examples`
+    `${targetDir}/**`,
+    `!${targetDir}/**/incremental/**`,
+    `!${targetDir}/**/examples/**`,
+    `!${targetDir}/`,
+    `!${targetDir}/**/`
   ]);
 }
 
@@ -62181,7 +62207,7 @@ function skipVoid(str, ptr, banNewLines, banComments) {
   }
   return ptr;
 }
-function skipUntil(str, ptr, sep8, end, banNewLines = false) {
+function skipUntil(str, ptr, sep9, end, banNewLines = false) {
   if (!end) {
     ptr = indexOfNewline(str, ptr);
     return ptr < 0 ? str.length : ptr;
@@ -62192,7 +62218,7 @@ function skipUntil(str, ptr, sep8, end, banNewLines = false) {
       i = indexOfNewline(str, i);
       if (i < 0)
         break;
-    } else if (c === sep8) {
+    } else if (c === sep9) {
       return i + 1;
     } else if (c === end || banNewLines && (c === `
 ` || c === "\r" && str[i + 1] === `
@@ -62671,6 +62697,11 @@ function parse2(toml, { maxDepth = 1000, integersAsBigInt } = {}) {
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+// src/errors.ts
+function describeError(error2) {
+  return error2 instanceof Error ? error2.message : String(error2);
+}
+
 // src/core.ts
 var TOOLCHAIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 var BARE_MINOR = /^1\.(\d+)$/;
@@ -62741,7 +62772,7 @@ function parseRustToolchainToml(toml) {
   try {
     parsed = parse2(toml);
   } catch (error2) {
-    const detail = error2 instanceof Error ? error2.message : String(error2);
+    const detail = describeError(error2);
     throw new Error(`rust-toolchain.toml is not valid TOML: ${detail}`, {
       cause: error2
     });
@@ -62874,51 +62905,51 @@ async function restoreLayers(client, plans, log2) {
       log2.info(`${plan.layer}: ${result} match on ${restoredKey}`);
       return { layer: plan.layer, result, restoredKey };
     } catch (error2) {
-      log2.warning(`${plan.layer}: restore failed, continuing without it — ` + `${error2 instanceof Error ? error2.message : String(error2)}`);
+      log2.warning(`${plan.layer}: restore failed, continuing without it — ` + describeError(error2));
       return { layer: plan.layer, result: "miss" };
     }
   }));
 }
-async function saveLayer(plan, previous, { client, budget, measure, log: log2 }) {
-  if (previous?.result === "exact") {
-    log2.info(`${plan.layer}: unchanged since an exact hit, not saving`);
-    return {
-      layer: plan.layer,
-      saved: false,
-      reason: "unchanged since an exact hit",
-      bytes: 0
-    };
-  }
-  let bytes;
+function skipped(layer, reason, bytes) {
+  return { layer, saved: false, reason, bytes };
+}
+function measureForSave(plan, { measure, log: log2 }) {
   try {
-    bytes = measure(plan.paths);
+    const { bytes, unmeasured } = measure(plan.paths);
+    if (unmeasured.length > 0) {
+      log2.warning(`${plan.layer}: could not read ${unmeasured.length} path(s), so ` + `${bytes} bytes is a lower bound on its real size and the ` + "`cache-budget` check may pass an entry that should have failed " + `it: ${unmeasured.join(", ")}`);
+    }
+    return { measured: true, bytes };
   } catch (error2) {
-    const message = error2 instanceof Error ? error2.message : String(error2);
-    log2.warning(`${plan.layer}: could not measure its size, not saving — ${message}`);
-    return {
-      layer: plan.layer,
-      saved: false,
-      reason: `could not measure its size — ${message}`,
-      bytes: 0
-    };
+    return { measured: false, message: describeError(error2) };
   }
+}
+async function saveLayer(plan, previous, args) {
+  const { client, budget, log: log2 } = args;
+  const { layer } = plan;
+  if (previous?.result === "exact") {
+    log2.info(`${layer}: unchanged since an exact hit, not saving`);
+    return skipped(layer, "unchanged since an exact hit", 0);
+  }
+  const measurement = measureForSave(plan, args);
+  if (!measurement.measured) {
+    const { message } = measurement;
+    log2.warning(`${layer}: could not measure its size, not saving — ${message}`);
+    return skipped(layer, `could not measure its size — ${message}`, 0);
+  }
+  const { bytes } = measurement;
   if (budget > 0 && bytes > budget) {
-    log2.warning(`${plan.layer}: ${bytes} bytes exceeds the ${budget}-byte ` + "`cache-budget`, so it was not saved. An oversized entry evicts " + "other workflows' caches. Raise `cache-budget` to keep it.");
-    return {
-      layer: plan.layer,
-      saved: false,
-      reason: `over the ${budget}-byte budget`,
-      bytes
-    };
+    log2.warning(`${layer}: ${bytes} bytes exceeds the ${budget}-byte \`cache-budget\`, ` + "so it was not saved. An oversized entry evicts other workflows' " + "caches. Raise `cache-budget` to keep it.");
+    return skipped(layer, `over the ${budget}-byte budget`, bytes);
   }
   try {
     await client.save(plan.paths, plan.key);
-    log2.info(`${plan.layer}: saved ${bytes} bytes as ${plan.key}`);
-    return { layer: plan.layer, saved: true, bytes };
+    log2.info(`${layer}: saved ${bytes} bytes as ${plan.key}`);
+    return { layer, saved: true, bytes };
   } catch (error2) {
-    const message = error2 instanceof Error ? error2.message : String(error2);
-    log2.warning(`${plan.layer}: save failed, continuing — ${message}`);
-    return { layer: plan.layer, saved: false, reason: message, bytes };
+    const message = describeError(error2);
+    log2.warning(`${layer}: save failed, continuing — ${message}`);
+    return skipped(layer, message, bytes);
   }
 }
 async function saveLayers(args) {
@@ -63152,7 +63183,12 @@ async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome
     info: deps.core.info,
     warning: deps.core.warning
   });
-  deps.core.saveState("cache", JSON.stringify({ plans, restored, budget: cacheRequest.budget }));
+  const state3 = {
+    plans,
+    restored,
+    budget: cacheRequest.budget
+  };
+  deps.core.saveState("cache", JSON.stringify(state3));
   return {
     cache: foldRestoredResults(cache, restored),
     cacheHit: restored.length > 0 && restored.every((entry) => entry.result === "exact")
@@ -63160,13 +63196,13 @@ async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome
 }
 async function run(deps) {
   try {
+    deps.core.saveState("isPost", "true");
     const cacheRequest = readCacheRequest({
       getInput: deps.core.getInput,
       env: deps.env
     });
     const cacheOnFailure = readBooleanInput(deps.core, "cache-on-failure", false);
     deps.core.exportVariable("RUST_TOOLCHAIN_CACHE_ON_FAILURE", String(cacheOnFailure.value));
-    deps.core.saveState("isPost", "true");
     const config = resolveConfiguration(deps);
     const spec = config.spec;
     const rustupEnv = resolveRustupEnv(deps.env, deps.platform);
@@ -63190,13 +63226,13 @@ async function run(deps) {
       try {
         rustupOrThrow(deps, profileComponentArgs, env);
       } catch (error2) {
-        deps.core.info(`Could not add every component implied by the "${spec.profile}" ` + `profile, continuing: ${error2 instanceof Error ? error2.message : String(error2)}`);
+        deps.core.info(`Could not add every component implied by the "${spec.profile}" ` + `profile, continuing: ${describeError(error2)}`);
       }
     }
     try {
       rustupOrThrow(deps, spec.toRustupDefaultArgs(), env);
     } catch (error2) {
-      deps.core.info(`rustup default did not succeed, continuing: ${error2 instanceof Error ? error2.message : String(error2)}`);
+      deps.core.info(`rustup default did not succeed, continuing: ${describeError(error2)}`);
     }
     const setRustupToolchain = readBooleanInput(deps.core, "set-rustup-toolchain", true);
     if (setRustupToolchain.value) {
@@ -63222,14 +63258,14 @@ async function run(deps) {
       deps.core.setOutput(name, value);
     }
   } catch (error2) {
-    deps.core.setFailed(error2 instanceof Error ? error2.message : String(error2));
+    deps.core.setFailed(describeError(error2));
   }
 }
 async function writeSummarySafely(core, restored, saved) {
   try {
     await core.summary.addRaw(renderSummary(restored, saved)).write();
   } catch (error2) {
-    core.warning(`could not write the job summary, continuing: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    core.warning(`could not write the job summary, continuing: ${describeError(error2)}`);
   }
 }
 async function runPost(deps) {
@@ -63248,7 +63284,7 @@ async function runPost(deps) {
     });
     await writeSummarySafely(deps.core, restored, saved);
   } catch (error2) {
-    deps.core.warning(`cache post-processing failed, continuing: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    deps.core.warning(`cache post-processing failed, continuing: ${describeError(error2)}`);
   }
 }
 

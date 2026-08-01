@@ -23,6 +23,24 @@
         # fixture rather than to a path, so a real secret in the same file is
         # still caught.
         "20250915abcd(-1f2e3d4c)?",
+        # Azurite's well-known development storage account key, published by
+        # Microsoft and identical in every installation. It reaches this
+        # repository as vendored code, not as configuration:
+        # `@actions/cache` -> `@azure/storage-blob` -> `@azure/storage-common`,
+        # whose `DevelopmentConnectionString` constant is inlined verbatim into
+        # the committed `dist/index.js`.
+        #
+        # Allowlisted rather than tolerated, because the alternative is a
+        # coin-flip in CI. The line has been in the bundle since
+        # `@actions/cache` landed and gitleaks reported it on some rebuilds and
+        # not others: the content never changed, but the bundle's byte length
+        # did, moving the line across gitleaks' internal read boundary. A check
+        # that passes or fails on where a byte lands is worse than no check,
+        # because it teaches everyone to re-run it.
+        #
+        # Scoped to the literal key, so a genuine Azure credential appearing in
+        # the same file is still caught.
+        "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
     ]
     commits = []
     stopwords = []
