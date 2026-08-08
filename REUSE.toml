@@ -30,6 +30,7 @@ ignore = [
   "**/.remember/",
   "**/.rumdl_cache/",
   "**/dist/",
+  "**/docs/index.md",
   "**/opencode*.json",
   "**/package*.json",
   "**/tsconfig*.json",
