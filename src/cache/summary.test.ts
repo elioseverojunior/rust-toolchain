@@ -25,7 +25,7 @@ describe("renderSummary", () => {
     );
 
     expect(table).toContain(
-      "| registry | exact | unchanged since an exact hit |",
+      "| registry | exact | — | unchanged since an exact hit |",
     );
     expect(table).toContain("| build | miss |");
     expect(table).toContain("2048");
@@ -39,5 +39,34 @@ describe("renderSummary", () => {
       [],
     );
     expect(table).toContain("| registry | partial |");
+  });
+});
+
+describe("pruning columns", () => {
+  // D4. The number that makes pruning legible: without it a run that dropped
+  // 100 MB and one that dropped nothing render identically.
+  it("reports the bytes the keep-set excluded", () => {
+    const table = renderSummary(
+      [{ layer: "build", result: "partial" }],
+      [{ layer: "build", saved: true, bytes: 118, prunedBytes: 101 }],
+    );
+    expect(table).toContain("| build | partial | 101 | saved 118 bytes |");
+  });
+
+  // An em dash rather than `0`, because zero-pruned and pruning-not-attempted
+  // are different states and a reader deciding whether `cache-prune` is doing
+  // anything needs to tell them apart.
+  it("renders an unpruned layer as a dash, not as zero", () => {
+    const table = renderSummary(
+      [{ layer: "registry", result: "miss" }],
+      [{ layer: "registry", saved: true, bytes: 10 }],
+    );
+    expect(table).toContain("| registry | miss | — | saved 10 bytes |");
+  });
+
+  it("names the pruned column in the header", () => {
+    expect(renderSummary([], [])).toContain(
+      "| Layer | Result | Pruned | Save |",
+    );
   });
 });

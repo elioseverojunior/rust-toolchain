@@ -333,9 +333,17 @@ would have read `0` for every layer while pruning worked perfectly.
 
 **Steps:**
 
-- [ ] Tests for the three counts through the lifecycle, the summary table's new columns, and the `cache` output's shape. Watch them fail.
-- [ ] Implement, gates.
-- [ ] `git commit -S -m "feat(cache): report restored, pruned and saved bytes per layer"`
+- [x] Tests for the three counts through the lifecycle, the summary table's new columns, and the `cache` output's shape. Watch them fail.
+- [x] Implement, gates.
+- [x] `git commit -S -m "feat(cache): report restored, pruned and saved bytes per layer"`
+
+**Narrowed from three counts to one, deliberately.** D4 and the design both ask for `restoredBytes`, `prunedBytes` and `savedBytes` on `CacheLayerOutput`. Only `prunedBytes` shipped, on `SavedLayer` and in the summary table.
+
+`savedBytes` was already there under the name `bytes`, and `CacheLayerOutput.bytes` — which Phase A declared — turns out to be **dead**: the `cache` output is written in the main phase, before anything has been saved, and a post-phase `setOutput` is not readable by any later step. Adding two more fields nothing populates would be worse than the one that already misleads. The summary is the reporting surface, exactly as `CLAUDE.md` says: it is the only place a per-layer result is visible, because `cache-hit` is a single all-layers boolean.
+
+`restoredBytes` was dropped for a different reason. `restoreLayers` takes a client, plans and a log, and touches no filesystem at all — that is what makes it the cheapest and least failure-prone part of the lifecycle. Measuring what a restore produced means walking the whole target directory on the hot path of every run, to print a number the previous run's `Pruned`/`Save` columns already imply. Carried to Phase E if anyone asks for it.
+
+`prunedBytes` is absent rather than `0` when no keep-set applied, and the summary renders that as an em dash. "Pruned nothing" and "did not prune" are different states, and a reader deciding whether `cache-prune` is earning the resolution cost Task 4 measured has to tell them apart.
 
 ---
 

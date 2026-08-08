@@ -13,6 +13,8 @@ export interface LayerPlan {
   key: string;
   restoreKeys: string[];
   paths: string[];
+  /** Bytes the keep-set excluded, when `paths` came from one. */
+  prunedBytes?: number;
 }
 
 /** `exact` means the key matched; `partial` means a restore-key prefix did. */
@@ -29,6 +31,17 @@ export interface SavedLayer {
   saved: boolean;
   reason?: string;
   bytes: number;
+  /**
+   * Bytes the keep-set excluded from the archive, when one was used.
+   *
+   * Absent rather than `0` when no keep-set applied, because "pruned nothing"
+   * and "did not prune" are different states and a reader deciding whether
+   * `cache-prune` is doing anything has to tell them apart.
+   *
+   * Excluded, never deleted — see `cache/prune.ts`. This is the size of what
+   * the manifest left out, measured on a working tree that still holds it.
+   */
+  prunedBytes?: number;
 }
 
 /** The logging surface, narrowed so tests need no `@actions/core`. */
@@ -112,8 +125,9 @@ function skipped(
   layer: CacheLayerId,
   reason: string,
   bytes: number,
+  prunedBytes?: number,
 ): SavedLayer {
-  return { layer, saved: false, reason, bytes };
+  return { layer, saved: false, reason, bytes, prunedBytes };
 }
 
 /** Either a size, or the reason there is not one. */
@@ -170,7 +184,7 @@ async function saveLayer(
 
   if (previous?.result === "exact") {
     log.info(`${layer}: unchanged since an exact hit, not saving`);
-    return skipped(layer, "unchanged since an exact hit", 0);
+    return skipped(layer, "unchanged since an exact hit", 0, plan.prunedBytes);
   }
 
   const measurement = measureForSave(plan, args);
@@ -179,7 +193,12 @@ async function saveLayer(
     log.warning(
       `${layer}: could not measure its size, not saving — ${message}`,
     );
-    return skipped(layer, `could not measure its size — ${message}`, 0);
+    return skipped(
+      layer,
+      `could not measure its size — ${message}`,
+      0,
+      plan.prunedBytes,
+    );
   }
 
   const { bytes } = measurement;
@@ -189,17 +208,22 @@ async function saveLayer(
         "so it was not saved. An oversized entry evicts other workflows' " +
         "caches. Raise `cache-budget` to keep it.",
     );
-    return skipped(layer, `over the ${budget}-byte budget`, bytes);
+    return skipped(
+      layer,
+      `over the ${budget}-byte budget`,
+      bytes,
+      plan.prunedBytes,
+    );
   }
 
   try {
     await client.save(plan.paths, plan.key);
     log.info(`${layer}: saved ${bytes} bytes as ${plan.key}`);
-    return { layer, saved: true, bytes };
+    return { layer, saved: true, bytes, prunedBytes: plan.prunedBytes };
   } catch (error) {
     const message = describeError(error);
     log.warning(`${layer}: save failed, continuing — ${message}`);
-    return skipped(layer, message, bytes);
+    return skipped(layer, message, bytes, plan.prunedBytes);
   }
 }
 
