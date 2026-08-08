@@ -12,6 +12,19 @@
         "(.*?)\\.env\\.example",
         "(.*?)\\.env\\.sample",
         "(.*?)\\.env\\.template",
+        # Dependency trees and build caches. gitleaks does NOT read
+        # `.gitignore`, and `gitleaks dir` takes a single path — so every
+        # invocation handed more than one file falls back to walking the whole
+        # working directory. That is 578 MB here against 3.3 MB of tracked
+        # content: `node_modules` is 383 MB and `docs/node_modules` another
+        # 307 MB, none of it committed and none of it ours. Scanning it cost
+        # 4m17s on every multi-file commit and every `hk check --all`, which is
+        # long enough that the check stops being run.
+        "(.*/)?node_modules/.*",
+        "(.*/)?\\.vitepress/cache/.*",
+        "(.*/)?\\.vitepress/dist/.*",
+        "(.*/)?target/.*",
+        "(.*/)?\\.git/.*",
     ]
     regexes = [
         # The fixture cache key used across the tests and the design docs.
