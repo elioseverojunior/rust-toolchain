@@ -67,15 +67,15 @@ input, a spec-aware cache key, and a set of correctness and hardening fixes.
 
 Compared against `dtolnay/rust-toolchain@master` (composite action, `action.yml`) as of 2026-07-24.
 
-|                                   | dtolnay                | this action                                                           |
-| --------------------------------- | ---------------------- | --------------------------------------------------------------------- |
-| Implementation                    | Composite action, bash | TypeScript bundled to `dist/index.js` (`node24`)                      |
-| Configuration source              | Action inputs only     | `rust-toolchain.toml` first, inputs override                          |
-| Profile                           | Hardcoded `minimal`    | `profile` input, toml, or `minimal`; validated against rustup's three |
-| Command execution                 | Shell interpolation    | argv arrays, no shell                                                 |
-| Toolchain pinning for later steps | `rustup default`       | `rustup default` **and** `RUSTUP_TOOLCHAIN`                           |
-| Cache key                         | rustc version only     | rustc version, a spec-bound key, and per-layer cargo cache keys       |
-| Tests                             | Workflow matrix        | 338 unit tests at 100% coverage, plus an `act` matrix                 |
+|                                   | dtolnay                | this action                                                                        |
+| --------------------------------- | ---------------------- | ---------------------------------------------------------------------------------- |
+| Implementation                    | Composite action, bash | TypeScript bundled to `dist/index.js` (`node24`)                                   |
+| Configuration source              | Action inputs only     | `rust-toolchain.toml` first, inputs override                                       |
+| Profile                           | Hardcoded `minimal`    | `profile` input or toml, defaulting to `default`; validated against rustup's three |
+| Command execution                 | Shell interpolation    | argv arrays, no shell                                                              |
+| Toolchain pinning for later steps | `rustup default`       | `rustup default` **and** `RUSTUP_TOOLCHAIN`                                        |
+| Cache key                         | rustc version only     | rustc version, a spec-bound key, and per-layer cargo cache keys                    |
+| Tests                             | Workflow matrix        | 359 unit tests at 100% coverage, plus an `act` matrix                              |
 
 ## Legacy parity
 

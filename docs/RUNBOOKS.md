@@ -16,16 +16,17 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 ### First-Time Setup
 
 ```sh
-mise run setup   # Installs mise-managed tools and project dependencies
+mise run setup   # Managed tools (bun, gh, actionlint, …), and refresh bun.lock
+bun install      # Project dependencies into node_modules
 ```
 
-`setup` (aliases: `install`, `dev`, `dev:setup`, `dev:up`) runs `mise install`,
-`mise deps`, and `bun install` for you. To do it by hand:
+`setup` (aliases: `install`, `dev:setup`, `dev:up`) runs `mise lock`,
+`mise install` and `mise deps`, then `bun install --lockfile-only`. That last
+flag resolves `bun.lock` without populating `node_modules`, so the second
+command above is not redundant.
 
-```sh
-mise install     # Managed tools (bun, gh, actionlint, …)
-bun install      # Project dependencies
-```
+`mise run dev` is a **different** task — the quick lint, typecheck and test
+loop. It was once an alias of `setup`, which shadowed it entirely.
 
 ### Environment
 
@@ -84,17 +85,34 @@ All three metrics must be **100%** per source file. Coverage excludes:
 
 ```text
 src/
-├── action.test.ts      # run() against injected fakes — argv, timeouts, retries, failures, outputs
-├── core.test.ts        # TOML parsing, channel resolution, cache key, rustc parsing
-├── config.test.ts      # Merge toml + inputs, path rejection, validation, resolveRustupEnv
-├── builder.test.ts     # Fluent builder, ToolchainSpec, rustup argv generation
-├── outputs.test.ts     # Resolved config → action outputs, JSON serialisation, provenance
-├── lib.test.ts         # Barrel export surface, and that it never re-exports index.ts
+├── action.test.ts        # run()/runPost() against injected fakes — argv, timeouts,
+│                         #   retries, bootstrap, cargo defaults, lifecycle, outputs
+├── builder.test.ts       # Fluent builder, ToolchainSpec, rustup argv generation
+├── config.test.ts        # Merge toml + inputs, path rejection, validation, resolveRustupEnv
+├── core.test.ts          # TOML parsing, channel resolution, cache keys, rustc parsing
+├── errors.test.ts        # describeError over Errors and arbitrary thrown values
+├── inputs.test.ts        # readBooleanInput — defaults, casing, rejection of non-booleans
+├── lib.test.ts           # Barrel export surface, and that it never re-exports index.ts
+├── outputs.test.ts       # Resolved config → action outputs, JSON serialisation, provenance
+└── cache/
+    ├── budget.test.ts    # parseSize suffixes; measurePaths totals and `unmeasured`
+    ├── env.test.ts       # hashBuildEnv prefixes, deny-list, stability across our own exports
+    ├── inputs.test.ts    # readCacheRequest validation; buildCacheOutputs
+    ├── keys.test.ts      # joinKeySegments collapsing; per-layer key and ladder shape
+    ├── layers.test.ts    # CACHE_LAYER_IDS; cache-layers parsing and rejection
+    ├── lifecycle.test.ts # restore classification; save skip rules and failure isolation
+    ├── paths.test.ts     # cache-workspaces escaping; the files-only build glob set
+    └── summary.test.ts   # the job-summary table
 ```
+
+Sixteen test files cover seventeen library modules. `src/cache/client.ts`
+declares the `CacheClient` interface and nothing else, so it compiles to no
+executable statements and never reaches the coverage report — the port exists
+precisely so the lifecycle can be driven without `@actions/cache`.
 
 `src/index.ts` has no co-located test: it is a side-effecting entry script, so
 importing it would run the action. Nothing imports it, so Bun never loads it and
-it does not appear in the coverage report — which is exactly why it holds only
+it is excluded from the coverage report — which is exactly why it holds only
 dependency wiring. All orchestration lives in `src/action.ts`, where
 `src/action.test.ts` drives it through the injected `ActionDeps`.
 
@@ -174,16 +192,24 @@ series from toml, toml-vs-input override precedence, and `profile: minimal`.
 `.github/workflows/cicd.yml` runs on push, pull request, and `workflow_dispatch`,
 with these jobs:
 
-| Job       | Purpose                                                                     |
-| --------- | --------------------------------------------------------------------------- |
-| `setup`   | Checkout and provision the toolchain via mise                               |
-| `lint`    | `hk` lint suite (ESLint, Prettier, actionlint, yamllint, markdownlint)      |
-| `test`    | `bun test` with the 100% coverage gate                                      |
-| `sast`    | Static analysis / secret scanning                                           |
-| `build`   | Rebuilds the bundle and fails on a stale `dist/` via `git diff --exit-code` |
-| `release` | Publishes the action on tagged releases                                     |
+| Job        | Purpose                                                                                                                                                          |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setup`    | Checkout, provision tools via mise, and resolve the dry-run mode                                                                                                 |
+| `version`  | The only GitVersion invocation anywhere — calls `version.yml`, which applies the tag-outranks-derivation rule once for every consumer                            |
+| `lint`     | `hk check --all` — ESLint, Prettier, typecheck, actionlint, rumdl, mermaid, gitleaks and the whitespace/EOF fixers                                               |
+| `test`     | `bun run test:coverage` with the 100% gate                                                                                                                       |
+| `sast`     | CodeQL static analysis                                                                                                                                           |
+| `build`    | Rebuilds the bundle and fails on a stale `dist/` via `git diff --exit-code`                                                                                      |
+| `e2e`      | Runs the action against real rustup on ubuntu, macos and windows, builds a probe crate, and invokes the action twice to prove the derived keys do not move       |
+| `e2e-warm` | `needs: [e2e]`, so it starts only after that job's `post:` step — the only proof the save path works. Asserts a full `cache-hit` and that the exclusions applied |
+| `release`  | Push to `main` (or a dispatch): tags, rewrites `.github/` action refs, and publishes the GitHub Release                                                          |
+| `gh-pages` | Calls `gh-pages.yml` to build and publish the VitePress site, after `release`                                                                                    |
 
-Supporting workflows: `labeler.yml`, `stale-tags-cleanup.yml`, and
+`yamllint` is deliberately absent from the `lint` row: `mise run yamllint` exists
+but is wired into neither `hk` nor CI.
+
+Supporting workflows: `version.yml` and `gh-pages.yml`, both called by
+`cicd.yml`, plus `labeler.yml`, `scorecards.yml`, `stale-tags-cleanup.yml` and
 `update-floating-tag.yml`.
 
 ### Pre-Commit Hooks (hk)
@@ -231,7 +257,12 @@ bun add --dev <package>        # Dev dependency
 ```
 
 Runtime dependencies are `@actions/core` (inputs, outputs, `exportVariable`,
-failures), `@actions/github` (workflow context), and `smol-toml` (TOML parsing).
+`saveState`/`getState`, failures), `@actions/cache`
+(`restoreCache`/`saveCache`, reached only through the `CacheClient` port in
+`src/cache/client.ts`), and `smol-toml` (TOML parsing). `@actions/github` is
+declared but imported nowhere, so the bundler drops it — it is kept because
+`AGENTS.md` points contributors at it rather than at raw `process.env` access
+for when workflow context is eventually needed.
 
 ## Troubleshooting
 
@@ -394,5 +425,9 @@ Do **not** bump `package.json` or create tags by hand — the job does both, and
 hand-made tag collides with the one it creates. To release, merge to `main` with
 a conventional commit message; the bump level follows from the commit type.
 
-Prereleases are skipped: the job exits early when GitVersion reports a
-prerelease label.
+Nothing is skipped for a prerelease. On `main` GitVersion resolves `X.Y.Z-N`,
+where `N` is the commit distance — that **is** this repository's normal release
+format, and the **Classify Release** step marks it `--latest`. Only a
+_labelled_ prerelease (`-beta.1`, `-rc.2`, `-alpha`), which comes from the
+`release` and `feature` branch configs in `GitVersion.yml`, is marked
+`--prerelease`.
