@@ -264,6 +264,17 @@ outputs:
       Whether `RUSTUP_TOOLCHAIN` was exported for the rest of the job, as
       `true` or `false`, after applying the default.
 
+  cargo-tools:
+    description: >
+      The cargo tools that were made available, as a JSON array string of
+      `name@version` entries (e.g. `["cargo-nextest@0.9.143"]`), in the order
+      they were requested. Every version is concrete: a `latest` entry appears
+      as whatever crates.io resolved it to. This is the same set the `bin`
+      cache key was derived from, so hashing it reproduces that key's final
+      segment — which also means a tool the registry could not answer for is
+      published honestly as `name@unknown` rather than being hidden or
+      dropped.
+
   json:
     description: >
       Every output above as one JSON object, natively typed — `targets` and

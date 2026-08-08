@@ -13,6 +13,7 @@ import {
 } from "@/action";
 import { generateSpecCacheKey } from "@/core";
 import type { ActionOutputs } from "@/outputs";
+import { hashToolSet, UNRESOLVED_VERSION } from "@/tools";
 
 const rustcOutput = (release = "1.89.0"): string =>
   `rustc ${release} (e5b2c17f0 2025-06-27)
@@ -807,6 +808,7 @@ profile = "minimal"
       components: ["rustfmt"],
       profile: "minimal",
       "set-rustup-toolchain": true,
+      "cargo-tools": [],
       name: "1.89.0",
       cachekey: "20250627e5b2",
       // Recomputed rather than read back from the output, so this pins the
@@ -1505,6 +1507,71 @@ describe("cargo tools", () => {
     ).toEqual([
       ["install", "cargo-deny", "--version", "0.16.1", "--locked", "--force"],
     ]);
+  });
+
+  // The output and the bin key are two views of one resolution, so a consumer
+  // has to be able to reconcile them — that is the whole reason the output
+  // publishes `resolveToolVersions`' result rather than `ensureTools`'
+  // outcomes. Hashing the published list back and matching it against the key
+  // IS that reconciliation, and it breaks the moment either side is built
+  // from a different set.
+  it("publishes a cargo-tools output the bin key can be rederived from", async () => {
+    const h = harness({
+      inputs: withTools("cargo-nextest"),
+      env: cacheEnv,
+      toolVersions: { "cargo-nextest": "0.9.100" },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    const published = JSON.parse(h.outputs["cargo-tools"] ?? "null") as
+      string[] | null;
+    expect(published).toEqual(["cargo-nextest@0.9.100"]);
+
+    const rederived = (published ?? []).map((entry) => {
+      const at = entry.indexOf("@");
+      return { name: entry.slice(0, at), version: entry.slice(at + 1) };
+    });
+    const binKey = JSON.parse(h.outputs["cache"] ?? "null").layers.bin
+      .key as string;
+    expect(binKey).toEndWith(hashToolSet(rederived));
+  });
+
+  // A registry failure resolves to UNRESOLVED_VERSION, and that same value is
+  // what the key was hashed from. Publishing it verbatim keeps the two
+  // reconcilable; substituting "latest" would make them disagree with nothing
+  // to say which was right.
+  it("publishes an unresolved tool as name@unknown", async () => {
+    const h = harness({
+      inputs: withTools("cargo-nextest"),
+      env: cacheEnv,
+      // The harness keys its queue on the first two argv words, so
+      // `rustup --version` and `cargo-nextest --version` share the key
+      // "--version" and drain it in call order. The first entry answers
+      // rustup; the second is the probe that has to find the tool present,
+      // which is the whole premise of the fallback being exercised here.
+      execResults: {
+        "--version": [
+          { status: 0, stdout: "rustup 1.28.0" },
+          { status: 0, stdout: "cargo-nextest 0.9.99" },
+        ],
+      },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(
+      h.warnings.some((w) => /registry could not be reached/.test(w)),
+    ).toBe(true);
+    expect(JSON.parse(h.outputs["cargo-tools"] ?? "null")).toEqual([
+      `cargo-nextest@${UNRESOLVED_VERSION}`,
+    ]);
+  });
+
+  it("publishes an empty cargo-tools list when none were requested", async () => {
+    const h = harness({ inputs: { toolchain: "stable" }, env: cacheEnv });
+    await run(h.deps);
+    expect(h.outputs["cargo-tools"]).toBe("[]");
   });
 
   // Validation is worth nothing if it happens after a ten-minute install.
