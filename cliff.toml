@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 # A Tera template rendered for each release.
 body = """
 {% if version %}\
-    ## [{{ version | trim_start_matches(pat="v") }}](https://github.com/elioseverojunior/comply/releases/tag/{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
+    ## [{{ version | trim_start_matches(pat="v") }}](https://github.com/elioseverojunior/rust-toolchain/releases/tag/{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
 {% else %}\
     ## [Unreleased]
 {% endif %}\
@@ -29,7 +29,7 @@ body = """
         - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
             {% if commit.breaking %}[**breaking**] {% endif %}\
             {{ commit.message | upper_first }} \
-            ([{{ commit.id | truncate(length=7, end="") }}](https://github.com/elioetibr/skald-rust/commit/{{ commit.id }}))\
+            ([{{ commit.id | truncate(length=7, end="") }}](https://github.com/elioseverojunior/rust-toolchain/commit/{{ commit.id }}))\
     {% endfor %}
 {% endfor %}\n
 """
@@ -55,7 +55,7 @@ split_commits = false
 # Regex preprocessors applied to commit messages before parsing.
 commit_preprocessors = [
   # Turn `(#123)` issue/PR references into links.
-  { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "([#${2}](https://github.com/elioetibr/skald-rust/issues/${2}))" },
+  { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "([#${2}](https://github.com/elioseverojunior/rust-toolchain/issues/${2}))" },
 ]
 # Keep breaking-change commits even if a parser would otherwise skip them.
 protect_breaking_commits = false
