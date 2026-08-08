@@ -909,7 +909,7 @@ describe("cache key outputs", () => {
     const cache = JSON.parse(h.outputs["cache"] ?? "null");
     expect(h.failures).toEqual([]);
     expect(cache.enabled).toBe(true);
-    expect(Object.keys(cache.layers)).toEqual(["registry", "build"]);
+    expect(Object.keys(cache.layers)).toEqual(["registry", "build", "bin"]);
     expect(cache.layers.registry.key).toBe("registry-Linux-X64-ci-a1b2c3");
   });
 
@@ -963,12 +963,12 @@ describe("cache key outputs", () => {
         toolchain: "stable",
         cache: "true",
         "cache-key-hash": "a1b2c3",
-        "cache-layers": "bin",
+        "cache-layers": "doc",
       },
       env: cacheEnv,
     });
     await run(h.deps);
-    expect(h.failures[0]).toContain('"bin" is not a cache layer');
+    expect(h.failures[0]).toContain('"doc" is not a cache layer');
   });
 });
 
@@ -982,12 +982,12 @@ describe("cache input validation", () => {
         toolchain: "stable",
         cache: "true",
         "cache-key-hash": "a1b2c3",
-        "cache-layers": "bin",
+        "cache-layers": "doc",
       },
       env: cacheEnv,
     });
     await run(h.deps);
-    expect(h.failures[0]).toContain('"bin" is not a cache layer');
+    expect(h.failures[0]).toContain('"doc" is not a cache layer');
     expect(h.calls).toEqual([]);
   });
 
@@ -1109,7 +1109,7 @@ describe("cache input validation", () => {
     const h = harness({
       inputs: {
         toolchain: "stable",
-        "cache-layers": "bin",
+        "cache-layers": "doc",
         "cache-key-suffix": "ci,nightly",
       },
       env: { ...cacheEnv, RUNNER_OS: "" },
@@ -1139,10 +1139,14 @@ describe("cache lifecycle", () => {
     expect(h.restores.map((r) => r.key)).toEqual([
       expect.stringContaining("registry-Linux-X64-ci-"),
       expect.stringContaining("build-Linux-X64-ci-"),
+      // No suffix on the bin key: the same tool set needs byte-identical
+      // binaries whoever asked for them.
+      expect.stringContaining("bin-Linux-X64-"),
     ]);
     // The registry layer never carries the toolchain digest.
     expect(h.restores[0]?.paths.join("\n")).toContain("registry/index");
     expect(h.restores[1]?.paths.join("\n")).toContain("target");
+    expect(h.restores[2]?.paths.join("\n")).toContain("/bin/**");
   });
 
   it("hands the post phase everything it needs through state", async () => {
@@ -1151,8 +1155,8 @@ describe("cache lifecycle", () => {
 
     expect(h.state["isPost"]).toBe("true");
     const handoff = JSON.parse(h.state["cache"] ?? "null");
-    expect(handoff.plans).toHaveLength(2);
-    expect(handoff.restored).toHaveLength(2);
+    expect(handoff.plans).toHaveLength(3);
+    expect(handoff.restored).toHaveLength(3);
     expect(typeof handoff.budget).toBe("number");
   });
 

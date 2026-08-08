@@ -43,6 +43,8 @@ describe("library barrel", () => {
         "parseWorkspaces",
         "registryPaths",
         "buildPaths",
+        "binPaths",
+        "RUSTUP_SHIMS",
         // cache/summary.ts
         "renderSummary",
         // config.ts

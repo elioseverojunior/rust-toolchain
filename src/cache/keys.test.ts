@@ -14,6 +14,7 @@ const base: CacheKeyContext = {
   lockHash: "a1b2c3",
   specCacheKey: "20250915abcd-1f2e3d4c",
   envHash: "e1e2e3e4",
+  toolSetHash: "7a7b7c7d",
 };
 
 describe("joinKeySegments", () => {
@@ -72,6 +73,43 @@ describe("buildLayerKey", () => {
     const { restoreKeys } = buildLayerKey("build", base);
     expect(restoreKeys).toHaveLength(1);
     expect(restoreKeys[0]).toContain("20250915abcd-1f2e3d4c");
+  });
+
+  // The bin layer is keyed on the resolved tool set and nothing else. Excluding
+  // rustup's shims is what lets the toolchain leave this key, so bumping stable
+  // no longer reinstalls every cargo tool.
+  it("keys the bin layer on the resolved tool set alone", () => {
+    expect(buildLayerKey("bin", base)).toEqual({
+      key: "bin-Linux-X64-7a7b7c7d",
+      restoreKeys: ["bin-Linux-X64-"],
+    });
+  });
+
+  it.each([
+    ["the toolchain spec", "20250915abcd"],
+    ["the dependency set", "a1b2c3"],
+    ["the build environment", "e1e2e3e4"],
+  ])("keeps %s out of the bin key", (_label, segment) => {
+    expect(buildLayerKey("bin", base).key).not.toContain(segment);
+  });
+
+  // Deliberately unlike `build`, whose ladder stops one rung short. A partial
+  // bin restore is useful — three of four tools present means installing one —
+  // whereas partial build artifacts are what cargo discards on sight.
+  it("lets the bin ladder fall back where the build ladder does not", () => {
+    expect(buildLayerKey("bin", base).restoreKeys).toEqual(["bin-Linux-X64-"]);
+    expect(buildLayerKey("build", base).restoreKeys[0]).toContain(
+      base.specCacheKey,
+    );
+  });
+
+  // `cache-key-suffix` is absent from this key on purpose: two jobs resolving
+  // the same tool set need byte-identical binaries, so fragmenting by suffix
+  // would cost sharing and buy nothing.
+  it("ignores the suffix on the bin layer", () => {
+    expect(buildLayerKey("bin", { ...base, suffix: "other" })).toEqual(
+      buildLayerKey("bin", base),
+    );
   });
 
   it("collapses the suffix slot in both key and ladder when unset", () => {

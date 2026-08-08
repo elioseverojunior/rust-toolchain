@@ -4,7 +4,13 @@
 
 import { describe, expect, it } from "bun:test";
 
-import { buildPaths, parseWorkspaces, registryPaths } from "@/cache/paths";
+import {
+  binPaths,
+  buildPaths,
+  parseWorkspaces,
+  registryPaths,
+  RUSTUP_SHIMS,
+} from "@/cache/paths";
 
 const ROOT = "/workspace";
 
@@ -132,5 +138,88 @@ describe("buildPaths", () => {
     expect(paths).toContain("/w/ta/**");
     expect(paths).toContain("/w/tb/**");
     expect(paths.filter((p) => p.startsWith("!"))).toHaveLength(8);
+  });
+});
+
+describe("binPaths", () => {
+  const BIN = "/home/runner/.cargo/bin";
+
+  // Pinned as a literal array rather than rebuilt from RUSTUP_SHIMS, which
+  // would only restate the implementation. This is the highest-risk glob set in
+  // the action: the two directory negations at the end are what make every
+  // negation above them reach the archive at all, because `@actions/cache` runs
+  // `tar --files-from` with no `--no-recursion` and any directory left in the
+  // manifest is expanded wholesale.
+  it("matches files only, so the shim exclusions survive tar", () => {
+    expect(binPaths("/home/runner/.cargo")).toEqual([
+      `${BIN}/**`,
+      `!${BIN}/cargo`,
+      `!${BIN}/cargo.exe`,
+      `!${BIN}/cargo-clippy`,
+      `!${BIN}/cargo-clippy.exe`,
+      `!${BIN}/cargo-fmt`,
+      `!${BIN}/cargo-fmt.exe`,
+      `!${BIN}/cargo-miri`,
+      `!${BIN}/cargo-miri.exe`,
+      `!${BIN}/clippy-driver`,
+      `!${BIN}/clippy-driver.exe`,
+      `!${BIN}/rls`,
+      `!${BIN}/rls.exe`,
+      `!${BIN}/rust-analyzer`,
+      `!${BIN}/rust-analyzer.exe`,
+      `!${BIN}/rust-gdb`,
+      `!${BIN}/rust-gdb.exe`,
+      `!${BIN}/rust-gdbgui`,
+      `!${BIN}/rust-gdbgui.exe`,
+      `!${BIN}/rust-lldb`,
+      `!${BIN}/rust-lldb.exe`,
+      `!${BIN}/rustc`,
+      `!${BIN}/rustc.exe`,
+      `!${BIN}/rustdoc`,
+      `!${BIN}/rustdoc.exe`,
+      `!${BIN}/rustfmt`,
+      `!${BIN}/rustfmt.exe`,
+      `!${BIN}/rustup`,
+      `!${BIN}/rustup.exe`,
+      `!${BIN}/`,
+      `!${BIN}/**/`,
+    ]);
+  });
+
+  // Emitted unconditionally rather than behind a platform check: a negation for
+  // a file that does not exist matches nothing, and the CI E2E matrix runs
+  // windows-latest, where every shim carries the suffix.
+  it("negates both the bare and the .exe spelling of every shim", () => {
+    const paths = binPaths("/c");
+    for (const shim of RUSTUP_SHIMS) {
+      expect(paths).toContain(`!/c/bin/${shim}`);
+      expect(paths).toContain(`!/c/bin/${shim}.exe`);
+    }
+  });
+
+  // The set rustup owns. Adding a shim here without adding it to the fixture
+  // above fails that test, which is the point.
+  it("names the fourteen rustup shims", () => {
+    expect(RUSTUP_SHIMS).toEqual([
+      "cargo",
+      "cargo-clippy",
+      "cargo-fmt",
+      "cargo-miri",
+      "clippy-driver",
+      "rls",
+      "rust-analyzer",
+      "rust-gdb",
+      "rust-gdbgui",
+      "rust-lldb",
+      "rustc",
+      "rustdoc",
+      "rustfmt",
+      "rustup",
+    ]);
+  });
+
+  it("keeps the directory negations last", () => {
+    const paths = binPaths("/c");
+    expect(paths.slice(-2)).toEqual(["!/c/bin/", "!/c/bin/**/"]);
   });
 });

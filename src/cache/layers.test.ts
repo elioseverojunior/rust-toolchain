@@ -7,16 +7,27 @@ import { describe, expect, it } from "bun:test";
 import { CACHE_LAYER_IDS, parseCacheLayers } from "@/cache/layers";
 
 describe("CACHE_LAYER_IDS", () => {
-  // Phase A ships two layers. `bin` arrives with cargo-tool installation,
-  // because its key hashes resolved tool versions that nothing resolves yet.
+  // `bin` arrives in Phase C, with the cargo-tool resolution its key hashes.
   it("names the layers in canonical order", () => {
-    expect(CACHE_LAYER_IDS).toEqual(["registry", "build"]);
+    expect(CACHE_LAYER_IDS).toEqual(["registry", "build", "bin"]);
   });
 });
 
 describe("parseCacheLayers", () => {
   it("parses a comma-separated list", () => {
     expect(parseCacheLayers("registry,build")).toEqual(["registry", "build"]);
+  });
+
+  it("parses the bin layer", () => {
+    expect(parseCacheLayers("bin")).toEqual(["bin"]);
+  });
+
+  it("parses all three", () => {
+    expect(parseCacheLayers("bin,registry,build")).toEqual([
+      "registry",
+      "build",
+      "bin",
+    ]);
   });
 
   it("parses whitespace- and newline-separated lists", () => {
@@ -40,14 +51,14 @@ describe("parseCacheLayers", () => {
   });
 
   it("rejects an unknown layer and names the valid ones", () => {
-    expect(() => parseCacheLayers("registry,bin")).toThrow(
-      '"bin" is not a cache layer. Valid layers are: registry, build.',
+    expect(() => parseCacheLayers("registry,doc")).toThrow(
+      '"doc" is not a cache layer. Valid layers are: registry, build, bin.',
     );
   });
 
   it("rejects a list that names no layer", () => {
     expect(() => parseCacheLayers(" , ")).toThrow(
-      "`cache-layers` must name at least one of: registry, build.",
+      "`cache-layers` must name at least one of: registry, build, bin.",
     );
   });
 });
