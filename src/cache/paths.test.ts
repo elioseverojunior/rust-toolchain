@@ -141,6 +141,47 @@ describe("buildPaths", () => {
   });
 });
 
+describe("buildPaths with a keep-set", () => {
+  const workspaces = [{ manifestDir: "/w", targetDir: "/w/target" }];
+
+  // The globstar's ABSENCE is the assertion, not just the files' presence.
+  // The directory negations exist because a globstar re-expands directories
+  // through `tar --files-from`; a keep-set manifest that still carried one
+  // would silently archive everything, and every pruning test above it would
+  // pass anyway.
+  it("emits the kept files and no glob at all", () => {
+    const paths = buildPaths(workspaces, [
+      "/w/target/debug/deps/libserde-aaaaaaaaaaaaaaaa.rlib",
+      "/w/target/CACHEDIR.TAG",
+    ]);
+    expect(paths).toEqual([
+      "/w/target/debug/deps/libserde-aaaaaaaaaaaaaaaa.rlib",
+      "/w/target/CACHEDIR.TAG",
+    ]);
+    expect(paths.some((p) => p.includes("*"))).toBe(false);
+    expect(paths.some((p) => p.startsWith("!"))).toBe(false);
+  });
+
+  // `off`, and every failure path, land here. It has to reproduce Phase B
+  // exactly -- including both directory negations -- or turning pruning off
+  // would quietly change what a cache carries.
+  it("reproduces the Phase B glob set when no keep-set is given", () => {
+    expect(buildPaths(workspaces)).toEqual([
+      "/w/target/**",
+      "!/w/target/**/incremental/**",
+      "!/w/target/**/examples/**",
+      "!/w/target/",
+      "!/w/target/**/",
+    ]);
+  });
+
+  // Never "archive nothing": an empty archive hits its key, restores nothing,
+  // and makes every later job rebuild believing it was warm.
+  it("treats an empty keep-set as absent rather than as archive-nothing", () => {
+    expect(buildPaths(workspaces, [])).toEqual(buildPaths(workspaces));
+  });
+});
+
 describe("binPaths", () => {
   const BIN = "/home/runner/.cargo/bin";
 

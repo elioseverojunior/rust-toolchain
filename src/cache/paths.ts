@@ -148,7 +148,26 @@ export function registryPaths(cargoHome: string): string[] {
  * backslash-joined pattern would itself need escaping. A mixed-separator
  * path string is fine for globbing; a backslash-escaped glob is not.
  */
-export function buildPaths(workspaces: Workspace[]): string[] {
+export function buildPaths(
+  workspaces: Workspace[],
+  keepSet?: readonly string[],
+): string[] {
+  // An explicit keep-set replaces the globstar entirely rather than being
+  // negated alongside it, and that is the point. The load-bearing
+  // `!<target>/**/` negation below exists only because `@actions/cache` runs
+  // `tar --files-from` without `--no-recursion`, so any directory the globstar
+  // leaves in the manifest re-expands and re-includes everything the negations
+  // removed. Naming files and nothing else leaves no directory to re-expand,
+  // so the hack disappears with the thing that required it.
+  //
+  // An empty keep-set is treated as absent, never as "archive nothing".
+  // Saving an empty archive is not a small cache but a poisoned one: it hits
+  // its key, restores nothing, and leaves every later job rebuilding while
+  // believing it was warm. `computeKeepSet` already refuses to mark such a set
+  // usable; this is the second guard, because the cost of being wrong is
+  // silent and paid by every later run.
+  if (keepSet !== undefined && keepSet.length > 0) return [...keepSet];
+
   return workspaces.flatMap(({ targetDir }) => [
     `${targetDir}/**`,
     `!${targetDir}/**/incremental/**`,
