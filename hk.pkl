@@ -63,7 +63,21 @@ local linters = new Mapping<String, Step> {
         fix = "hk util mixed-line-ending --fix {{ files }}"
     }
 
-    ["gitleaks"] = Builtins.gitleaks
+    // Not `Builtins.gitleaks`, because that omits `--config` and gitleaks then
+    // discovers `.gitleaks.toml` by walking up from the common root of the
+    // paths it is handed. A commit touching files across the tree resolves that
+    // root to the repository and finds the allowlist; a commit touching only
+    // `README.md` resolves it to that one file, runs with NO allowlist at all,
+    // and fails on the `20250915abcd-1f2e3d4c` fixture the config exists to
+    // permit. Nothing about the content differs between those two runs — only
+    // which other files happened to be staged alongside it — which is the same
+    // "passes or fails on where a byte lands" failure the Azurite note in
+    // `.gitleaks.toml` describes, and it teaches people to re-run the check
+    // rather than read it. Passing the config explicitly removes the guesswork.
+    ["gitleaks"] = new Step {
+        glob = "**"
+        check = "gitleaks dir --config .gitleaks.toml --redact --verbose --no-banner {{ files }}"
+    }
 
     ["eslint"] = new Step {
         glob = "*.ts"
