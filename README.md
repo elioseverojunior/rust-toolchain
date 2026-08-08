@@ -609,6 +609,82 @@ The `build` key changed the moment it shipped — every job's key includes a
 segment it did not have before — so the first run after upgrading is a cold
 `build` miss. Every run after that restores normally.
 
+## Permissions
+
+This action needs **no `permissions:` grants of its own**, at any feature level.
+
+| What you use                                     | `permissions:` the action requires |
+| ------------------------------------------------ | ---------------------------------- |
+| Toolchain install only                           | none                               |
+| `cache: true` — restore and save                 | none                               |
+| `cargo-tools` — install and cache cargo binaries | none                               |
+
+That is not an oversimplification, and it is checkable:
+
+- **The action never calls the GitHub API.** It reads inputs and writes outputs through
+  `@actions/core`, which uses files and environment variables, never a token. There is no
+  `getOctokit`, no `GITHUB_TOKEN` read, and no `@actions/github` import anywhere in `src/`.
+  (`@actions/github` is declared in `package.json` and imported nowhere, so the bundler drops
+  it.)
+- **The cache does not use `GITHUB_TOKEN` either.** `permissions:` scopes `GITHUB_TOKEN`, and
+  the Actions cache service does not authenticate with it — `@actions/cache` uses
+  `ACTIONS_RUNTIME_TOKEN` together with `ACTIONS_RESULTS_URL`/`ACTIONS_CACHE_URL`, which the
+  runner injects into every job. Adding `actions: write` does not grant cache access, and
+  omitting it does not withhold it.
+- **Nothing it downloads is a GitHub endpoint.** rustup bootstraps from `sh.rustup.rs` or
+  `win.rustup.rs` and pulls the toolchain from `static.rust-lang.org`; `cargo install` fetches
+  from `crates.io`. The action itself makes exactly one HTTP request, and only when a
+  `cargo-tools` entry omits its version: an unauthenticated `GET` to the crates.io API to turn
+  `latest` into a concrete version. Pin the version — `cargo-nextest@0.9.143` — and even that
+  request never happens, which is what makes a pinned tool set immune to a registry outage.
+
+So the smallest workflow that works is the one your checkout needs, and nothing more:
+
+```yaml
+permissions:
+  contents: read
+
+steps:
+  - uses: actions/checkout@v5
+  - uses: elioseverojunior/rust-toolchain@v0.1
+    with:
+      cache: true
+      cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}
+```
+
+Even `permissions: {}` works, provided something else has already put the source on disk —
+`contents: read` is `actions/checkout`'s requirement, not this action's.
+
+### What actually restricts caching
+
+The limits worth knowing are GitHub's cache behaviour, not `permissions:` settings, so no
+grant will change them:
+
+- **A pull request from a fork cannot write to the base repository's cache.** It can read
+  entries the base branch created, so a fork PR still gets a warm restore — but its own save
+  is discarded. `cache-hit` will report `false` on the run after it, which is expected rather
+  than broken.
+- **Cache entries are scoped by branch.** A branch reads its own entries and the default
+  branch's; it does not read a sibling branch's. A first run on a new branch is therefore a
+  cold `build` miss even though `main` is warm.
+- **The repository-wide budget is 10 GB, evicted globally by least-recent-use.** This is why
+  `cache-budget` defaults to `2GB` per layer: an oversized entry does not degrade its own hit
+  rate, it evicts other workflows' entries.
+
+See [GitHub's cache documentation](https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows)
+for the authoritative rules; the three above are the ones that change how this action behaves.
+
+### If your workflow does more than build
+
+Those jobs need their own grants, and they are unrelated to this action:
+
+| Job does                       | Needs                    |
+| ------------------------------ | ------------------------ |
+| Checkout                       | `contents: read`         |
+| Create a release or push a tag | `contents: write`        |
+| Upload CodeQL or SARIF results | `security-events: write` |
+| Comment on a pull request      | `pull-requests: write`   |
+
 ## Programmatic Usage
 
 Import a single module, or the whole surface from the barrel `@rust-toolchain`
