@@ -18,10 +18,10 @@ not — a claim a reader disproves in five minutes is worth less than no claim.
 | [`actions-rs/toolchain`](https://github.com/actions-rs/toolchain)                                     | Install a toolchain (unmaintained)    | ✅ Replaced                                                   |
 | [`actions/cache`](https://github.com/actions/cache) hand-wired for cargo                              | Generic cache plus your own key logic | ✅ Key derivation replaced — feed `outputs.cache` in directly |
 | [`actions-rust-lang/setup-rust-toolchain`](https://github.com/actions-rust-lang/setup-rust-toolchain) | Toolchain plus a `rust-cache` wrapper | ✅ Replaced — toolchain and caching both covered              |
-| [`moonrepo/setup-rust`](https://github.com/moonrepo/setup-rust)                                       | Toolchain, cache and cargo tools      | ◐ Toolchain and cache replaced, tools Phase C                 |
+| [`moonrepo/setup-rust`](https://github.com/moonrepo/setup-rust)                                       | Toolchain, cache and cargo tools      | ✅ Replaced — `cargo-tools` covers the tools too              |
 | [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache)                                       | Restore and save the cargo cache      | ✅ Replaced — restores and saves without a separate action    |
-| [`taiki-e/install-action`](https://github.com/taiki-e/install-action)                                 | Install cargo tools quickly           | ○ Planned, Phase C                                            |
-| [`baptiste0928/cargo-install`](https://github.com/baptiste0928/cargo-install)                         | Install and cache cargo tools         | ○ Planned, Phase C                                            |
+| [`taiki-e/install-action`](https://github.com/taiki-e/install-action)                                 | Install cargo tools quickly           | ✅ Replaced — `cargo-tools`, cached in the `bin` layer        |
+| [`baptiste0928/cargo-install`](https://github.com/baptiste0928/cargo-install)                         | Install and cache cargo tools         | ✅ Replaced — `cargo-tools` installs and caches them          |
 | [`actions-rs/cargo`](https://github.com/actions-rs/cargo)                                             | Run cargo commands                    | ✗ Out of scope — use `run: cargo …`                           |
 | [`clechasseur/rs-clippy-check`](https://github.com/clechasseur/rs-clippy-check)                       | Clippy annotations on pull requests   | ✗ Out of scope — a different concern                          |
 

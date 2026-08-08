@@ -273,6 +273,12 @@ jobs:
           cache-key-hash: ${{ hashFiles('bun.lock') }}
           cache-key-suffix: ci
           cache-workspaces: e2e-probe -> e2e-probe/target
+          # Pinned, so crates.io is never consulted and a registry outage
+          # cannot redden CI. hexyl is chosen because its binary is named after
+          # its crate, which is what `ensureTools`' `<name> --version` probe
+          # assumes; a crate shipping a differently-named binary (ripgrep ships
+          # `rg`) fails that probe and reinstalls on every run.
+          cargo-tools: hexyl@0.17.0
 
       # Values arrive through env rather than interpolated into the script, so
       # an output containing shell metacharacters cannot execute.
@@ -300,6 +306,29 @@ jobs:
           [[ "$COMPONENTS" == *clippy* ]] || { echo "::error::components '$COMPONENTS' lost the toml's clippy"; exit 1; }
           [[ ${#CACHEKEY} -eq 12 ]]     || { echo "::error::cachekey '$CACHEKEY' is not 12 chars"; exit 1; }
           [[ "$CACHEKEY_FULL" == "$CACHEKEY"-* ]] || { echo "::error::cachekey-full does not extend cachekey"; exit 1; }
+
+      - name: Verify The Cargo Tool Was Installed
+        shell: bash
+        env:
+          CARGO_TOOLS: ${{ steps.rust-toolchain.outputs.cargo-tools }}
+        run: |
+          set -eo pipefail
+
+          echo "cargo-tools output: $CARGO_TOOLS"
+
+          # The output is a JSON array of concrete `name@version`, never
+          # `latest` — a resolved set is the whole contract, and it is also
+          # what the bin key was hashed from.
+          [[ "$CARGO_TOOLS" == '["hexyl@0.17.0"]' ]] \
+            || { echo "::error::cargo-tools output is '$CARGO_TOOLS', expected [\"hexyl@0.17.0\"]"; exit 1; }
+
+          command -v hexyl >/dev/null 2>&1 \
+            || { echo "::error::hexyl is not on PATH, so the action installed it somewhere later steps cannot reach"; exit 1; }
+
+          version="$(hexyl --version)"
+          echo "hexyl reports: $version"
+          [[ "$version" == *0.17.0* ]] \
+            || { echo "::error::hexyl reports '$version', expected 0.17.0"; exit 1; }
 
       # Also the only place the README's restore-keys recipe is evaluated by a
       # real runner. Its block scalar must keep both lines at identical
@@ -431,6 +460,17 @@ jobs:
           cache-key-hash: ${{ hashFiles('bun.lock') }}
           cache-key-suffix: ci-second
           cache-workspaces: e2e-probe -> e2e-probe/target
+          # `bin` is left out here, and the suffix is why it has to be. The bin
+          # key deliberately carries no suffix — two jobs resolving the same
+          # tool set need byte-identical binaries, so splitting them apart
+          # would cost sharing and buy nothing — which means two invocations in
+          # ONE job derive the same bin key no matter how their suffixes
+          # differ, and their post steps would race to save it. That is the
+          # same warning-for-nothing this step's suffix exists to avoid for
+          # `registry`, and the only fix available at the workflow level is to
+          # not enable the layer twice. Scoping it here also exercises
+          # `cache-layers` on a real runner.
+          cache-layers: registry,build
 
       - name: Verify The Keys Do Not Move Between Invocations
         shell: bash
@@ -455,6 +495,45 @@ jobs:
             || { echo "::error::the build key changed by more than the suffix between two same-job invocations; envHash is not stable across the action's own exports"; exit 1; }
           [[ "${FIRST_REGISTRY_KEY/-ci-/-ci-second-}" == "$SECOND_REGISTRY_KEY" ]] \
             || { echo "::error::the registry key changed by more than the suffix between two same-job invocations"; exit 1; }
+
+      # Plants the evidence `E2E Warm Cache` reads back. Last step in the job
+      # on purpose: `post:` runs after every regular step, so whatever is on
+      # disk here is what the bin layer archives.
+      #
+      # Two pieces, because the layer has two things to prove and neither
+      # proves the other.
+      #
+      # The sentinel is an ordinary file in the same directory as the tool. It
+      # is not a shim, so `binPaths`' negations must not touch it and the
+      # archive must carry it. Its return in the warm job is what says the
+      # archive round-tripped at all.
+      #
+      # The decoy is the mirror image: a file at a path the negations name
+      # exactly, which therefore must NOT come back. It REPLACES the shim
+      # rather than appending to it, and both halves of that matter. rustup
+      # hardlinks all of its shims to one inode, so appending to `rust-gdbgui`
+      # would also rewrite `cargo`, `rustc` and `rustup` itself; and on macOS
+      # arm64 every executable needs a valid signature, which appending to a
+      # Mach-O invalidates. Replacing sidesteps both: unlinking one hardlink
+      # leaves the others intact, and a plain text file has no signature to
+      # break. `rust-gdbgui` is the target because nothing in this workflow
+      # runs it. `rm -f` before writing means this works whether or not the
+      # shim was there to begin with.
+      - name: Plant Bin-Layer Evidence
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+
+          printf 'E2E_BIN_SENTINEL' > "$bin/e2e-bin-sentinel"
+
+          for decoy in rust-gdbgui rust-gdbgui.exe; do
+            rm -f "$bin/$decoy"
+            printf 'SHIM_DECOY_MUST_NOT_BE_ARCHIVED' > "$bin/$decoy"
+          done
+
+          echo "planted the sentinel and the shim decoys in $bin"
 
   # ──────────────────────────────────────────────
   #  5b. E2E Warm Cache — the only proof the save path works
@@ -515,6 +594,11 @@ jobs:
           cache-key-hash: ${{ hashFiles('bun.lock') }}
           cache-key-suffix: ci
           cache-workspaces: e2e-probe -> e2e-probe/target
+          # Must match the previous job's exactly. The bin key is a digest of
+          # the resolved tool set, so omitting this would derive the empty-set
+          # key, miss by construction, and fail the `cache-hit` assertion below
+          # for a reason that has nothing to do with the save path.
+          cargo-tools: hexyl@0.17.0
 
       - name: Verify The Warm Restore
         shell: bash
@@ -561,6 +645,59 @@ jobs:
             exit 1
           fi
           echo "no incremental/ or examples/ under the restored target dir"
+
+      # The only assertion in the repository that can prove the shim exclusion
+      # reached a real GitHub cache archive, on all three operating systems.
+      # `act-cache.yml` proves it locally by listing the stored tar; nothing
+      # here can, because the cache API exposes no such listing — so the proof
+      # has to be carried by files planted in the previous job.
+      #
+      # Note what a bare `test ! -f "$bin/rust-gdbgui"` would establish:
+      # nothing. Every shim is on disk here regardless, because this job's own
+      # rustup put them there. Only the decoy's CONTENT distinguishes "restored
+      # from an archive that wrongly contained it" from "recreated by rustup",
+      # which is why the previous job replaced the shim with a marked plain
+      # file rather than merely noting its existence.
+      - name: Verify The Shims Stayed Out Of The Archive
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+
+          # Guard first. Every assertion below is vacuous if the layer never
+          # restored, and a silent vacuous pass is the failure mode this whole
+          # step exists to rule out.
+          grep -qa E2E_BIN_SENTINEL "$bin/e2e-bin-sentinel" 2>/dev/null || {
+            echo "::error::the bin layer did not restore the sentinel planted by the E2E job, so nothing below would be proved"
+            exit 1
+          }
+
+          command -v hexyl >/dev/null 2>&1 \
+            || { echo "::error::hexyl is absent after a warm restore"; exit 1; }
+          hexyl --version
+
+          # Any shim carrying the decoy came out of the archive, which means
+          # the negations in binPaths are inert — the same tar --files-from
+          # regression the build layer hit, where a directory left in the
+          # manifest re-included everything the negations removed.
+          leaked=""
+          for shim in cargo cargo-clippy cargo-fmt cargo-miri clippy-driver \
+                      rls rust-analyzer rust-gdb rust-gdbgui rust-lldb rustc \
+                      rustdoc rustfmt rustup; do
+            for candidate in "$bin/$shim" "$bin/$shim.exe"; do
+              if grep -qa SHIM_DECOY_MUST_NOT_BE_ARCHIVED "$candidate" 2>/dev/null; then
+                leaked="$leaked $candidate"
+              fi
+            done
+          done
+
+          if [[ -n "$leaked" ]]; then
+            echo "::error::these shims were restored from the bin cache, so binPaths archived them:$leaked"
+            exit 1
+          fi
+
+          echo "bin layer verified: the tool and sentinel round-tripped, the shims did not"
 
   # ──────────────────────────────────────────────
   #  6.  Release — only on push to default branch
