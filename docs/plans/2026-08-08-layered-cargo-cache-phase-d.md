@@ -184,10 +184,10 @@ was wrong. The caller downgrades that to a warning and the Phase B fallback; the
 
 **Steps:**
 
-- [ ] Tests: a two-package document; workspace members separated from dependencies; malformed JSON; absent `packages`; an entry missing `version`; an empty but valid document resolving to an empty set. Watch them fail.
-- [ ] Implement `parsePackageSet` and declare `MetadataReader`.
-- [ ] Barrel, pinned export list, module count, gates.
-- [ ] `git commit -S -m "feat(cache): read the resolved package set from cargo metadata"`
+- [x] Tests: a two-package document; workspace members separated from dependencies; malformed JSON; absent `packages`; an entry missing `version`; an empty but valid document resolving to an empty set. Watch them fail.
+- [x] Implement `parsePackageSet` and declare `MetadataReader`.
+- [x] Barrel, pinned export list, module count, gates.
+- [x] `git commit -S -m "feat(cache): read the resolved package set from cargo metadata"`
 
 ---
 
@@ -209,11 +209,11 @@ under `safe` and never throws: worst case on a cargo upgrade is a fatter cache, 
 
 **Steps:**
 
-- [ ] Tests for `parsePrunePolicy`: each of the three values, whitespace, an unknown value naming the input, the empty string defaulting to `safe`. Watch them fail.
-- [ ] Tests for `readFingerprints` against an injected directory reader: a well-formed pair; a directory whose name has no `-<hash>`; an unreadable JSON; an empty `.fingerprint/`.
-- [ ] Tests for `computeKeepSet`: an artifact belonging to a resolved package is kept; one belonging to a dropped package is not; a workspace member's own artifacts are never kept; unattributable under each of the three policies; `off` returning no keep-set at all.
-- [ ] Implement, barrel, pinned list, gates.
-- [ ] `git commit -S -m "feat(cache): map target artifacts to packages by fingerprint"`
+- [x] Tests for `parsePrunePolicy`: each of the three values, whitespace, an unknown value naming the input, the empty string defaulting to `safe`. Watch them fail.
+- [x] Tests for `readFingerprints` against an injected directory reader: a well-formed pair; a directory whose name has no `-<hash>`; an unreadable JSON; an empty `.fingerprint/`.
+- [x] Tests for `computeKeepSet`: an artifact belonging to a resolved package is kept; one belonging to a dropped package is not; a workspace member's own artifacts are never kept; unattributable under each of the three policies; `off` returning no keep-set at all.
+- [x] Implement, barrel, pinned list, gates.
+- [x] `git commit -S -m "feat(cache): map target artifacts to packages by fingerprint"`
 
 ---
 
@@ -230,9 +230,9 @@ archive everything and every pruning test above it would pass anyway.
 
 **Steps:**
 
-- [ ] Tests: a keep-set emits exactly its files and nothing matching `**`; an absent keep-set reproduces the Phase B array byte for byte, including both directory negations; an empty keep-set is treated as absent, not as "archive nothing".
-- [ ] Implement, gates.
-- [ ] `git commit -S -m "feat(cache): archive the keep-set as an explicit manifest"`
+- [x] Tests: a keep-set emits exactly its files and nothing matching `**`; an absent keep-set reproduces the Phase B array byte for byte, including both directory negations; an empty keep-set is treated as absent, not as "archive nothing".
+- [x] Implement, gates.
+- [x] `git commit -S -m "feat(cache): archive the keep-set as an explicit manifest"`
 
 ---
 
