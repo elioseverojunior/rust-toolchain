@@ -49,6 +49,43 @@ const fs = {
     statSync(path),
 };
 
+/**
+ * The crates.io half of the wiring, here for the same reason the cache adapter
+ * is: this file is never imported, so the coverage gate cannot see it and the
+ * network code stays out of every test process.
+ *
+ * `max_stable_version` rather than `newest_version`: the latter includes
+ * pre-releases, and resolving a bare `cargo-nextest` to an alpha is not what
+ * anyone means by "latest".
+ *
+ * The User-Agent is not optional — crates.io rejects requests without one, and
+ * their policy asks that it identify the caller.
+ */
+const registry = {
+  latestVersion: async (name: string): Promise<string> => {
+    const response = await fetch(
+      `https://crates.io/api/v1/crates/${encodeURIComponent(name)}`,
+      {
+        headers: {
+          "user-agent":
+            "elioseverojunior/rust-toolchain (https://github.com/elioseverojunior/rust-toolchain)",
+        },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`crates.io answered ${response.status} for ${name}`);
+    }
+    const body = (await response.json()) as {
+      crate?: { max_stable_version?: string };
+    };
+    const version = body.crate?.max_stable_version;
+    if (!version) {
+      throw new Error(`crates.io published no stable version for ${name}`);
+    }
+    return version;
+  },
+};
+
 // GitHub sets STATE_isPost once the main phase has called saveState("isPost").
 if (process.env.STATE_isPost === "true") {
   await runPost({
@@ -93,6 +130,10 @@ if (process.env.STATE_isPost === "true") {
     sleep: (ms) => {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
     },
+    // Promise-based, unlike `sleep` above: registry lookups run concurrently,
+    // and a blocking pause would serialise them into one at a time.
+    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     cache: client,
+    registry,
   });
 }

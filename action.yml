@@ -78,6 +78,24 @@ inputs:
     required: false
     default: "true"
 
+  cargo-tools:
+    description: >
+      Cargo-installed tools to make available, comma, space or newline
+      separated. Each entry is `<name>` or `<name>@<version>`, where the
+      version may be `latest`; a bare name means `latest`. A tool already
+      present at the requested version is left alone, so a restored `bin`
+      cache layer makes most runs install nothing.
+      A pinned version never contacts crates.io, which is what keeps a
+      registry outage from affecting it. An unpinned one is resolved there,
+      and if that fails the action falls back to a binary of the same name
+      when one is present, warns, and reports its version as `unknown`.
+      With nothing to fall back to it fails, because a missing tool breaks
+      the job either way and failing here says why.
+      The binaries are cached by the `bin` layer, which is enabled by
+      default; rustup's own shims are excluded from it, so a toolchain bump
+      does not reinstall your tools.
+    required: false
+
   cache:
     description: >
       Whether to cache cargo's registry and target directory (default false).

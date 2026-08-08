@@ -70,8 +70,10 @@ describe("library barrel", () => {
         "buildActionOutputs",
         "toOutputEntries",
         // tools.ts
+        "ensureTools",
         "hashToolSet",
         "parseToolSpecs",
+        "parseToolVersion",
         "resolveToolVersions",
         "UNRESOLVED_VERSION",
       ].sort(),

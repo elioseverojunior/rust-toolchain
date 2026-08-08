@@ -243,3 +243,161 @@ export function hashToolSet(tools: ResolvedTool[]): string {
 
   return createHash("sha256").update(canonical).digest("hex").slice(0, 8);
 }
+
+/** Outcome of one process invocation, as this module needs it. */
+export interface ToolExecResult {
+  status: number | null;
+  stdout?: string;
+  error?: Error;
+}
+
+export interface ToolExecOptions {
+  env: Record<string, string | undefined>;
+  timeoutMs: number;
+  capture?: boolean;
+}
+
+/**
+ * Everything `ensureTools` touches outside itself.
+ *
+ * The exec signature is structurally identical to `ActionDeps`'s and is
+ * redeclared rather than imported on purpose: `src/action.ts` imports this
+ * module, so taking its type would be a cycle. Same reasoning as `InputReader`
+ * in `src/inputs.ts`, and the same reason `ResolveDeps` takes its retry policy
+ * as values rather than reading `action.ts`'s constants.
+ *
+ * `sleep` is synchronous here where `ResolveDeps.delay` is not, and the
+ * difference is not an oversight: installs run through `spawnSync`, one at a
+ * time, so there is no concurrency for a blocking pause to serialise.
+ */
+export interface EnsureDeps {
+  exec: (file: string, args: string[], opts: ToolExecOptions) => ToolExecResult;
+  env: Record<string, string | undefined>;
+  /** Total attempts per install, including the first. */
+  attempts: number;
+  backoffMs: number;
+  sleep: (ms: number) => void;
+  /** `cargo install` compiles from source, so this is generous by design. */
+  timeoutMs: number;
+  log: { info: (message: string) => void; warning: (message: string) => void };
+}
+
+/** What happened to one requested tool. */
+export interface ToolOutcome {
+  name: string;
+  version: string;
+  /**
+   * `kept` — already present at the resolved version, so nothing ran.
+   * `installed` — absent or at the wrong version, so `cargo install` ran.
+   * `unverified` — the registry could not be reached and a binary of that name
+   * was already present, so it is used without knowing its version (D1).
+   */
+  action: "kept" | "installed" | "unverified";
+}
+
+/** The first semver-shaped token in a `--version` banner, if there is one. */
+export function parseToolVersion(output: string): string | undefined {
+  return /(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)/.exec(output)?.[1];
+}
+
+/** Asks an installed tool its version, or `undefined` when it cannot answer. */
+function installedVersion(name: string, deps: EnsureDeps): string | undefined {
+  const result = deps.exec(name, ["--version"], {
+    env: deps.env,
+    timeoutMs: deps.timeoutMs,
+    capture: true,
+  });
+  if (result.error || result.status !== 0) return undefined;
+  return parseToolVersion(result.stdout ?? "");
+}
+
+/**
+ * Installs one tool, retrying the way every network-bound command here does.
+ *
+ * `--locked` so the crate's own lockfile decides its dependencies rather than
+ * whatever resolves today, and `--force` because `cargo install` refuses to
+ * replace an existing binary without it — which is exactly the case that
+ * brought us here.
+ */
+function installTool(tool: ResolvedTool, deps: EnsureDeps): void {
+  const args = [
+    "install",
+    tool.name,
+    "--version",
+    tool.version,
+    "--locked",
+    "--force",
+  ];
+
+  let last: ToolExecResult = { status: null };
+  for (let attempt = 1; attempt <= deps.attempts; attempt++) {
+    last = deps.exec("cargo", args, {
+      env: deps.env,
+      timeoutMs: deps.timeoutMs,
+    });
+    if (last.status === 0) return;
+    if (attempt < deps.attempts) {
+      deps.sleep(deps.backoffMs * 2 ** (attempt - 1));
+    }
+  }
+
+  const detail = last.error
+    ? `could not run: ${last.error.message}`
+    : `failed with exit code ${last.status}`;
+  throw new Error(`cargo ${args.join(" ")} ${detail}`);
+}
+
+/**
+ * Brings every requested tool to its resolved version, installing what is not
+ * already there.
+ *
+ * Called *after* the cache restore, never before: a restored `bin` layer is
+ * what makes most of these a no-op, and checking first would install tools the
+ * cache was about to supply. It is also why this lives here rather than in
+ * `cache/lifecycle.ts` — verification needs `exec`, which that module
+ * deliberately does not have, so it stays testable against plain values.
+ *
+ * D1 lands here. A tool whose version the registry could not supply is
+ * accepted if a binary of that name is present — that binary may well have come
+ * from the widest `bin` rung — and the step warns rather than guessing at a
+ * version. With nothing present there is nothing to fall back to, so it fails:
+ * a missing tool breaks the job either way, and failing here says why.
+ */
+export function ensureTools(
+  resolution: ToolResolution,
+  deps: EnsureDeps,
+): ToolOutcome[] {
+  const unresolved = new Set(resolution.unresolved.map((tool) => tool.name));
+
+  return resolution.tools.map((tool) => {
+    const present = installedVersion(tool.name, deps);
+
+    if (unresolved.has(tool.name)) {
+      if (present === undefined) {
+        throw new Error(
+          `${tool.name} could not be resolved against the registry and is not ` +
+            "installed, so there is nothing to fall back to. Pin a version " +
+            `(\`${tool.name}@<version>\`) to skip the registry entirely.`,
+        );
+      }
+      deps.log.warning(
+        `${tool.name}: the registry could not be reached, so the installed ` +
+          `binary (reporting ${present}) is used as-is and its version is ` +
+          `published as ${UNRESOLVED_VERSION}. Pin a version to avoid this.`,
+      );
+      return { name: tool.name, version: tool.version, action: "unverified" };
+    }
+
+    if (present === tool.version) {
+      deps.log.info(`${tool.name}: already at ${tool.version}`);
+      return { name: tool.name, version: tool.version, action: "kept" };
+    }
+
+    deps.log.info(
+      `${tool.name}: installing ${tool.version}` +
+        (present === undefined ? "" : `, replacing ${present}`),
+    );
+    installTool(tool, deps);
+    return { name: tool.name, version: tool.version, action: "installed" };
+  });
+}
