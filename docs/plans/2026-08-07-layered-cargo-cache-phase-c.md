@@ -202,12 +202,12 @@ installed and picking one would be a guess.
 
 **Steps:**
 
-- [ ] Write `src/tools.test.ts` covering: the three separators; a bare name defaulting to `latest`; an explicit `name@version`; rejection of a name that is not an identifier; rejection of a duplicate name; the empty input.
-- [ ] Run `bun test src/tools.test.ts` and watch it fail with `Cannot find module '@/tools'`.
-- [ ] Implement `parseToolSpecs` minimally.
-- [ ] Add the barrel re-export and the pinned export list entry; bump the module count in `src/lib.ts`'s doc comment and in `src/lib.test.ts`'s description.
-- [ ] `bun run fix:all && bun run typecheck && bun run test`
-- [ ] `git commit -S -m "feat(cache): parse the cargo-tools input"`
+- [x] Write `src/tools.test.ts` covering: the three separators; a bare name defaulting to `latest`; an explicit `name@version`; rejection of a name that is not an identifier; rejection of a duplicate name; the empty input.
+- [x] Run `bun test src/tools.test.ts` and watch it fail with `Cannot find module '@/tools'`.
+- [x] Implement `parseToolSpecs` minimally.
+- [x] Add the barrel re-export and the pinned export list entry; bump the module count in `src/lib.ts`'s doc comment and in `src/lib.test.ts`'s description.
+- [x] `bun run fix:all && bun run typecheck && bun run test`
+- [x] `git commit -S -m "feat(cache): parse the cargo-tools input"`
 
 ---
 
@@ -269,10 +269,10 @@ importing them back would be a cycle. Its `delay` is promise-based rather than r
 
 **Steps:**
 
-- [ ] Extend `src/tools.test.ts`: an explicit version never calls the client; `latest` resolves; a transient failure retries and then succeeds; exhaustion reports unresolved rather than throwing; one tool's failure leaves the others resolved.
-- [ ] Watch the new cases fail.
-- [ ] Implement `RegistryClient` and the resolver.
-- [ ] Barrel, pinned list, gates, `git commit -S -m "feat(cache): resolve cargo-tool versions against crates.io"`
+- [x] Extend `src/tools.test.ts`: an explicit version never calls the client; `latest` resolves; a transient failure retries and then succeeds; exhaustion reports unresolved rather than throwing; one tool's failure leaves the others resolved.
+- [x] Watch the new cases fail.
+- [x] Implement `RegistryClient` and the resolver.
+- [x] Barrel, pinned list, gates, `git commit -S -m "feat(cache): resolve cargo-tool versions against crates.io"`
 
 ---
 
@@ -299,9 +299,9 @@ dependency edge from the cache subsystem to the tools module that nothing struct
 
 **Steps:**
 
-- [ ] Tests: stability, order independence, a different version changing the digest, the 8-hex-character shape, the empty set.
-- [ ] Watch them fail, implement, barrel, pinned list, gates.
-- [ ] `git commit -S -m "feat(cache): digest the resolved cargo-tool set"`
+- [x] Tests: stability, order independence, a different version changing the digest, the 8-hex-character shape, the empty set.
+- [x] Watch them fail, implement, barrel, pinned list, gates.
+- [x] `git commit -S -m "feat(cache): digest the resolved cargo-tool set"`
 
 ---
 
@@ -335,12 +335,12 @@ compiler will catch.
 
 **Steps:**
 
-- [ ] Update the `CACHE_LAYER_IDS` assertion in `src/cache/layers.test.ts` and add a `bin` case to the `parseCacheLayers` tests; watch them fail.
-- [ ] Widen `CACHE_LAYER_IDS`; observe `DERIVERS` fail to compile; add the `bin` deriver and its key/ladder tests, including one asserting the ladder falls back where `build`'s does not.
-- [ ] Write the `binPaths` tests **first**, pinning the exact array including both directory negations and the `.exe` variants, then implement.
-- [ ] Update `action.yml`'s `cache-layers` default and its description.
-- [ ] Barrel, pinned list, gates.
-- [ ] `git commit -S -m "feat(cache): add the bin layer, keyed on the resolved tool set"`
+- [x] Update the `CACHE_LAYER_IDS` assertion in `src/cache/layers.test.ts` and add a `bin` case to the `parseCacheLayers` tests; watch them fail.
+- [x] Widen `CACHE_LAYER_IDS`; observe `DERIVERS` fail to compile; add the `bin` deriver and its key/ladder tests, including one asserting the ladder falls back where `build`'s does not.
+- [x] Write the `binPaths` tests **first**, pinning the exact array including both directory negations and the `.exe` variants, then implement.
+- [x] Update `action.yml`'s `cache-layers` default and its description.
+- [x] Barrel, pinned list, gates.
+- [x] `git commit -S -m "feat(cache): add the bin layer, keyed on the resolved tool set"`
 
 ---
 
@@ -359,9 +359,9 @@ Task 5 is therefore only the `cache-key-hash` narrowing.
 
 **Steps:**
 
-- [ ] Tests: `bin`-only with no `cache-key-hash` succeeds; `registry`-only and `build`-only without one still fail; the 512-character check measures the `bin` key with the stand-in.
-- [ ] Watch them fail, implement, fix the call sites the signature change breaks.
-- [ ] Gates, `git commit -S -m "feat(cache): scope cache-key-hash to the layers that need it"`
+- [x] Tests: `bin`-only with no `cache-key-hash` succeeds; `registry`-only and `build`-only without one still fail; the 512-character check measures the `bin` key with the stand-in.
+- [x] Watch them fail, implement, fix the call sites the signature change breaks.
+- [x] Gates, `git commit -S -m "feat(cache): scope cache-key-hash to the layers that need it"`
 
 ---
 
@@ -385,10 +385,10 @@ warning and reported as `unknown`; an unresolved tool with nothing restored fail
 
 **Steps:**
 
-- [ ] Extend the `src/action.test.ts` harness with a fake `RegistryClient`, mirroring how the `cache` fake was added in Phase B. Extend the existing harness; do not add a second one.
-- [ ] Tests: a verified tool is not reinstalled; a missing tool is installed; a wrong-version tool is reinstalled; an install failure fails the step; the D1 outage paths, both accepted and fatal.
-- [ ] Watch them fail, implement, wire `src/index.ts`.
-- [ ] Gates, `git commit -S -m "feat(cache): install and verify cargo tools"`
+- [x] Extend the `src/action.test.ts` harness with a fake `RegistryClient`, mirroring how the `cache` fake was added in Phase B. Extend the existing harness; do not add a second one.
+- [x] Tests: a verified tool is not reinstalled; a missing tool is installed; a wrong-version tool is reinstalled; an install failure fails the step; the D1 outage paths, both accepted and fatal.
+- [x] Watch them fail, implement, wire `src/index.ts`.
+- [x] Gates, `git commit -S -m "feat(cache): install and verify cargo tools"`
 
 ---
 
