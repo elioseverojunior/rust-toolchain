@@ -104,6 +104,7 @@ describe("library barrel", () => {
       specCacheKey: "20250915abcd-1f2e3d4c",
       cache: { enabled: false, layers: {} },
       cacheHit: false,
+      tools: [],
     });
     expect(outputs.target).toBe("wasm32-unknown-unknown");
   });

@@ -405,9 +405,13 @@ both need updating; that test failing is the point of it.
 
 **Steps:**
 
-- [ ] Tests for the new field, its JSON serialisation, its place in the `json` key order, and the exhaustive key list; watch them fail.
-- [ ] Implement, declare the output in `action.yml`, gates.
-- [ ] `git commit -S -m "feat(cache): publish the resolved cargo-tool set as an output"`
+- [x] Tests for the new field, its JSON serialisation, its place in the `json` key order, and the exhaustive key list; watch them fail.
+- [x] Implement, declare the output in `action.yml`, gates.
+- [x] `git commit -S -m "feat(cache): publish the resolved cargo-tool set as an output"`
+
+**Settled while implementing.** The output publishes `resolveToolVersions`' result, not `ensureTools`' outcome list. The `bin` key is a digest of the former, so publishing the latter would leave a consumer unable to reconcile `cargo-tools` against the key whenever the two differ — which is exactly the case that matters, a registry failure. `src/action.test.ts` pins the reconciliation by hashing the published list back and matching it against the key. The corollary is that an unresolved tool is published as `name@unknown` rather than hidden.
+
+The `name@version` formatting is duplicated between `hashToolSet` and `buildActionOutputs` on purpose, and both sites say so. They look like one helper waiting to be extracted, but one is a cache-key canonicalisation — sorted, and a change to it rekeys every stored `bin` entry — and the other is a published contract that preserves the caller's order. Merging them would let a cosmetic edit to either silently break the other.
 
 ---
 
@@ -454,6 +458,7 @@ that block, so an entry is only safe once its page exists.
 
 ## Carried into Phase D
 
+- `ensureTools` probes `<crate-name> --version`, which assumes the installed binary is named after the crate. That holds for `cargo-nextest`, `cargo-deny` and `hexyl`, and fails for `ripgrep` (ships `rg`), `fd-find` (`fd`) and `du-dust` (`dust`). For those the probe never finds the tool, so every run reinstalls it despite a perfect `bin` hit — correct, but with the caching defeated silently. The fix is to learn the real binary names, either from a `<name>@<version>=<binary>` spelling in the input or by reading `.crates2.json`, which cargo already maintains and which lists the binaries each installed crate produced. Recorded rather than fixed here because it is a new input surface, not a bug in what Phase C shipped.
 - Deterministic pruning from `cargo metadata` replaces Phase B's negation globs for the `build` layer. The
   `bin` layer's shim negations are unaffected — they exclude a fixed, known set rather than inferring ownership,
   which is the thing pruning exists to fix.

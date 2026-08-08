@@ -8,6 +8,7 @@ import type { CacheLayerId } from "@rust-toolchain/cache/layers";
 import type { LayerResult } from "@rust-toolchain/cache/lifecycle";
 import type { ToolchainInputs } from "@rust-toolchain/config";
 import type { ToolchainTomlConfig } from "@rust-toolchain/core";
+import type { ResolvedTool } from "@rust-toolchain/tools";
 
 /**
  * A boolean action input, kept alongside the text it was parsed from.
@@ -102,6 +103,17 @@ export interface ActionOutputs {
   components: string[];
   profile: string;
   "set-rustup-toolchain": boolean;
+  /**
+   * The resolved cargo tools as `name@version`, in the order they were asked
+   * for.
+   *
+   * Order is the caller's, not sorted: the `bin` cache key sorts before
+   * hashing so that reordering the input still hits the same entry, but an
+   * output that reordered what the workflow wrote would be harder to read for
+   * no gain. The two formats resemble each other and must stay independent —
+   * see `buildActionOutputs`.
+   */
+  "cargo-tools": string[];
   name: string;
   cachekey: string;
   "cachekey-full": string;
@@ -135,6 +147,21 @@ export interface ActionOutputsArgs {
    * forever — including on a genuine full hit — with no compile-time signal.
    */
   cacheHit: boolean;
+  /**
+   * The cargo tools after version resolution, exactly as the `bin` cache key
+   * was derived from.
+   *
+   * This is `resolveToolVersions`' output rather than `ensureTools`' outcome
+   * list on purpose: the key folds in a digest of *these* values, so
+   * publishing anything else would leave a consumer unable to reconcile
+   * `cargo-tools` against the `bin` entry in `cache`. That includes tools the
+   * registry could not answer for, which arrive here as `UNRESOLVED_VERSION`
+   * and are published as such.
+   *
+   * Required, for the same reason `cacheHit` is: an optional field is one a
+   * caller forgets, and forgetting it publishes an empty tool list forever.
+   */
+  tools: readonly ResolvedTool[];
 }
 
 /**
@@ -159,6 +186,13 @@ export function buildActionOutputs(args: ActionOutputsArgs): ActionOutputs {
     // the fallback keeps `undefined` out of a string-typed output.
     profile: spec.profile ?? "",
     "set-rustup-toolchain": args.setRustupToolchain.value,
+    // Built here rather than shared with `hashToolSet`, which formats the same
+    // pair identically. The resemblance is a coincidence of both being the
+    // obvious spelling: that one is a cache-key canonicalisation, where a
+    // change rekeys every stored `bin` entry, and this one is a published
+    // contract. Folding them into a single helper would make a cosmetic edit
+    // to either silently break the other.
+    "cargo-tools": args.tools.map(({ name, version }) => `${name}@${version}`),
     // Same value as `toolchain`, kept because dtolnay/rust-toolchain publishes
     // it under this name and workflows migrating from it read `name`.
     name: spec.channel,
@@ -204,6 +238,7 @@ export function toOutputEntries(outputs: ActionOutputs): [string, string][] {
     ["components", JSON.stringify(outputs.components)],
     ["profile", outputs.profile],
     ["set-rustup-toolchain", String(outputs["set-rustup-toolchain"])],
+    ["cargo-tools", JSON.stringify(outputs["cargo-tools"])],
     ["cache-hit", String(outputs["cache-hit"])],
     ["cache", JSON.stringify(outputs.cache)],
     ["json", JSON.stringify(outputs)],

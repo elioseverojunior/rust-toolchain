@@ -63176,6 +63176,7 @@ function buildActionOutputs(args) {
     components: [...spec.components],
     profile: spec.profile ?? "",
     "set-rustup-toolchain": args.setRustupToolchain.value,
+    "cargo-tools": args.tools.map(({ name, version: version3 }) => `${name}@${version3}`),
     name: spec.channel,
     cachekey: args.cacheKey,
     "cachekey-full": args.specCacheKey,
@@ -63209,6 +63210,7 @@ function toOutputEntries(outputs) {
     ["components", JSON.stringify(outputs.components)],
     ["profile", outputs.profile],
     ["set-rustup-toolchain", String(outputs["set-rustup-toolchain"])],
+    ["cargo-tools", JSON.stringify(outputs["cargo-tools"])],
     ["cache-hit", String(outputs["cache-hit"])],
     ["cache", JSON.stringify(outputs.cache)],
     ["json", JSON.stringify(outputs)]
@@ -63465,7 +63467,8 @@ async function run(deps) {
       cacheKey: rustc.info.cacheKey,
       specCacheKey,
       cache,
-      cacheHit
+      cacheHit,
+      tools: toolResolution.tools
     });
     for (const [name, value] of toOutputEntries(outputs)) {
       deps.core.setOutput(name, value);

@@ -14,6 +14,7 @@ import {
   type ActionOutputsArgs,
   type CacheOutputs,
 } from "@/outputs";
+import { UNRESOLVED_VERSION, type ResolvedTool } from "@/tools";
 
 const spec = (
   overrides: {
@@ -42,6 +43,7 @@ const args = (
   specCacheKey: "20250915abcd-1f2e3d4c",
   cache: { enabled: false, layers: {} },
   cacheHit: false,
+  tools: [],
   ...overrides,
 });
 
@@ -253,6 +255,16 @@ describe("toOutputEntries", () => {
     expect(flat.components).toBe('["clippy","rustfmt"]');
   });
 
+  it("serialises cargo-tools as a JSON array too", () => {
+    const flat = entries({ tools: [{ name: "sd", version: "1.0.0" }] });
+    expect(flat["cargo-tools"]).toBe('["sd@1.0.0"]');
+  });
+
+  it("carries cargo-tools into json as a real array", () => {
+    const flat = entries({ tools: [{ name: "hexyl", version: "0.17.0" }] });
+    expect(jsonEntry(flat)["cargo-tools"]).toEqual(["hexyl@0.17.0"]);
+  });
+
   it("serialises empty lists as an empty JSON array", () => {
     const flat = entries();
     expect(flat.targets).toBe("[]");
@@ -306,6 +318,7 @@ describe("toOutputEntries", () => {
       "components",
       "profile",
       "set-rustup-toolchain",
+      "cargo-tools",
       "name",
       "cachekey",
       "cachekey-full",
@@ -328,10 +341,54 @@ describe("toOutputEntries", () => {
       "components",
       "profile",
       "set-rustup-toolchain",
+      "cargo-tools",
       "cache-hit",
       "cache",
       "json",
     ]);
+  });
+});
+
+describe("cargo-tools output", () => {
+  const tools = (...entries: [string, string][]): ResolvedTool[] =>
+    entries.map(([name, version]) => ({ name, version }));
+
+  it("publishes each resolved tool as name@version", () => {
+    const outputs = buildActionOutputs(
+      args({ tools: tools(["cargo-nextest", "0.9.143"], ["hexyl", "0.17.0"]) }),
+    );
+    expect(outputs["cargo-tools"]).toEqual([
+      "cargo-nextest@0.9.143",
+      "hexyl@0.17.0",
+    ]);
+  });
+
+  it("publishes an empty list when no tools were requested", () => {
+    expect(buildActionOutputs(args())["cargo-tools"]).toEqual([]);
+  });
+
+  // The list keeps the order the caller wrote, unlike the cache key, which
+  // sorts before hashing so that reordering the input still hits the same
+  // entry. Pinning both halves here because the two formats look alike and
+  // are deliberately independent: collapsing them into one helper would let a
+  // cosmetic change to the output silently rekey every `bin` cache entry.
+  it("preserves the requested order rather than sorting", () => {
+    const outputs = buildActionOutputs(
+      args({ tools: tools(["zellij", "0.43.1"], ["bacon", "3.18.0"]) }),
+    );
+    expect(outputs["cargo-tools"]).toEqual(["zellij@0.43.1", "bacon@3.18.0"]);
+  });
+
+  // resolveToolVersions reports a registry failure as UNRESOLVED_VERSION, and
+  // that same value is what hashToolSet folded into the `bin` key. Publishing
+  // it verbatim is what lets a consumer reconcile this output against that
+  // key; substituting "latest" or dropping the entry would make the two
+  // disagree with no way to tell which is right.
+  it("reports an unresolved tool as name@unknown, matching the cache key", () => {
+    const outputs = buildActionOutputs(
+      args({ tools: tools(["cargo-deny", UNRESOLVED_VERSION]) }),
+    );
+    expect(outputs["cargo-tools"]).toEqual(["cargo-deny@unknown"]);
   });
 });
 

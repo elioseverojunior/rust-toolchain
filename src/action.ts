@@ -649,6 +649,10 @@ export async function run(deps: ActionDeps): Promise<void> {
       specCacheKey,
       cache,
       cacheHit,
+      // The same list `hashToolSet` keyed the bin layer from above, not
+      // `ensureTools`' outcomes: a consumer reading both `cargo-tools` and the
+      // bin key needs them to describe one resolution.
+      tools: toolResolution.tools,
     });
     for (const [name, value] of toOutputEntries(outputs)) {
       deps.core.setOutput(name, value);
