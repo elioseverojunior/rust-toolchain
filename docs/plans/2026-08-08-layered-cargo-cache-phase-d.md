@@ -253,8 +253,44 @@ sounds because D1 already forbids deletion either way.
 
 **Steps:**
 
-- [ ] Build both fixtures, resolve both manifests, record entry count, wall-clock and archive size.
-- [ ] `git commit -S -m "docs(cache): record the keep-set manifest measurements"` — amend this plan with the result and, if the explicit manifest loses, replace Task 3's approach before continuing.
+- [x] Build both fixtures, resolve both manifests, record entry count, wall-clock and archive size.
+- [x] `git commit -S -m "docs(cache): record the keep-set manifest measurements"` — amend this plan with the result and, if the explicit manifest loses, replace Task 3's approach before continuing.
+
+### Result
+
+Two cargo fixtures on cargo 1.97.1: `probe-small` (one dependency, mirroring `e2e-probe`) and `probe-large`
+(serde, serde_json, regex, tokio-full, clap). Both resolved through `@actions/glob` with
+`implicitDescendants: false`, which is what `@actions/cache` passes at `cacheUtils.js:64`.
+
+The large fixture was then **churned** — `clap` and `regex` removed from `Cargo.toml` and rebuilt — because an
+unchurned tree has nothing stale to drop and therefore cannot show what pruning is for. That distinction turned out
+to be the whole measurement:
+
+| fixture          | files | keep-set | dropped                 | phase-b globs | explicit manifest | globstar + negations |
+| ---------------- | ----- | -------- | ----------------------- | ------------- | ----------------- | -------------------- |
+| small            | 37    | 15       | 22 (0.6 MB, 55%)        | 35 ms         | **10 ms**         | 24 ms                |
+| large, unchurned | 557   | 535      | 22 (0.6 MB, 0.2%)       | 81 ms         | 904 ms            | —                    |
+| large, churned   | 579   | 340      | 239 (**101.8 MB, 46%**) | 117 ms        | **495 ms**        | 804 ms               |
+
+**The explicit manifest stands.** It beat the globstar-plus-negations alternative D1 named as the fallback — 495 ms
+against 804 ms — even though that form carried fewer patterns (242 against 340). Negating individual files does not
+avoid the globstar's directory walk, it adds to it. Both forms resolved to the identical 340 files, which is an
+independent check on the keep-set: two different mechanisms agreeing on the answer.
+
+**Pruning removes 46% of a 220 MB archive** once dependencies actually churn, which is the case it exists for.
+
+**Two costs are now known rather than assumed.** Resolution runs about 1.5 ms per kept entry, so a workspace with a
+50,000-file keep-set would spend roughly a minute in `@actions/glob` alone. And the unchurned large fixture is the
+bad trade in miniature: 904 ms of resolution to drop 0.2% of the bytes.
+
+**So Task 7 gains a guard the plan did not previously call for.** Compute the keep-set, measure what it would drop,
+and fall back to the Phase B glob set when that is a small fraction of the total — the pruning is not worth its own
+resolution cost. The byte counts D4 already requires make this nearly free: `measurePaths` is being called on both
+sets regardless.
+
+Not measured, and worth stating: archive size after compression, and restore-side wall-clock. Both follow the
+dropped-bytes figure closely enough that the decision does not turn on them, and neither is measurable outside a real
+runner.
 
 ---
 
