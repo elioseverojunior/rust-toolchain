@@ -307,9 +307,15 @@ source sitting next to it in the same archive, so excluding it costs a decompres
 
 **Steps:**
 
-- [ ] Tests: `registry/src` never appears; a `.crate` for a resolved package is kept; one for an absent package is not; the index is always kept; with no package set the Phase B behaviour returns.
-- [ ] Implement, gates.
-- [ ] `git commit -S -m "feat(cache): prune the registry layer to the resolved package set"`
+- [x] Tests: `registry/src` never appears; a `.crate` for a resolved package is kept; one for an absent package is not; the index is always kept; with no package set the Phase B behaviour returns.
+- [x] Implement, gates.
+- [x] `git commit -S -m "feat(cache): prune the registry layer to the resolved package set"`
+
+**Smaller than written.** Three of the design's four registry items were already satisfied by Phase A: `registryPaths` listed `registry/index`, `registry/cache` and `git/db`, so `registry/src` and `git/checkouts` were never archived and the index was always kept. Only `.crate` pruning was outstanding, and there are now tests pinning the other three so a later refactor cannot re-add them by accident.
+
+It is also **version-exact**, unlike the build layer: a crate archive is named `<name>-<version>.crate`, so the version sits in the filename where the build layer's fingerprint directories record only `<name>-<hash>`. A crate that left the lockfile is dropped even when another version of it stayed.
+
+Expressed as one inclusion per resolved package rather than one negation per unresolved one, so no directory has to be read to decide. Verified against a real registry holding thousands of crates: the manifest resolved to three entries — the index directory, `git/db`, and the single resolved `.crate` — with the unresolved pattern matching nothing.
 
 ---
 
