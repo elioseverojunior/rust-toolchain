@@ -73,6 +73,41 @@ describe("readCacheRequest", () => {
     );
   });
 
+  // The requirement is scoped to the layers that actually key on the
+  // dependency set. `bin` keys on the resolved tool set alone, so it has no
+  // lockfile component to miss and failing it would be wrong.
+  describe("cache-key-hash is required only by the layers that key on it", () => {
+    const withoutHash = (layers: string): CacheInputSource =>
+      source({ cache: "true", "cache-layers": layers });
+
+    it("accepts a bin-only request with no lock hash", () => {
+      const request = readCacheRequest(withoutHash("bin"));
+      expect(request?.layers).toEqual(["bin"]);
+      expect(request?.context.lockHash).toBe("");
+    });
+
+    it.each([
+      ["registry"],
+      ["build"],
+      ["registry,build"],
+      // `bin` alongside one that needs it does not excuse the requirement.
+      ["bin,build"],
+      ["registry,build,bin"],
+    ])("still rejects %s with no lock hash", (layers) => {
+      expect(() => readCacheRequest(withoutHash(layers))).toThrow(
+        "`cache-key-hash` is required",
+      );
+    });
+
+    // An unused hash is not an error — a workflow that passes one everywhere
+    // should not have to special-case a bin-only job.
+    it("accepts a bin-only request that supplies one anyway", () => {
+      expect(
+        readCacheRequest(enabled({ "cache-layers": "bin" }))?.layers,
+      ).toEqual(["bin"]);
+    });
+  });
+
   // getInput trims the ends and nothing else, so an embedded comma or newline
   // reaches the key intact — one splits a joined restore-keys block, the other
   // is rejected outright by actions/cache.
