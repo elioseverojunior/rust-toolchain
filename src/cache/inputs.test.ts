@@ -49,7 +49,7 @@ describe("readCacheRequest", () => {
 
   it("defaults to every layer and carries the validated context", () => {
     const request = readCacheRequest(enabled({ "cache-key-suffix": "ci" }));
-    expect(request?.layers).toEqual(["registry", "build"]);
+    expect(request?.layers).toEqual(["registry", "build", "bin"]);
     expect(request?.context).toEqual({
       os: "Linux",
       arch: "X64",
@@ -187,31 +187,57 @@ describe("readCacheRequest", () => {
 });
 
 describe("buildCacheOutputs", () => {
+  const TOOLS = "7a7b7c7d";
+
   it("reports a disabled cache when there is no request", () => {
-    expect(buildCacheOutputs(undefined, "20250915abcd-1f2e3d4c")).toEqual({
+    expect(
+      buildCacheOutputs(undefined, "20250915abcd-1f2e3d4c", TOOLS),
+    ).toEqual({
       enabled: false,
       layers: {},
     });
   });
 
-  it("completes the request with the spec digest", () => {
+  it("completes the request with both digests", () => {
     const request = readCacheRequest(enabled({ "cache-key-suffix": "ci" }));
-    const outputs = buildCacheOutputs(request, "20250915abcd-1f2e3d4c");
+    const outputs = buildCacheOutputs(request, "20250915abcd-1f2e3d4c", TOOLS);
 
     expect(outputs.enabled).toBe(true);
     expect(outputs.layers.registry?.key).toBe("registry-Linux-X64-ci-a1b2c3");
     expect(outputs.layers.build?.key).toBe(
       `build-Linux-X64-ci-20250915abcd-1f2e3d4c-${defaultEnvHash}-a1b2c3`,
     );
+    expect(outputs.layers.bin?.key).toBe(`bin-Linux-X64-${TOOLS}`);
   });
 
-  // The two layer invariants the whole design rests on, asserted as properties
+  // The layer invariants the whole design rests on, asserted as properties
   // rather than as golden strings someone could "fix" by updating.
   it("keeps the toolchain digest out of the registry key and inside the build key", () => {
     const digest = "20250915abcd-1f2e3d4c";
-    const outputs = buildCacheOutputs(readCacheRequest(enabled()), digest);
+    const outputs = buildCacheOutputs(
+      readCacheRequest(enabled()),
+      digest,
+      TOOLS,
+    );
 
     expect(outputs.layers.registry?.key).not.toContain(digest);
     expect(outputs.layers.build?.key).toContain(digest);
+  });
+
+  // Excluding rustup's shims is what lets the toolchain leave this key, so a
+  // stable bump stops reinstalling every cargo tool. The suffix is absent for a
+  // different reason: the same tool set needs byte-identical binaries whoever
+  // asked for them.
+  it("keys bin on the tool set alone, with no toolchain, lockfile or suffix", () => {
+    const outputs = buildCacheOutputs(
+      readCacheRequest(enabled({ "cache-key-suffix": "ci" })),
+      "20250915abcd-1f2e3d4c",
+      TOOLS,
+    );
+
+    expect(outputs.layers.bin?.key).toBe(`bin-Linux-X64-${TOOLS}`);
+    for (const absent of ["20250915abcd", "a1b2c3", "-ci-", defaultEnvHash]) {
+      expect(outputs.layers.bin?.key).not.toContain(absent);
+    }
   });
 });

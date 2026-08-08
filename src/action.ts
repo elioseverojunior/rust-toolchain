@@ -24,7 +24,11 @@ import {
   type RestoredLayer,
   type SavedLayer,
 } from "@rust-toolchain/cache/lifecycle";
-import { buildPaths, registryPaths } from "@rust-toolchain/cache/paths";
+import {
+  binPaths,
+  buildPaths,
+  registryPaths,
+} from "@rust-toolchain/cache/paths";
 import { renderSummary } from "@rust-toolchain/cache/summary";
 import {
   assertProfileAvailable,
@@ -47,6 +51,7 @@ import {
   toOutputEntries,
   type CacheOutputs,
 } from "@rust-toolchain/outputs";
+import { hashToolSet } from "@rust-toolchain/tools";
 
 /** Outcome of one process invocation. */
 export interface ExecResult {
@@ -347,6 +352,7 @@ function layerPathsByLayer(
   return {
     registry: registryPaths(cargoHome),
     build: buildPaths(request.workspaces),
+    bin: binPaths(cargoHome),
   };
 }
 
@@ -414,7 +420,11 @@ async function resolveCacheLifecycle(
   specCacheKey: string,
   cargoHome: string,
 ): Promise<{ cache: CacheOutputs; cacheHit: boolean }> {
-  const cache = buildCacheOutputs(cacheRequest, specCacheKey);
+  // `hashToolSet([])` because nothing resolves cargo tools yet — Task 6 of the
+  // Phase C plan replaces this with the resolved set. The empty digest is a
+  // real 8-character value rather than the empty string, so the `bin` key keeps
+  // its shape and does not collapse a segment in the meantime.
+  const cache = buildCacheOutputs(cacheRequest, specCacheKey, hashToolSet([]));
   if (!cacheRequest) return { cache, cacheHit: false };
 
   const plans = buildLayerPlans(cacheRequest, cache, cargoHome);

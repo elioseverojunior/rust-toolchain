@@ -126,6 +126,14 @@ what lets it be tested against plain values.
 Verification therefore lives in `src/tools.ts` and is called from `src/action.ts` **after** `restoreLayers`
 returns. `src/cache/lifecycle.ts` is not touched by this phase.
 
+### D0. `cache-key-suffix` does not apply to the `bin` key
+
+Settled during Task 4, and user-visible, so recorded rather than left in a commit message. The design's key
+algebra is `bin-<os>-<arch>-<toolSetHash>` — no suffix — while `action.yml` promised the suffix was "added to
+every cache key". The design wins: two jobs resolving the same tool set need byte-identical binaries, so
+fragmenting that layer by a caller's discriminator costs sharing and buys nothing. `action.yml`'s wording is
+corrected to say `registry` and `build`, with the reason.
+
 ### D3. The `bin` key needs a stand-in at validation time
 
 `readCacheRequest` validates key length before anything is installed, and `toolSetHash` is not known until
@@ -335,8 +343,11 @@ compiler will catch.
 **Behaviour.** `cache-key-hash` becomes required only when `registry` or `build` is enabled — carry-over 1. A
 workflow enabling `bin` alone has no lockfile component to miss, and failing it would be wrong.
 
-`SPEC_CACHE_KEY_STAND_IN` gains a sibling, `TOOL_SET_HASH_STAND_IN`, built through `hashToolSet` for the reason
-recorded in D3. `buildCacheOutputs` takes `toolSetHash` as a third parameter.
+**D3 already landed, in Task 4.** Making `toolSetHash` a required field of `CacheKeyContext` immediately broke
+`PendingCacheKeyContext`, `readCacheRequest`'s length-check loop and `buildCacheOutputs`, so `TOOL_SET_HASH_STAND_IN`
+and the third `buildCacheOutputs` parameter had to arrive with the type rather than after it. The alternative was
+making the field optional, which this codebase rejects on principle — an optional field is one a caller can forget.
+Task 5 is therefore only the `cache-key-hash` narrowing.
 
 **Steps:**
 

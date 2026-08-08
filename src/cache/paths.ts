@@ -157,3 +157,68 @@ export function buildPaths(workspaces: Workspace[]): string[] {
     `!${targetDir}/**/`,
   ]);
 }
+
+/**
+ * The binaries rustup owns, which must never enter the `bin` layer.
+ *
+ * `$CARGO_HOME/bin` holds both rustup's shims and cargo-installed tools. The
+ * shims belong to the toolchain, and excluding them is precisely what allows
+ * the toolchain to leave the `bin` cache key — so bumping stable no longer
+ * forces a reinstall of every tool. It also avoids `Swatinem/rust-cache`'s
+ * destructive alternative, which deletes any binary present before the action
+ * ran and is why that action warns against self-hosted runners.
+ *
+ * A fixed, known set, unlike the ownership inference Phase D replaces for the
+ * `build` layer: there is nothing to guess here.
+ */
+export const RUSTUP_SHIMS = [
+  "cargo",
+  "cargo-clippy",
+  "cargo-fmt",
+  "cargo-miri",
+  "clippy-driver",
+  "rls",
+  "rust-analyzer",
+  "rust-gdb",
+  "rust-gdbgui",
+  "rust-lldb",
+  "rustc",
+  "rustdoc",
+  "rustfmt",
+  "rustup",
+] as const;
+
+/**
+ * The bin layer's paths, with rustup's shims excluded.
+ *
+ * The same files-only glob shape `buildPaths` uses, and for the same reason:
+ * `@actions/cache` resolves these patterns with `implicitDescendants: false`,
+ * writes the matches to a manifest, then runs `tar --files-from <manifest>`
+ * with no `--no-recursion`. Any directory left in that manifest is expanded
+ * wholesale by tar, re-including every shim the negations just removed. The
+ * trailing-slash patterns are what strip directories and leave a files-only
+ * manifest, so they are load-bearing rather than decoration — delete them and
+ * every exclusion above silently stops working, with no unit test of the glob
+ * layer alone noticing. `E2E Warm Cache` is what actually proves it.
+ *
+ * Both the bare and the `.exe` spelling are negated unconditionally rather
+ * than behind a platform check. A negation for a file that does not exist
+ * matches nothing, and the E2E matrix runs `windows-latest`, where every shim
+ * carries the suffix.
+ *
+ * Nothing on disk is touched, so a failed save leaves the working tree intact.
+ * Forward-slash joined on every platform, deliberately not `path.join`: a
+ * backslash is an escape character in a glob on POSIX.
+ */
+export function binPaths(cargoHome: string): string[] {
+  const bin = `${cargoHome}/bin`;
+  return [
+    `${bin}/**`,
+    ...RUSTUP_SHIMS.flatMap((shim) => [
+      `!${bin}/${shim}`,
+      `!${bin}/${shim}.exe`,
+    ]),
+    `!${bin}/`,
+    `!${bin}/**/`,
+  ];
+}

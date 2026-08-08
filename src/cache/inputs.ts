@@ -18,6 +18,7 @@ import { parseWorkspaces, type Workspace } from "@rust-toolchain/cache/paths";
 import { generateSpecCacheKey } from "@rust-toolchain/core";
 import { readBooleanInput } from "@rust-toolchain/inputs";
 import type { CacheOutputs } from "@rust-toolchain/outputs";
+import { hashToolSet } from "@rust-toolchain/tools";
 
 /**
  * Everything this module reads from the action's environment.
@@ -63,6 +64,17 @@ const SPEC_CACHE_KEY_STAND_IN = generateSpecCacheKey("0".repeat(12), {
   components: [],
 });
 
+/**
+ * A tool-set digest standing in for the one this run has yet to produce.
+ *
+ * The same problem `SPEC_CACHE_KEY_STAND_IN` solves, one layer along: the real
+ * digest needs crates.io to have answered, and the length check deliberately
+ * runs before anything is installed. Built through `hashToolSet` itself so the
+ * width cannot drift from the real value — every digest it produces is the
+ * same 8 characters, so any argument gives a faithful stand-in.
+ */
+const TOOL_SET_HASH_STAND_IN = hashToolSet([]);
+
 /** Anything that would make a key ambiguous once it reaches a workflow. */
 const INVALID_SUFFIX_CHARACTER = /[,\s]/;
 
@@ -88,8 +100,15 @@ function requireRunnerEnv(source: CacheInputSource, name: string): string {
   );
 }
 
-/** Everything a layer key needs except the digest of the installed spec. */
-type PendingCacheKeyContext = Omit<CacheKeyContext, "specCacheKey">;
+/**
+ * Everything a layer key needs except the two digests this run has yet to
+ * produce: the installed spec's, which needs rustc, and the tool set's, which
+ * needs the registry.
+ */
+type PendingCacheKeyContext = Omit<
+  CacheKeyContext,
+  "specCacheKey" | "toolSetHash"
+>;
 
 /** The validated cache inputs, ready to be completed with the spec digest. */
 export interface CacheRequest {
@@ -183,6 +202,7 @@ export function readCacheRequest(
     const { key } = buildLayerKey(layer, {
       ...context,
       specCacheKey: SPEC_CACHE_KEY_STAND_IN,
+      toolSetHash: TOOL_SET_HASH_STAND_IN,
     });
     assertKeyIsUsable(layer, key, suffix, lockHash);
   }
@@ -204,10 +224,15 @@ export function readCacheRequest(
 export function buildCacheOutputs(
   request: CacheRequest | undefined,
   specCacheKey: string,
+  toolSetHash: string,
 ): CacheOutputs {
   if (!request) return { enabled: false, layers: {} };
 
-  const context: CacheKeyContext = { ...request.context, specCacheKey };
+  const context: CacheKeyContext = {
+    ...request.context,
+    specCacheKey,
+    toolSetHash,
+  };
   const built: Partial<Record<CacheLayerId, CacheLayerKey>> = {};
   for (const layer of request.layers) {
     built[layer] = buildLayerKey(layer, context);

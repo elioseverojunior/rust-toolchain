@@ -107,10 +107,13 @@ inputs:
 
   cache-key-suffix:
     description: >
-      An optional discriminator added to every cache key, e.g. a job name.
-      Omitting it collapses the slot rather than leaving an empty segment, so
-      the key reads `registry-Linux-X64-<hash>` and not
-      `registry-Linux-X64--<hash>`. You do not need it to separate jobs that
+      An optional discriminator added to the `registry` and `build` cache
+      keys, e.g. a job name. Omitting it collapses the slot rather than
+      leaving an empty segment, so the key reads `registry-Linux-X64-<hash>`
+      and not `registry-Linux-X64--<hash>`. It is deliberately absent from the
+      `bin` key: two jobs resolving the same cargo-tool set need
+      byte-identical binaries, so splitting them apart would cost sharing and
+      buy nothing. You do not need it to separate jobs that
       differ in `RUSTFLAGS`, or in any other variable whose name begins with
       `CARGO_`, `CC`, `CFLAGS`, `CXX`, `CMAKE` or `RUST` — every one of those
       is hashed into the `build` key already, so such jobs no longer share one.
@@ -131,9 +134,12 @@ inputs:
       crates and is keyed on the dependency set alone; `build` covers the
       target directory and is keyed on the dependency set plus the resolved
       toolchain, so a rustc bump does not invalidate the crates it never
-      touched.
+      touched; `bin` covers the cargo-installed tools named by `cargo-tools`
+      and is keyed on their resolved versions alone, so a toolchain bump does
+      not reinstall them. `bin` excludes rustup's own shims, which is what
+      lets the toolchain leave that key.
     required: false
-    default: "registry,build"
+    default: "registry,build,bin"
 
   cache-workspaces:
     description: >

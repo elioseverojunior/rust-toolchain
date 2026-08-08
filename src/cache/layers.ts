@@ -9,13 +9,11 @@ import { parseCommaList } from "@rust-toolchain/config";
  *
  * Each layer is an independent cache entry keyed on what actually invalidates
  * it: `registry` on the dependency set, `build` on the dependency set plus the
- * resolved toolchain spec. Splitting them is what stops a rustc bump from
- * re-saving the downloaded crates it did not touch.
- *
- * The `bin` layer is deliberately absent until cargo-tool installation exists:
- * its key hashes *resolved* tool versions, and nothing resolves them yet.
+ * resolved toolchain spec, `bin` on the resolved cargo-tool set alone.
+ * Splitting them is what stops a rustc bump from re-saving the downloaded
+ * crates it did not touch, or reinstalling the tools it did not affect.
  */
-export const CACHE_LAYER_IDS = ["registry", "build"] as const;
+export const CACHE_LAYER_IDS = ["registry", "build", "bin"] as const;
 
 export type CacheLayerId = (typeof CACHE_LAYER_IDS)[number];
 

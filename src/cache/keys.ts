@@ -49,6 +49,16 @@ export interface CacheKeyContext {
    * two jobs with different `RUSTFLAGS` silently sharing a key.
    */
   envHash: string;
+  /**
+   * Digest of the resolved cargo-tool set, from `hashToolSet`.
+   *
+   * Required for the same reason `envHash` is: only the `bin` layer reads it,
+   * and forgetting it would mean two jobs with different tools sharing an
+   * entry. `hashToolSet([])` is the honest value when no tools were requested,
+   * never the empty string — see that function for why the segment must not
+   * collapse.
+   */
+  toolSetHash: string;
 }
 
 /** A layer's exact key and the prefixes GitHub falls back through. */
@@ -117,6 +127,24 @@ const DERIVERS: Record<
       restoreKeys: ladder(scoped),
     };
   },
+  // The odd one out twice over, both deliberate.
+  //
+  // It carries no `suffix`: two jobs resolving the same tool set need
+  // byte-identical binaries, so fragmenting by a caller's discriminator would
+  // cost sharing and buy nothing. It carries no toolchain, lockfile or
+  // environment segment either — excluding rustup's shims (see `binPaths`) is
+  // what lets the toolchain leave this key, so bumping stable stops
+  // reinstalling every cargo tool.
+  //
+  // And its ladder DOES fall back, where `build`'s stops one rung short. A
+  // partial `bin` restore is useful — three of four tools present means
+  // installing one — whereas partial build artifacts are what cargo discards on
+  // sight. A restore that turns out to carry none of the requested tools is
+  // harmless: the version check reinstalls what is missing.
+  bin: (context, root) => ({
+    key: joinKeySegments(root, context.toolSetHash),
+    restoreKeys: ladder(root),
+  }),
 };
 
 /** Derives one layer's key and restore ladder. */
