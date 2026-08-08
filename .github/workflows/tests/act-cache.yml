@@ -98,6 +98,34 @@ jobs:
 
           test -d act-probe/target || { echo "::error::no target dir was produced"; exit 1; }
 
+      # The `bin` layer's whole point is excluding rustup's shims, and neither a
+      # unit test nor a post-restore directory listing can prove it: the unit
+      # test cannot see tar, and the shims are present after any restore because
+      # rustup put them there, archived or not.
+      #
+      # So plant evidence instead. A fake tool is what the layer SHOULD carry;
+      # a marker appended to a shim is what it should NOT. The warm job then
+      # distinguishes the two directly. Verified against the image: this
+      # directory holds exactly the fourteen shims and nothing else, so without
+      # the fake tool the selection is empty and `saveCache` refuses it.
+      #
+      # Appending to the shim is safe and deliberate — trailing bytes on an ELF
+      # binary are ignored, and this is the last step in the job, so nothing
+      # runs rustup afterwards.
+      - name: Plant Bin-Layer Evidence
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          find "$bin" -maxdepth 1 -mindepth 1 -exec basename {} \; | sort | sed 's/^/  pre-existing: /'
+
+          printf '#!/bin/sh\necho act-fake-tool\n' > "$bin/act-fake-tool"
+          chmod +x "$bin/act-fake-tool"
+          printf 'SHIM_MARKER_DO_NOT_ARCHIVE' >> "$bin/rustup"
+
+          echo "planted act-fake-tool and marked the rustup shim"
+
       - name: Report The Derived Keys
         shell: bash
         env:
@@ -207,3 +235,56 @@ jobs:
 
           echo "round-trip verified: both layers restored, target directory repopulated"
           find act-probe/target -type f | head -5
+
+      # THE assertion the bin layer exists for. The seed job planted a fake tool
+      # and marked a shim; a correct archive carries the first and not the
+      # second.
+      #
+      # Note what makes the shim half meaningful: `rustup` is on disk here
+      # either way, because this job installed it. The marker is what
+      # distinguishes "restored from an archive that wrongly contained it" from
+      # "put there by rustup". A bare `test -f rustup` would pass in both cases,
+      # which is why it is not the check.
+      - name: Verify The Shims Stayed Out Of The Archive
+        shell: bash
+        env:
+          BIN_RESULT: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.bin.result }}
+        run: |
+          set -eo pipefail
+
+          bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          echo "bin layer result: $BIN_RESULT"
+          find "$bin" -maxdepth 1 -mindepth 1 -exec basename {} \; | sort | sed 's/^/  restored: /'
+
+          if [[ "$BIN_RESULT" == "miss" ]]; then
+            echo "::error::the bin layer restored nothing; the seed job's post step saved no archive, so this assertion would be vacuous"
+            exit 1
+          fi
+
+          if [[ ! -x "$bin/act-fake-tool" ]]; then
+            echo "::error::act-fake-tool did not come back; the bin layer archived nothing useful"
+            exit 1
+          fi
+
+          if grep -qa SHIM_MARKER_DO_NOT_ARCHIVE "$bin/rustup"; then
+            echo "::error::the marked rustup shim was restored from the cache, so binPaths archived the shims — the negations are inert, exactly the tar --files-from regression buildPaths hit"
+            exit 1
+          fi
+
+          echo "bin layer verified: the fake tool round-tripped, the shims did not"
+
+      # What this workflow does NOT establish, so nobody reads it as complete:
+      #
+      # `act-fake-tool` is a 29-byte stand-in. Until Task 6 of the Phase C plan
+      # installs something through `cargo install`, no REAL tool has round
+      # tripped — only a file planted where one would land.
+      #
+      # The `.exe` half of every shim negation is never exercised here. act runs
+      # Linux only, so those patterns are pinned by `paths.test.ts` and executed
+      # solely by `cicd.yml`'s `windows-latest` E2E leg.
+      #
+      # And the archive itself is not inspected. The strongest available check
+      # is decompressing act's stored entry and listing it — 233 bytes, one
+      # file, no shim and no directory entry, which is how the exclusion was
+      # first confirmed. That store is act-local, so it stays a manual step:
+      #   zstd -dc ~/.cache/actcache/cache/<xx>/<n> | tar -tf -
