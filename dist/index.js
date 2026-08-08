@@ -61448,6 +61448,9 @@ function parseCommaList(value) {
   return value.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
 }
 var RUSTUP_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+function isRustupIdentifier(value) {
+  return RUSTUP_IDENTIFIER.test(value);
+}
 function assertProfile(value) {
   if (!RUSTUP_PROFILES.includes(value)) {
     throw new Error(`"${value}" is not a valid rustup profile. Valid options are: ` + `${RUSTUP_PROFILES.join(", ")}.`);
@@ -61462,7 +61465,7 @@ function assertProfileAvailable(channel, profile) {
 }
 function assertIdentifiers(kind, values) {
   for (const value of values) {
-    if (!RUSTUP_IDENTIFIER.test(value)) {
+    if (!isRustupIdentifier(value)) {
       throw new Error(`"${value}" is not a valid rustup ${kind} name.`);
     }
   }
@@ -61611,12 +61614,38 @@ function globRoot(pattern) {
   const wildcard = segments.findIndex((segment) => GLOB_METACHARACTER.test(segment));
   return wildcard === -1 ? pattern : segments.slice(0, wildcard).join("/");
 }
+function globToRegExp(pattern) {
+  let source = "";
+  for (let index = 0;index < pattern.length; index++) {
+    const char = pattern[index];
+    if (char !== "*") {
+      source += char.replace(/[.+^${}()|[\]\\?]/g, "\\$&");
+      continue;
+    }
+    if (pattern[index + 1] === "*") {
+      index += 1;
+      if (pattern[index + 1] === "/") {
+        index += 1;
+        source += "(?:.*/)?";
+      } else {
+        source += ".*";
+      }
+      continue;
+    }
+    source += "[^/]*";
+  }
+  return new RegExp(`^${source}$`);
+}
+function fileExclusions(paths) {
+  return paths.filter((path12) => path12.startsWith("!") && !path12.endsWith("/")).map((path12) => globToRegExp(path12.slice(1)));
+}
 function isMissing(error2) {
   return typeof error2 === "object" && error2 !== null && error2.code === "ENOENT";
 }
 function measurePaths(paths, fs8) {
   let bytes = 0;
   const unmeasured = [];
+  const excluded = fileExclusions(paths);
   const pending = paths.filter((path12) => !path12.startsWith("!")).map((path12) => globRoot(path12));
   while (pending.length > 0) {
     const current = pending.pop();
@@ -61629,7 +61658,9 @@ function measurePaths(paths, fs8) {
       continue;
     }
     if (!entry.isDirectory()) {
-      bytes += entry.size;
+      if (!excluded.some((pattern) => pattern.test(current))) {
+        bytes += entry.size;
+      }
       continue;
     }
     let children;
@@ -61700,7 +61731,11 @@ var DERIVERS = {
       key: joinKeySegments(scoped, context3.lockHash),
       restoreKeys: ladder(scoped)
     };
-  }
+  },
+  bin: (context3, root) => ({
+    key: joinKeySegments(root, context3.toolSetHash),
+    restoreKeys: ladder(root)
+  })
 };
 function buildLayerKey(layer, context3) {
   const root = joinKeySegments(layer, context3.os, context3.arch);
@@ -61708,7 +61743,7 @@ function buildLayerKey(layer, context3) {
 }
 
 // src/cache/layers.ts
-var CACHE_LAYER_IDS = ["registry", "build"];
+var CACHE_LAYER_IDS = ["registry", "build", "bin"];
 function parseCacheLayers(value) {
   const named = parseCommaList(value);
   for (const name of named) {
@@ -61767,6 +61802,34 @@ function buildPaths(workspaces) {
     `!${targetDir}/`,
     `!${targetDir}/**/`
   ]);
+}
+var RUSTUP_SHIMS = [
+  "cargo",
+  "cargo-clippy",
+  "cargo-fmt",
+  "cargo-miri",
+  "clippy-driver",
+  "rls",
+  "rust-analyzer",
+  "rust-gdb",
+  "rust-gdbgui",
+  "rust-lldb",
+  "rustc",
+  "rustdoc",
+  "rustfmt",
+  "rustup"
+];
+function binPaths(cargoHome) {
+  const bin = `${cargoHome}/bin`;
+  return [
+    `${bin}/**`,
+    ...RUSTUP_SHIMS.flatMap((shim) => [
+      `!${bin}/${shim}`,
+      `!${bin}/${shim}.exe`
+    ]),
+    `!${bin}/`,
+    `!${bin}/**/`
+  ];
 }
 
 // src/core.ts
@@ -62829,6 +62892,14 @@ function readBooleanInput(reader, name, fallback) {
   throw new Error(`Input \`${name}\` must be "true" or "false", got "${raw}".`);
 }
 
+// src/tools.ts
+import { createHash as createHash4 } from "node:crypto";
+function hashToolSet(tools) {
+  const canonical = tools.map(({ name, version: version3 }) => `${name}@${version3}`).sort().join(`
+`);
+  return createHash4("sha256").update(canonical).digest("hex").slice(0, 8);
+}
+
 // src/cache/inputs.ts
 var MISSING_LOCK_HASH_MESSAGE = "`cache-key-hash` is required when `cache` is true. This action cannot " + "compute it — `hashFiles()` is a workflow-expression function — so " + `pass the workflow's own value:
 ` + "  cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}\n" + "Without it the cache keys never change: they hit exactly on every " + "run and serve the same crates for the life of the repository.";
@@ -62838,6 +62909,7 @@ var SPEC_CACHE_KEY_STAND_IN = generateSpecCacheKey("0".repeat(12), {
   targets: [],
   components: []
 });
+var TOOL_SET_HASH_STAND_IN = hashToolSet([]);
 var INVALID_SUFFIX_CHARACTER = /[,\s]/;
 function requireRunnerEnv(source, name) {
   const value = (source.env[name] ?? "").trim();
@@ -62876,16 +62948,21 @@ function readCacheRequest(source) {
   for (const layer of layers) {
     const { key } = buildLayerKey(layer, {
       ...context3,
-      specCacheKey: SPEC_CACHE_KEY_STAND_IN
+      specCacheKey: SPEC_CACHE_KEY_STAND_IN,
+      toolSetHash: TOOL_SET_HASH_STAND_IN
     });
     assertKeyIsUsable(layer, key, suffix, lockHash);
   }
   return { layers, context: context3, workspaces, budget };
 }
-function buildCacheOutputs(request, specCacheKey) {
+function buildCacheOutputs(request, specCacheKey, toolSetHash) {
   if (!request)
     return { enabled: false, layers: {} };
-  const context3 = { ...request.context, specCacheKey };
+  const context3 = {
+    ...request.context,
+    specCacheKey,
+    toolSetHash
+  };
   const built = {};
   for (const layer of request.layers) {
     built[layer] = buildLayerKey(layer, context3);
@@ -63149,7 +63226,8 @@ function applyCargoDefaults(deps, release) {
 function layerPathsByLayer(request, cargoHome) {
   return {
     registry: registryPaths(cargoHome),
-    build: buildPaths(request.workspaces)
+    build: buildPaths(request.workspaces),
+    bin: binPaths(cargoHome)
   };
 }
 function buildLayerPlans(request, cache, cargoHome) {
@@ -63176,7 +63254,7 @@ function foldRestoredResults(cache, restored) {
   return { ...cache, layers };
 }
 async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome) {
-  const cache = buildCacheOutputs(cacheRequest, specCacheKey);
+  const cache = buildCacheOutputs(cacheRequest, specCacheKey, hashToolSet([]));
   if (!cacheRequest)
     return { cache, cacheHit: false };
   const plans = buildLayerPlans(cacheRequest, cache, cargoHome);

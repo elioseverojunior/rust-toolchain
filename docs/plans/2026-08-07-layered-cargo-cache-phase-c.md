@@ -59,7 +59,13 @@ Every task's requirements implicitly include this section.
 - **Before every commit**, in this order: `bun run fix:all`, `bun run typecheck`, `bun run test`.
 - **Commits are GPG-signed** (`git commit -S`), Conventional Commits, scope `cache`. **Never** a `Co-Authored-By`
   trailer or any attribution line.
-- **`dist/` is rebuilt only in the final task.** Intermediate commits leave it stale on purpose.
+- **`dist/` is rebuilt only in the final task, EXCEPT when a task changes `action.yml`.** Intermediate commits
+  leave a stale bundle on purpose, and for a `src/`-only change that is harmless — the bundle is merely out of
+  date, and CI's Build job catches it with `git diff --exit-code dist/`. It is not harmless once `action.yml`
+  gains an input or default the old bundle rejects. Task 4 changed the `cache-layers` default to
+  `registry,build,bin`, the committed bundle's `parseCacheLayers` threw `"bin" is not a cache layer`, and every
+  local `act` run failed on an action that was broken rather than stale. **A task touching `action.yml`'s inputs
+  or defaults rebuilds the bundle in the same commit.**
 
 ## Scope
 
