@@ -1,0 +1,209 @@
+# SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+name: act
+
+# Proves the cache lifecycle round-trips locally, which no other act workflow
+# does: `tests/act.yml` has a single job, and a job's `post:` steps run after
+# every other step in that job, so nothing a job saves is ever visible to it.
+# Observing a real save needs a second job that `needs:` the first, which act
+# starts only once the first job — post steps included — has finished.
+#
+# This mirrors `cicd.yml`'s `e2e` / `e2e-warm` pair deliberately. The point is
+# to exercise the same shape CI uses, so a failure here means the same thing
+# there.
+#
+# act 0.2.89 runs a cache server by default (`--no-cache-server` turns it off),
+# which is what makes `@actions/cache` work at all under act. Its store lives at
+# ~/.cache/actcache and PERSISTS BETWEEN RUNS, so the first job below is not
+# asserted to be a cold miss — on a second invocation it will legitimately hit.
+# Only the warm job asserts, because only that assertion is stable.
+#
+# Run with: mise run act -t act-cache
+
+on: push
+
+jobs:
+  seed:
+    name: Seed The Cache
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: "recursive"
+
+      - name: Prepare Isolated Rustup Home
+        shell: bash
+        run: |
+          # See act-matrix.yml for the full rationale: mutating the image's
+          # pre-installed toolchain fails on overlayfs with EXDEV, because a
+          # directory rename cannot cross from a lower image layer to the upper
+          # one. A run-time-created RUSTUP_HOME keeps every rename in one layer.
+          rustup_home="${RUNNER_TEMP:-/tmp}/rustup"
+          mkdir -p "$rustup_home"
+          echo "RUSTUP_HOME=$rustup_home" >> "$GITHUB_ENV"
+
+      # Byte-identical to the warm job's. The channel feeds `cachekey-full`,
+      # which is a segment of the build key, so a different one here would
+      # derive a different key and miss by construction.
+      - name: Write rust-toolchain.toml
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          cat > rust-toolchain.toml <<'EOF'
+          [toolchain]
+          channel = "1.90"
+          profile = "minimal"
+          EOF
+
+      - name: Run Rust Toolchain Action
+        id: rust-toolchain
+        uses: ./
+        with:
+          cache: true
+          cache-key-hash: ${{ hashFiles('bun.lock') }}
+          cache-key-suffix: act-cache
+          cache-workspaces: act-probe -> act-probe/target
+
+      # A real crate, so there is something for the post step to save. Without
+      # one the build layer resolves to nothing, `saveCache` refuses an empty
+      # path set, and the save path is never executed at all.
+      #
+      # `cfg-if` is deliberate: tiny, dependency-free, and downloading it is
+      # what populates $CARGO_HOME/registry, without which the registry layer
+      # has nothing to save either.
+      - name: Build A Probe Crate
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          mkdir -p act-probe/src
+          cat > act-probe/Cargo.toml <<'EOF'
+          [package]
+          name = "act-probe"
+          version = "0.0.0"
+          edition = "2021"
+
+          [dependencies]
+          cfg-if = "1"
+          EOF
+          echo 'fn main() { println!("act probe"); }' > act-probe/src/main.rs
+
+          cargo build --manifest-path act-probe/Cargo.toml
+
+          test -d act-probe/target || { echo "::error::no target dir was produced"; exit 1; }
+
+      - name: Report The Derived Keys
+        shell: bash
+        env:
+          CACHE_JSON: ${{ steps.rust-toolchain.outputs.cache }}
+        run: |
+          set -eo pipefail
+
+          echo "seed derived: $CACHE_JSON"
+
+  warm:
+    name: Verify The Warm Restore
+    needs: [seed]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: "recursive"
+
+      - name: Prepare Isolated Rustup Home
+        shell: bash
+        run: |
+          rustup_home="${RUNNER_TEMP:-/tmp}/rustup"
+          mkdir -p "$rustup_home"
+          echo "RUSTUP_HOME=$rustup_home" >> "$GITHUB_ENV"
+
+      - name: Write rust-toolchain.toml
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          cat > rust-toolchain.toml <<'EOF'
+          [toolchain]
+          channel = "1.90"
+          profile = "minimal"
+          EOF
+
+      # Same suffix, same lock hash, same workspace mapping as the seed job, so
+      # this restores exactly what that job's post step saved. The probe crate
+      # is deliberately NOT recreated: restoring is what has to put
+      # act-probe/target on disk, and building it first would let a broken
+      # restore pass unnoticed.
+      - name: Restore The Cache Saved By The Seed Job
+        id: rust-toolchain
+        uses: ./
+        with:
+          cache: true
+          cache-key-hash: ${{ hashFiles('bun.lock') }}
+          cache-key-suffix: act-cache
+          cache-workspaces: act-probe -> act-probe/target
+
+      # DELIBERATELY WEAKER THAN `cicd.yml`'s `e2e-warm`, WHICH ASSERTS
+      # `cache-hit == 'true'`. Do not reconcile the two by weakening that one.
+      #
+      # act's cache server normalises keys to lowercase; GitHub's preserves the
+      # case it was given. `restoreLayers` classifies a restore by comparing the
+      # returned key to the derived one with `===`, so under act a genuine full
+      # hit comes back as `registry-linux-x64-…` against a derived
+      # `registry-Linux-X64-…`, is classified `partial`, and `cache-hit` reports
+      # false. Verified against reality rather than assumed: `E2E Warm Cache`
+      # passes on ubuntu, macos and windows in CI, which is only possible if the
+      # real service round-trips the case.
+      #
+      # So this asserts what act can actually prove — that both layers restored
+      # something, and that the restore put files on disk. Making the production
+      # comparison case-insensitive to satisfy act would change shipped
+      # behaviour for a local tool's convenience; lowercasing keys at derivation
+      # would do that AND invalidate every existing cache entry.
+      - name: Verify The Round-Trip
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.rust-toolchain.outputs.cache-hit }}
+          CACHE_JSON: ${{ steps.rust-toolchain.outputs.cache }}
+          REGISTRY_RESULT: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.registry.result }}
+          BUILD_RESULT: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.build.result }}
+        run: |
+          set -eo pipefail
+
+          echo "cache-hit:       $CACHE_HIT (expected false under act; see above)"
+          echo "registry result: $REGISTRY_RESULT"
+          echo "build result:    $BUILD_RESULT"
+          echo "cache: $CACHE_JSON"
+
+          # A miss means the seed job's post step saved nothing the warm job can
+          # find — the save path is broken, which is the whole reason this
+          # workflow exists.
+          for layer in registry build; do
+            result="REGISTRY_RESULT"
+            [[ "$layer" == "build" ]] && result="BUILD_RESULT"
+            if [[ "${!result}" == "miss" || -z "${!result}" ]]; then
+              echo "::error::${layer} restored nothing (result='${!result}'); the seed job's post step did not save it under a key this job can reach"
+              exit 1
+            fi
+          done
+
+          if [[ ! -d act-probe/target ]]; then
+            echo "::error::the build layer restored no target directory"
+            exit 1
+          fi
+
+          if ! find act-probe/target -type f | head -1 | grep -q .; then
+            echo "::error::act-probe/target exists but is empty; nothing was actually extracted"
+            exit 1
+          fi
+
+          echo "round-trip verified: both layers restored, target directory repopulated"
+          find act-probe/target -type f | head -5

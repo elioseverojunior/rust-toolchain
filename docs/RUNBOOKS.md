@@ -153,15 +153,22 @@ The `.actrc` file configures the local runner:
 ### Run
 
 ```sh
-mise run act          # .github/workflows/tests/act.yml  — single case
-mise run act:matrix   # .github/workflows/tests/act-matrix.yml — full matrix
+mise run act              # .github/workflows/tests/act.yml — single case
+mise run act:matrix       # .github/workflows/tests/act-matrix.yml — full matrix
+mise run act -t act-cache # .github/workflows/tests/act-cache.yml — cache round-trip
 ```
 
-Both workflows exercise **this** action (`uses: ./`) end-to-end against a real
-rustup. GitHub does not run them: only `.github/workflows/*.yml` at the top level
-is picked up, and these live in a `tests/` subdirectory.
+`act-cache` is the only one that exercises the cache **lifecycle** rather than
+just key derivation. It needs two jobs, because a job's `post:` steps run after
+every other step in that job — so nothing a job saves is visible to itself. The
+`warm` job `needs: [seed]`, which act starts only once `seed` has finished, post
+step included. It mirrors `cicd.yml`'s `e2e` / `e2e-warm` pair on purpose.
 
-Each job:
+All three exercise **this** action (`uses: ./`) end-to-end against a real rustup.
+GitHub does not run them: only `.github/workflows/*.yml` at the top level is
+picked up, and these live in a `tests/` subdirectory.
+
+Each job in `act.yml` and `act-matrix.yml`:
 
 1. Checks out the repository
 2. Creates an isolated `RUSTUP_HOME` (see the overlayfs note under Troubleshooting)
@@ -294,6 +301,27 @@ echo "GITHUB_TOKEN=$(gh auth token)" > .act/.secrets
 # Run with verbose output
 act -W .github/workflows/tests/act.yml --verbose
 ```
+
+### `cache-hit` is `false` under `act` even on a real hit
+
+Expected, and not a bug in the action. act's cache server normalises keys to
+lowercase; GitHub's preserves the case it was given. `restoreLayers` classifies
+a restore by comparing the returned key to the derived one with `===`, so under
+act a genuine full hit comes back as `registry-linux-x64-…` against a derived
+`registry-Linux-X64-…`, is classified `partial`, and `cache-hit` reports false.
+
+Because `saveLayer` only skips on `exact`, this also means every local `act` run
+re-saves both layers. Locally that costs seconds; in CI the optimisation works.
+
+**Do not "fix" this in the action.** A case-insensitive comparison would change
+shipped behaviour for a local tool's convenience, and lowercasing keys at
+derivation would do that _and_ invalidate every existing cache entry. The
+evidence that the real service is fine is `E2E Warm Cache`, which asserts
+`cache-hit == 'true'` and passes on ubuntu, macos and windows.
+
+`tests/act-cache.yml` therefore asserts only that both layers restored
+something and that the target directory came back populated — deliberately
+weaker than CI's assertion, with a comment saying so.
 
 ### `Invalid cross-device link (os error 18)` during rustup install
 
