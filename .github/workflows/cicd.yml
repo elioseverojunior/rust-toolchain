@@ -796,8 +796,11 @@ jobs:
           fi
           echo "::endgroup::"
 
+      # Diagnostics only. This step publishes no outputs and nothing reads it:
+      # it exists so a release run's log records what was already published
+      # next to what this run is about to publish, which is the fastest way to
+      # see that the Tag step moved the floating tags it was meant to.
       - name: Versions
-        id: versions
         shell: bash -l {0}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -808,9 +811,7 @@ jobs:
           # view` (no arg) resolves to the latest release by published
           # date. Exits non-zero when there are no releases yet; the
           # `|| true` fallback keeps the variable empty without failing
-          # the step. On first-ever release, both variables below stay
-          # empty strings — the Build Changelog step's `fromTag` input
-          # accepts empty (action auto-detects or uses empty_template).
+          # the step.
           RELEASED_RELEASE_DESC=$(
             gh release view \
               --json tagName,isPrerelease,publishedAt \
@@ -850,87 +851,21 @@ jobs:
           echo "  Major:           ${LATEST_M:-none}"
           echo "::endgroup::"
 
-          echo "::group::Relased Configuration"
-          # Step outputs consumed by subsequent steps (Build Changelog
-          # uses released-semver for fromTag, next-semver for toTag).
-          # On first-ever release, released-semver is empty — callers
-          # must handle that (mikepenz/release-changelog-builder-action
-          # treats empty fromTag as "auto-detect" and falls back to
-          # the config's empty_template if no PRs are found).
-          # We use the git tag (RELEASED_SEMVER_GIT) rather than the
-          # GitHub release tag (RELEASED_SEMVER_TAG) so that releases
-          # work even before the first gh release create succeeds.
-          IS_FIRST_RELEASE="false"
-          if [[ -z "${RELEASED_SEMVER_GIT}" ]]; then
-            IS_FIRST_RELEASE="true"
-          fi
-          {
-            echo "released-semver=${RELEASED_SEMVER_GIT:-}"
-            echo "next-semver=v${{ needs.version.outputs.version }}"
-            echo "is-first-release=${IS_FIRST_RELEASE}"
-          } >> "$GITHUB_OUTPUT"
-          echo "::endgroup::"
-
-      - name: Build Changelog
-        id: changelog
-        if: ${{ github.ref_name == github.event.repository.default_branch && steps.versions.outputs.is-first-release != 'true' }}
-        uses: mikepenz/release-changelog-builder-action@c9bcd8238b6f41e05561348339429d360b1c0247 # v6.2.3
-        with:
-          configuration: changelog-configuration.json
-          # `fromTag` is the git tag of the PREVIOUS semver release (computed
-          # from `git tag -l` in the Versions step). On the first-ever release
-          # this is empty — the action treats an empty fromTag as "no lower
-          # bound" and falls back to the config's `empty_template` when no
-          # PRs are found. Using the git tag (not the GitHub release tag)
-          # works even before the first `gh release create` succeeds.
-          fromTag: ${{ steps.versions.outputs.released-semver }}
-          toTag: ${{ steps.versions.outputs.next-semver }}
-          # Include pre-releases in the changelog range. Pre-release
-          # entries (e.g. v1.2.3-beta.1) count as "released" for the
-          # purpose of computing the diff from the previous release.
-          ignorePreReleases: "false"
-          # HYBRID mode: fetch merged PRs for their rich metadata
-          # (number, title, labels, author) AND include raw commits
-          # between tags that didn't land via PR. Matters for this
-          # repo because historical commits on main include direct
-          # pushes the default PR mode misses entirely — see run
-          # 24697992060, which emitted "No pull requests found"
-          # against a range of 8 real commits. With HYBRID, those
-          # commits appear as entries via their commit title (the
-          # same `label_extractor` regexes apply: feat:, fix:, chore:,
-          # test:, docs:, deps:), while future PR merges still get
-          # their PR-link template applied. Per upstream docs:
-          # "Hybrid mode treats commits like pull requests" —
-          # acceptable for this repo because we control the template
-          # and category mapping via changelog-configuration.json.
-          mode: "HYBRID"
-          # Use the GitHub App token (same identity that creates the
-          # release) so the action's PR lookups inherit the App's
-          # pulls:read permission and rate limit.
-          token: ${{ github.token }}
-          # Write the rendered changelog to a file at the repo root
-          # (relative to the checkout dir, per the action's docs).
-          # The Release step consumes it via `gh release create -F <file>`
-          # rather than piping through a multi-line env var — avoids
-          # both shell-escaping gotchas with the 4 KB+ markdown body
-          # AND GitHub Actions' 1 MB limit on `outputs.*` values when
-          # the changelog grows large. File is .gitignore'd.
-          outputFile: RELEASE_NOTES.md
-          # Keep failing on resolution errors (malformed config,
-          # unreachable tags, etc.) — the first-release empty-range
-          # case is handled by the config's empty_template, not by
-          # swallowing errors here.
-          failOnError: true
-
-      - name: Generate First Release Notes
-        id: first-release-notes
-        if: ${{ github.ref_name == github.event.repository.default_branch && steps.versions.outputs.is-first-release == 'true' }}
-        run: |
-          # For the very first release, there's no previous tag to diff
-          # against. The changelog action would auto-detect the initial
-          # commit and compare it to itself (same SHA), causing a 404.
-          # Instead, write the configured empty_template directly.
-          echo "No changes in this release" > RELEASE_NOTES.md
+      # No changelog-building step here, deliberately. There was one — a
+      # `mikepenz/release-changelog-builder-action` invocation writing
+      # `RELEASE_NOTES.md`, plus a first-release fallback writing the same
+      # file — and nothing ever read the result: `gh release create` below
+      # passes `--generate-notes` and no `-F`. The release notes have always
+      # come from GitHub's own generator, categorised by `.github/release.yml`
+      # against the labels `labeler.yml` applies.
+      #
+      # It could not have worked as written either: it passed
+      # `configuration: changelog-configuration.json`, a file that does not
+      # exist in this repository, with `failOnError: true`.
+      #
+      # Restoring it means three things together, not one: create that config,
+      # add `-F RELEASE_NOTES.md` to `gh release create`, and gitignore the
+      # file (the removed comment claimed it was ignored; it was not).
 
       - name: Find Associated PR
         id: find-pr
