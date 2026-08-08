@@ -150,6 +150,22 @@ subsections.
   the `CacheClient` port (`src/cache/client.ts`) instead, so tests inject a
   fake and the real adapter is exercised only by the actual runtime, plus
   CI's `E2E` and `E2E Warm Cache` jobs.
+- **The `bin` layer excludes rustup's shims, and only a marker can prove it.**
+  `binPaths` (`src/cache/paths.ts`) emits `<cargo-home>/bin/**` plus a
+  `!<bin>/<shim>` and `!<bin>/<shim>.exe` pair for each of the fourteen names
+  in `RUSTUP_SHIMS`, then the same `!<bin>/` and `!<bin>/**/` directory
+  negations `buildPaths` needs — for the same `tar --files-from` reason. The
+  exclusion is what lets the `bin` key omit the toolchain entirely, so a
+  compiler bump does not reinstall tools that did not change. **A test that
+  merely checks a shim is absent from `$CARGO_HOME/bin` after a restore proves
+  nothing**: this job's own rustup put every shim back on disk, so the check
+  passes whether or not the archive contained them. The proof has to plant
+  marked content in the saving job and look for it in the restoring one —
+  `.github/workflows/cicd.yml` replaces the `rust-gdbgui` shim with a marked
+  plain file, and `.github/workflows/tests/act-cache.yml` does the local
+  equivalent. Replace rather than append: the shims are hardlinks to one inode,
+  so appending rewrites `rustup` itself, and on macOS arm64 it also
+  invalidates the signature the kernel requires.
 - **A cache failure never fails the build.** Restore, save, size measurement
   and the job summary write are each caught at their own boundary and reduced
   to a `core.warning` — a flaky cache service is not a reason to fail a job

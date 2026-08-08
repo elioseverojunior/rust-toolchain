@@ -437,24 +437,30 @@ that block, so an entry is only safe once its page exists.
 
 **Steps:**
 
-- [ ] Add both E2E assertions; they are the acceptance criteria for the whole phase.
-- [ ] `mise run readme && bun run fix:all` — confirm both `action-docs-all` markers keep `source`, `project` and `version`.
-- [ ] Update the prose docs listed above, and the sidebar.
-- [ ] `bun run build`, recording the new `wc -c dist/index.js` in the commit message. The design predicted "small" growth for this phase because it adds no dependency; a large jump means something was imported that should have stayed behind a port.
-- [ ] `bun run fix:all && bun run typecheck && bun run test && bun run build && hk check --all`
-- [ ] `git commit -S -m "docs(cache): document the bin layer and rebuild the bundle"`
+- [x] Add both E2E assertions; they are the acceptance criteria for the whole phase.
+- [x] `mise run readme && bun run fix:all` — confirm both `action-docs-all` markers keep `source`, `project` and `version`.
+- [x] Update the prose docs listed above, and the sidebar.
+- [x] `bun run build`, recording the new `wc -c dist/index.js` in the commit message. The design predicted "small" growth for this phase because it adds no dependency; a large jump means something was imported that should have stayed behind a port.
+- [x] `bun run fix:all && bun run typecheck && bun run test && bun run build && hk check --all`
+- [x] `git commit -S -m "docs(cache): document the bin layer and rebuild the bundle"`
+
+**Corrected while implementing.** This task's stated E2E assertion — "assert the restored `$CARGO_HOME/bin` contains that tool and contains none of the rustup shims" — is only half implementable as written. The second clause is vacuous: every shim is on disk in the warm job regardless, because that job's own rustup put it there, so the check passes whether or not the archive contained them. The implemented version carries the proof in planted content instead. The `e2e` job replaces the `rust-gdbgui` shim with a marked plain file and drops a non-shim sentinel beside the tool; `e2e-warm` requires the sentinel back (or every later assertion would be vacuous, so it fails loudly) and requires no shim name to carry the decoy marker, naming any that do.
+
+Replacing the shim rather than appending to it is also forced, and by two things at once: rustup hardlinks all fourteen shims to one inode, so appending to `rust-gdbgui` would rewrite `rustup` itself; and macOS arm64 requires a valid signature on every executable, which appending to a Mach-O invalidates. `act-cache.yml` gets away with appending because it is Linux-only and marks the binary last.
+
+One further correction: the second `e2e` invocation had to opt out of the `bin` layer via `cache-layers: registry,build`. The bin key carries no suffix by design, so two invocations in one job derive the _same_ bin key however their suffixes differ, and their post steps would race to save it — the same warning-for-nothing that step's differing suffix already exists to avoid for `registry`.
 
 ---
 
 ## Phase C completion check
 
-- [ ] `bun run test` passes at 100% lines, functions and statements.
-- [ ] `hk check --all` is clean.
-- [ ] `git diff --exit-code dist/` is clean after `bun run build`.
-- [ ] `action.yml` declares `cargo-tools` as both an input and an output, and its `cache-layers` default names all three layers.
-- [ ] A `bin`-only workflow runs without `cache-key-hash`.
-- [ ] `E2E Warm Cache` proves the restored `bin` entry carries the tool and none of the shims, on all three operating systems.
-- [ ] A workflow using `cargo-tools` needs no `taiki-e/install-action` and no `baptiste0928/cargo-install`.
+- [x] `bun run test` passes at 100% lines, functions and statements — 451 tests.
+- [x] `hk check --all` is clean.
+- [x] `git diff --exit-code dist/` is clean after `bun run build`.
+- [x] `action.yml` declares `cargo-tools` as both an input and an output, and its `cache-layers` default names all three layers.
+- [x] A `bin`-only workflow runs without `cache-key-hash`.
+- [ ] `E2E Warm Cache` proves the restored `bin` entry carries the tool and none of the shims, on all three operating systems. **Written, not yet observed green** — this branch has never been pushed, so the three-OS run has not happened. `act-cache.yml` proves the same property on Linux, including by listing the stored tar directly, which CI cannot do.
+- [x] A workflow using `cargo-tools` needs no `taiki-e/install-action` and no `baptiste0928/cargo-install`.
 
 ## Carried into Phase D
 

@@ -48,6 +48,7 @@ Use `mise run` to invoke tasks defined in `mise.toml` (e.g. `mise run uap` to up
 This is a **GitHub Action** for Rust toolchain installation, inspired by [dtolnay/rust-toolchain](https://github.com/dtolnay/rust-toolchain) with extensions:
 
 - **`rust-toolchain.toml` by default** — reads the project's `rust-toolchain.toml` to determine channel/targets/components/profile
+- **`cargo-tools`** — installs cargo tools and caches their binaries in a `bin` layer keyed on the resolved tool set alone, with rustup's own shims excluded so a toolchain bump does not reinstall them
 - **Override by inputs** — action inputs (`toolchain`, `targets`, `target`, `components`, `profile`) override toml values. For the list inputs that means merged and deduped with inputs leading, so `targets[0]` — and therefore the `target` output — is one the caller named whenever they named one
 - **Fluent Builder pattern** — `ToolchainSpecBuilder` with chaining for programmatic construction
 - **Compatible outputs** — `cachekey` and `name` match dtolnay/rust-toolchain
@@ -75,7 +76,7 @@ Refer to the [rustup book](https://rust-lang.github.io/rustup/concepts/index.htm
 ## Architecture
 
 - **Entrypoint (action)**: `src/index.ts` dispatches on `STATE_isPost`, wiring real dependencies into either `run()` (main phase) or `runPost()` (post phase) from `src/action.ts`. Build uses `@actions/core` for inputs, outputs, state and failures.
-- **Library API**: `src/lib.ts` is the barrel (re-exports action, builder, config, core, errors, inputs, outputs, cache/budget, cache/client, cache/env, cache/inputs, cache/keys, cache/layers, cache/lifecycle, cache/paths and cache/summary, never `index.ts`); consumers may also import any of those sixteen modules directly.
+- **Library API**: `src/lib.ts` is the barrel (re-exports action, builder, config, core, errors, inputs, outputs, tools, cache/budget, cache/client, cache/env, cache/inputs, cache/keys, cache/layers, cache/lifecycle, cache/paths and cache/summary, never `index.ts`); consumers may also import any of those seventeen modules directly.
 - **Path aliases** (`tsconfig.json` `paths`): library source imports itself as `@rust-toolchain/<module>` — the same specifier a consumer maps, so internal imports resolve in their project too. `@/<module>` is the short form and is **tests only**; using it in library source silently breaks source consumption.
 - **Build**: `bun run build:action`
 - **Source layout**:
@@ -95,6 +96,7 @@ Refer to the [rustup book](https://rust-lang.github.io/rustup/concepts/index.htm
   - `src/cache/lifecycle.ts` — `restoreLayers` restores every enabled layer concurrently, downgrading any failure to a miss; `saveLayers`/`saveLayer` decide whether each layer is worth saving (skip on an exact hit, skip when its size can't be measured, skip over budget) and save the rest concurrently, each independently caught
   - `src/cache/summary.ts` — `renderSummary` renders the per-layer restore/save outcome as the job summary's Markdown table — the only place a per-layer result is visible, since `cache-hit` is a single all-layers boolean
   - `src/errors.ts` — `describeError` renders a caught `unknown` as a message; extracted because the `instanceof Error` ternary was written out nine times across `action.ts`, `cache/lifecycle.ts` and `core.ts`
+  - `src/tools.ts` — everything `cargo-tools` needs: `parseToolSpecs` reads the input into `<name>@<version>` specs, rejecting anything that is not a cargo identifier before a command runs; `resolveToolVersions` turns `latest` into a concrete version through the `RegistryClient` port, retrying with backoff and degrading a failure to `UNRESOLVED_VERSION` rather than throwing; `hashToolSet` digests the resolved set into the `bin` key's final segment; `ensureTools` probes `<name> --version` and installs only what the restore did not supply. A pinned version never reaches the client, which is what makes a registry outage unable to affect it
   - `src/inputs.ts` — `readBooleanInput` and the `InputReader` port it takes; shared by `action.ts` and `cache/inputs.ts`, so it belongs to neither
   - `src/lib.ts` — the library barrel. Re-exports every other library module and deliberately **not** `index.ts`, whose import executes the action
   - `src/*.test.ts` — co-located tests; `tsconfig.json` includes `**/*.ts`, so `bun run typecheck` type-checks them too

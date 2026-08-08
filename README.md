@@ -60,10 +60,10 @@ Honest status, because a claim you disprove in five minutes is worse than no cla
 | [`actions-rs/toolchain`](https://github.com/actions-rs/toolchain)                                     | Install a toolchain (unmaintained since 2021) | ✅ **Replaced today**                                                   |
 | [`actions/cache`](https://github.com/actions/cache) hand-wired for cargo                              | Generic cache + your own key logic            | ✅ **Key derivation replaced today** — feed `outputs.cache` straight in |
 | [`actions-rust-lang/setup-rust-toolchain`](https://github.com/actions-rust-lang/setup-rust-toolchain) | Toolchain + a `rust-cache` wrapper            | ✅ **Replaced** — toolchain and caching both covered                    |
-| [`moonrepo/setup-rust`](https://github.com/moonrepo/setup-rust)                                       | Toolchain + cache + cargo tools               | ◐ Toolchain + cache **replaced today** · tools **Phase C**              |
+| [`moonrepo/setup-rust`](https://github.com/moonrepo/setup-rust)                                       | Toolchain + cache + cargo tools               | ✅ **Replaced** — `cargo-tools` covers the tools too                    |
 | [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache)                                       | Restore/save the cargo cache                  | ✅ **Replaced** — `cache: true` restores and saves, no separate action  |
-| [`taiki-e/install-action`](https://github.com/taiki-e/install-action)                                 | Install cargo tools fast                      | ○ Planned — **Phase C**                                                 |
-| [`baptiste0928/cargo-install`](https://github.com/baptiste0928/cargo-install)                         | Install + cache cargo tools                   | ○ Planned — **Phase C**                                                 |
+| [`taiki-e/install-action`](https://github.com/taiki-e/install-action)                                 | Install cargo tools fast                      | ✅ **Replaced** — `cargo-tools`, cached in the `bin` layer              |
+| [`baptiste0928/cargo-install`](https://github.com/baptiste0928/cargo-install)                         | Install + cache cargo tools                   | ✅ **Replaced** — `cargo-tools` installs and caches them                |
 | [`actions-rs/cargo`](https://github.com/actions-rs/cargo)                                             | Run cargo commands                            | ✗ Not a goal — use `run: cargo …`                                       |
 | [`clechasseur/rs-clippy-check`](https://github.com/clechasseur/rs-clippy-check)                       | Clippy annotations on PRs                     | ✗ Not a goal — different concern                                        |
 
@@ -76,7 +76,7 @@ toolchain action, your cache action and your key-computation step in one move. S
 
 ## Built to be trusted
 
-- **359 tests, 100% line/function/statement coverage**, enforced in CI — the gate fails the build, it is
+- **451 tests, 100% line/function/statement coverage**, enforced in CI — the gate fails the build, it is
   not a badge
 - **No shell, ever** — every command is an argv array. Channel, targets, components and profile can come
   from an untrusted workspace `rust-toolchain.toml`, so none of them is ever interpolated into a string
@@ -87,8 +87,10 @@ toolchain action, your cache action and your key-computation step in one move. S
   [`act`](https://github.com/nektos/act), and in CI on all three operating systems. `E2E` builds a real
   crate, invokes the action twice to prove the derived keys do not move between invocations, and saves
   from its post step; `E2E Warm Cache` then runs as a _separate_ job, so it can restore what the first
-  job saved and assert both a full `cache-hit` and that no `incremental/` or `examples/` directory
-  survived the exclusions. `release` gates on both
+  job saved and assert a full `cache-hit`, that no `incremental/` or `examples/` directory survived
+  the exclusions, and — through content planted in the first job rather than mere file absence, which
+  would prove nothing since rustup recreates its own shims — that the cached tool came back and the
+  shims did not. `release` gates on both
 - **REUSE-compliant licensing**, `gitleaks`, CodeQL, and OpenSSF Scorecard in CI
 - **Committed, reproducible bundle** — CI fails on `dist/` drift, so what runs is what you reviewed
 
@@ -133,13 +135,13 @@ The caching story ships in phases, each independently useful. Phases A and B are
 absorbed two pieces originally planned for later phases, so C, D and E below are restated to match
 what actually shipped rather than what was originally scoped.
 
-| Phase | What it adds                                                                                                                                                                                                                                           | Status                    |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- |
-| **A** | Layered cache **key derivation** — `registry` and `build` keys with restore-key ladders, as the `cache` output                                                                                                                                         | ✅ **Released**           |
-| **B** | Restore and save, a per-layer size budget, and a per-layer job summary — `cache: true` restores at job start, saves from a `post:` step, skips an oversized layer, and reports what actually happened to each one. `Swatinem/rust-cache` comes out too | ✅ **Released**           |
-| **C** | `cargo-tools` — installs and caches cargo binaries, keyed on resolved versions                                                                                                                                                                         | Planned                   |
-| **D** | Deterministic pruning from `cargo metadata`, replacing Phase B's negation-glob exclusions                                                                                                                                                              | Planned                   |
-| **E** | Per-layer job summary and reporting                                                                                                                                                                                                                    | ✅ **Shipped in Phase B** |
+| Phase | What it adds                                                                                                                                                                                                                                                      | Status                    |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| **A** | Layered cache **key derivation** — `registry` and `build` keys with restore-key ladders, as the `cache` output                                                                                                                                                    | ✅ **Released**           |
+| **B** | Restore and save, a per-layer size budget, and a per-layer job summary — `cache: true` restores at job start, saves from a `post:` step, skips an oversized layer, and reports what actually happened to each one. `Swatinem/rust-cache` comes out too            | ✅ **Released**           |
+| **C** | `cargo-tools` — installs cargo binaries and caches them in a third `bin` layer keyed on the resolved tool set alone, with rustup's own shims excluded so a compiler bump does not reinstall them. `moonrepo/setup-rust` and `taiki-e/install-action` come out too | ✅ **Released**           |
+| **D** | Deterministic pruning from `cargo metadata`, replacing Phase B's negation-glob exclusions                                                                                                                                                                         | Planned                   |
+| **E** | Per-layer job summary and reporting                                                                                                                                                                                                                               | ✅ **Shipped in Phase B** |
 
 ### Why layers, and why it matters
 
