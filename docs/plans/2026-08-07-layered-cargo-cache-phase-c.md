@@ -152,20 +152,20 @@ the glob set alone cannot.
 
 ## File Structure
 
-| File                              | Responsibility                                                                            | Task    |
-| --------------------------------- | ----------------------------------------------------------------------------------------- | ------- |
-| `src/tools.ts`                    | `cargo-tools` parsing, resolution, verification, installation                             | 1, 2, 6 |
-| `src/tools.test.ts`               | Tests for the above                                                                       | 1, 2, 6 |
-| `src/cache/keys.ts`               | `hashToolSet`; the `bin` deriver                                                          | 3, 4    |
-| `src/cache/layers.ts`             | `bin` joins `CACHE_LAYER_IDS`                                                             | 4       |
-| `src/cache/paths.ts`              | `binPaths`, `RUSTUP_SHIMS`                                                                | 4       |
-| `src/cache/inputs.ts`             | `cache-key-hash` narrowing, `TOOL_SET_HASH_STAND_IN`, third `buildCacheOutputs` parameter | 5       |
-| `src/action.ts`                   | Resolve before keys, verify and install after restore                                     | 6       |
-| `src/outputs.ts`                  | `cargo-tools` output, folded into `json`                                                  | 7       |
-| `src/index.ts`                    | The crates.io adapter                                                                     | 6       |
-| `action.yml`                      | `cargo-tools` input, `cache-layers` default, `cargo-tools` output                         | 4, 7    |
-| `src/lib.ts`, `src/lib.test.ts`   | Barrel and pinned export list                                                             | 1, 3, 4 |
-| docs, `dist/index.js`, `cicd.yml` | Regenerated, rebuilt, and the E2E shim assertion                                          | 8       |
+| File                              | Responsibility                                                                            | Task       |
+| --------------------------------- | ----------------------------------------------------------------------------------------- | ---------- |
+| `src/tools.ts`                    | `cargo-tools` parsing, resolution, `hashToolSet`, verification, installation              | 1, 2, 3, 6 |
+| `src/tools.test.ts`               | Tests for the above                                                                       | 1, 2, 3, 6 |
+| `src/cache/keys.ts`               | The `bin` deriver                                                                         | 4          |
+| `src/cache/layers.ts`             | `bin` joins `CACHE_LAYER_IDS`                                                             | 4          |
+| `src/cache/paths.ts`              | `binPaths`, `RUSTUP_SHIMS`                                                                | 4          |
+| `src/cache/inputs.ts`             | `cache-key-hash` narrowing, `TOOL_SET_HASH_STAND_IN`, third `buildCacheOutputs` parameter | 5          |
+| `src/action.ts`                   | Resolve before keys, verify and install after restore                                     | 6          |
+| `src/outputs.ts`                  | `cargo-tools` output, folded into `json`                                                  | 7          |
+| `src/index.ts`                    | The crates.io adapter                                                                     | 6          |
+| `action.yml`                      | `cargo-tools` input, `cache-layers` default, `cargo-tools` output                         | 4, 7       |
+| `src/lib.ts`, `src/lib.test.ts`   | Barrel and pinned export list                                                             | 1, 3, 4    |
+| docs, `dist/index.js`, `cicd.yml` | Regenerated, rebuilt, and the E2E shim assertion                                          | 8          |
 
 ---
 
@@ -262,15 +262,24 @@ importing them back would be a cycle. Its `delay` is promise-based rather than r
 
 ### Task 3: `hashToolSet`
 
-**Files:** modify `src/cache/keys.ts` and `src/cache/keys.test.ts`.
+**Files:** modify `src/tools.ts` and `src/tools.test.ts`.
 
 **Interfaces.** Produces `hashToolSet(tools: ResolvedTool[]): string`.
 
 **Behaviour.** SHA-256 over the sorted, newline-joined `name@version` pairs, truncated to the first 8 hex
 characters — the same width `generateSpecCacheKey` and `hashBuildEnv` use, so every key segment stays uniform.
-Sorted before hashing, so declaring the same tools in a different order still hits the same key. An empty set has
-a stable digest; it is never special-cased to the empty string, which would collapse the segment and let a
-tools-less job share a key with one that has tools.
+Sorted before hashing, so declaring the same tools in a different order still hits the same key. Joined on a
+newline unambiguously, because `parseToolSpecs` has already refused any name or version that could contain one.
+
+An empty set has a stable digest; it is never special-cased to the empty string. `joinKeySegments` drops an empty
+segment, so a tools-less job's key would collapse to `bin-<os>-<arch>` while its widest restore rung stayed
+`bin-<os>-<arch>-` — which matches a _tooled_ job's entry, and the tools-less job would restore binaries it never
+asked for.
+
+**Placement, which this task moved.** The section above first said `src/cache/keys.ts`. It lives in `src/tools.ts`
+instead, for the reason `hashBuildEnv` lives in `cache/env.ts` and `generateSpecCacheKey` in `core.ts`: a digest
+belongs with the thing it digests, and `keys.ts` assembles segments rather than computing them. It also avoids a
+dependency edge from the cache subsystem to the tools module that nothing structural needed.
 
 **Steps:**
 
