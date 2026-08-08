@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 import { isRustupIdentifier, parseCommaList } from "@rust-toolchain/config";
+import { describeError } from "@rust-toolchain/errors";
 
 /**
  * One entry of the `cargo-tools` input, before any version resolution.
@@ -84,4 +85,130 @@ function assertIdentifier(
       `"${entry}". Entries look like \`<name>\` or \`<name>@<version>\`, ` +
       "where both halves are letters, digits, dots, underscores and dashes.",
   );
+}
+
+/**
+ * The crates.io lookup resolution needs, as a port.
+ *
+ * The only real implementation lives in `src/index.ts`, which nothing imports
+ * and the coverage gate does not measure — the same placement, for the same
+ * reason, as the `@actions/cache` adapter behind `CacheClient`.
+ */
+export interface RegistryClient {
+  latestVersion(name: string): Promise<string>;
+}
+
+/** A tool with a concrete version, ready to be keyed on and installed. */
+export interface ResolvedTool {
+  name: string;
+  version: string;
+}
+
+/** A tool the registry could not answer for, and why. */
+export interface UnresolvedTool {
+  name: string;
+  reason: string;
+}
+
+/**
+ * Every tool, plus the subset the registry could not answer for.
+ *
+ * The same shape `measurePaths` returns, and for the same reason: a caller
+ * that needs the whole list reads `tools`, and a caller that has to warn about
+ * what is missing reads `unresolved` rather than re-deriving it by scanning
+ * for a sentinel. `unresolved` is the authoritative signal — a caller must
+ * branch on it, never on `version === UNRESOLVED_VERSION`, since nothing stops
+ * someone pinning `@unknown` and there is no reason to punish them for it.
+ */
+export interface ToolResolution {
+  tools: ResolvedTool[];
+  unresolved: UnresolvedTool[];
+}
+
+/** What `resolveToolVersions` needs from the outside. */
+export interface ResolveDeps {
+  client: RegistryClient;
+  /** Total attempts per tool, including the first. */
+  attempts: number;
+  /** Base of the exponential pause between attempts. */
+  backoffMs: number;
+  /**
+   * Promise-based on purpose, unlike `ActionDeps.sleep`.
+   *
+   * That one blocks the thread through `Atomics.wait`, which would serialise
+   * the concurrent resolution below into one lookup at a time — and its own
+   * comment already records that being synchronous is a leftover rather than a
+   * requirement.
+   */
+  delay: (ms: number) => Promise<void>;
+}
+
+/**
+ * The version reported for a tool the registry could not answer for.
+ *
+ * Carried so the `cargo-tools` output says something honest rather than
+ * omitting the tool, which would read as "not requested".
+ */
+export const UNRESOLVED_VERSION = "unknown";
+
+/** One tool's outcome, before the two lists are separated. */
+interface Outcome {
+  tool: ResolvedTool;
+  failure?: UnresolvedTool;
+}
+
+/**
+ * Turns each spec into a concrete version, reporting rather than throwing.
+ *
+ * Deciding what an outage *means* is the caller's job: a pinned tool never
+ * needed the registry, and an unresolved one may still be satisfied by a
+ * restored binary. Throwing here would take the whole job down over a lookup
+ * whose answer might not have been needed.
+ *
+ * Runs concurrently, each tool caught at its own boundary, so one unreachable
+ * lookup cannot lose the answers the others already produced — the shape
+ * `saveLayers` uses for the same reason.
+ */
+export async function resolveToolVersions(
+  specs: ToolSpec[],
+  deps: ResolveDeps,
+): Promise<ToolResolution> {
+  const outcomes = await Promise.all(
+    specs.map((spec) => resolveOne(spec, deps)),
+  );
+
+  return {
+    tools: outcomes.map((outcome) => outcome.tool),
+    unresolved: outcomes.flatMap((outcome) =>
+      outcome.failure ? [outcome.failure] : [],
+    ),
+  };
+}
+
+async function resolveOne(spec: ToolSpec, deps: ResolveDeps): Promise<Outcome> {
+  // A pinned version is already concrete. Returning before touching the client
+  // is what makes a registry outage unable to affect a pinned tool at all.
+  if (spec.version !== LATEST) {
+    return { tool: { name: spec.name, version: spec.version } };
+  }
+
+  let reason = "";
+  for (let attempt = 1; attempt <= deps.attempts; attempt++) {
+    try {
+      const version = await deps.client.latestVersion(spec.name);
+      return { tool: { name: spec.name, version } };
+    } catch (error) {
+      // The last failure is the one reported: an intermittent first error is
+      // less use than whatever the registry said when it finally gave up.
+      reason = describeError(error);
+      if (attempt < deps.attempts) {
+        await deps.delay(deps.backoffMs * 2 ** (attempt - 1));
+      }
+    }
+  }
+
+  return {
+    tool: { name: spec.name, version: UNRESOLVED_VERSION },
+    failure: { name: spec.name, reason },
+  };
 }
