@@ -92,11 +92,14 @@ inputs:
 
   cache-key-hash:
     description: >
-      A hash of the dependency set, required when `cache` is true. Pass the
+      A hash of the dependency set, required whenever the `registry` or
+      `build` layer is enabled — which is to say, by default. A `bin`-only
+      `cache-layers` needs no hash, because that layer keys on the resolved
+      cargo-tool set instead and has no lockfile component to miss. Pass the
       workflow expression `hashFiles('**/Cargo.lock')` wrapped in the usual
       interpolation braces — `hashFiles` is a workflow expression function
       that a Node action cannot call, and using GitHub's own value keeps
-      these keys interoperable with caches you already have. Without it the
+      these keys interoperable with caches you already have. Without it those
       keys never change: they hit exactly on every run and serve the same
       crates for the life of the repository. The README's caching section
       shows the full step. Note this text deliberately avoids writing the

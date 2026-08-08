@@ -34,17 +34,36 @@ export interface CacheInputSource {
 }
 
 /**
- * Every Phase A layer keys on the dependency set, so an absent hash makes the
- * key constant: it hits exactly forever, never re-saves, and serves stale
- * crates for the life of the repository. That is worse than failing here.
+ * Which layers put the dependency-set hash in their key.
+ *
+ * A `Record` keyed on `CacheLayerId` rather than a list, for the reason
+ * `DERIVERS` is one: adding a layer fails to compile here until it says
+ * whether it keys on the lockfile. A list would let a new layer default to
+ * "does not need it" silently, which is the wrong direction — the failure
+ * would be a permanently-constant key rather than an error.
+ */
+const LAYER_KEYS_ON_LOCK_HASH: Record<CacheLayerId, boolean> = {
+  registry: true,
+  build: true,
+  // Keys on the resolved tool set alone, so there is no lockfile component to
+  // miss and requiring one would be wrong.
+  bin: false,
+};
+
+/**
+ * A layer that keys on the dependency set and has no hash keys on nothing that
+ * changes: it hits exactly forever, never re-saves, and serves stale crates for
+ * the life of the repository. That is worse than failing here.
  */
 const MISSING_LOCK_HASH_MESSAGE =
-  "`cache-key-hash` is required when `cache` is true. This action cannot " +
-  "compute it — `hashFiles()` is a workflow-expression function — so " +
-  "pass the workflow's own value:\n" +
+  "`cache-key-hash` is required when the `registry` or `build` layer is " +
+  "enabled. This action cannot compute it — `hashFiles()` is a " +
+  "workflow-expression function — so pass the workflow's own value:\n" +
   "  cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}\n" +
-  "Without it the cache keys never change: they hit exactly on every " +
-  "run and serve the same crates for the life of the repository.";
+  "Without it those keys never change: they hit exactly on every run and " +
+  "serve the same crates for the life of the repository. A `bin`-only " +
+  "`cache-layers` needs no hash, because that layer keys on the resolved " +
+  "cargo-tool set instead.";
 
 /** `actions/cache` rejects any key longer than this. */
 const MAX_CACHE_KEY_LENGTH = 512;
@@ -179,7 +198,9 @@ export function readCacheRequest(
   );
 
   const lockHash = source.getInput("cache-key-hash").trim();
-  if (!lockHash) throw new Error(MISSING_LOCK_HASH_MESSAGE);
+  if (!lockHash && layers.some((layer) => LAYER_KEYS_ON_LOCK_HASH[layer])) {
+    throw new Error(MISSING_LOCK_HASH_MESSAGE);
+  }
 
   const suffix = readCacheKeySuffix(source);
   const context: PendingCacheKeyContext = {

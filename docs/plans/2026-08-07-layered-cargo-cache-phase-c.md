@@ -64,8 +64,10 @@ Every task's requirements implicitly include this section.
   date, and CI's Build job catches it with `git diff --exit-code dist/`. It is not harmless once `action.yml`
   gains an input or default the old bundle rejects. Task 4 changed the `cache-layers` default to
   `registry,build,bin`, the committed bundle's `parseCacheLayers` threw `"bin" is not a cache layer`, and every
-  local `act` run failed on an action that was broken rather than stale. **A task touching `action.yml`'s inputs
-  or defaults rebuilds the bundle in the same commit.**
+  local `act` run failed on an action that was broken rather than stale. **A task that adds, removes or re-defaults
+  an `action.yml` input rebuilds the bundle in the same commit.** Editing a `description` does not — the bundle
+  never reads one, so the two halves cannot diverge in behaviour; that only leaves the README stale until Task 8
+  regenerates it.
 
 ## Scope
 
