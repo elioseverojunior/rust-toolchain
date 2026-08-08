@@ -76,7 +76,7 @@ toolchain action, your cache action and your key-computation step in one move. S
 
 ## Built to be trusted
 
-- **358 tests, 100% line/function/statement coverage**, enforced in CI — the gate fails the build, it is
+- **359 tests, 100% line/function/statement coverage**, enforced in CI — the gate fails the build, it is
   not a badge
 - **No shell, ever** — every command is an argv array. Channel, targets, components and profile can come
   from an untrusted workspace `rust-toolchain.toml`, so none of them is ever interpolated into a string
@@ -621,17 +621,31 @@ const spec = new ToolchainSpecBuilder()
   .withProfile("minimal")
   .build();
 
-// Targets and components are applied as separate commands, because
-// --target/--component on `rustup toolchain install` are ignored for an
-// already-installed toolchain.
+// Every invocation is produced as an argv array and executed without a shell.
+// `--target`/`--component` are passed on the install as well, which is what
+// lets `--allow-downgrade` step back to a nightly that carries them — but
+// rustup ignores both for an already-installed toolchain, so they are also
+// applied through their own commands below.
+spec.toRustupInstallArgs();
+// => ["toolchain", "install", "stable", "--profile", "minimal",
+//     "--target", "wasm32-unknown-unknown", "--component", "clippy",
+//     "--no-self-update"]
+
+spec.toRustupTargetAddArgs();
+// => ["target", "add", "--toolchain", "stable", "wasm32-unknown-unknown"]
+
+spec.toRustupComponentAddArgs();
+// => ["component", "add", "--toolchain", "stable", "clippy"]
+
+// The components the profile implies, kept separate because they are
+// best-effort. `null` here: `minimal` implies none beyond what any
+// toolchain already has.
+spec.toRustupProfileComponentAddArgs();
+// => null
+
+// Display only — the install argv joined with spaces, so the two cannot drift.
 spec.toRustupInstallCommand();
-// => "rustup toolchain install stable --profile minimal"
-
-spec.toRustupTargetAddCommands();
-// => ["rustup target add --toolchain stable wasm32-unknown-unknown"]
-
-spec.toRustupComponentAddCommands();
-// => ["rustup component add --toolchain stable clippy"]
+// => "rustup " + spec.toRustupInstallArgs().join(" ")
 
 // Channel resolution — expressive forms resolve to a <major.minor> series,
 // which rustup pins to the newest patch in that series.
