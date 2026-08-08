@@ -61,6 +61,53 @@ function globRoot(pattern: string): string {
   return wildcard === -1 ? pattern : segments.slice(0, wildcard).join("/");
 }
 
+/**
+ * Compiles one exclusion glob into a matcher over file paths.
+ *
+ * Only the three constructs the path builders actually emit are supported:
+ * `**` across separators, `*` within a segment, and literals. `**` followed by
+ * a separator spans *zero* or more segments, so `<t>/**\/incremental/**` catches
+ * both `<t>/incremental/x` and `<t>/debug/incremental/x` — the depth mistake
+ * Phase B's first `buildPaths` made by reaching for a single-level `*`.
+ */
+function globToRegExp(pattern: string): RegExp {
+  let source = "";
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index] as string;
+    if (char !== "*") {
+      source += char.replace(/[.+^${}()|[\]\\?]/g, "\\$&");
+      continue;
+    }
+    if (pattern[index + 1] === "*") {
+      index += 1;
+      if (pattern[index + 1] === "/") {
+        index += 1;
+        source += "(?:.*/)?";
+      } else {
+        source += ".*";
+      }
+      continue;
+    }
+    source += "[^/]*";
+  }
+  return new RegExp(`^${source}$`);
+}
+
+/**
+ * The negations that exclude *files*, compiled once per measurement.
+ *
+ * A pattern ending in `/` is deliberately dropped rather than compiled. Those
+ * exist to keep directory entries out of the tar manifest — see `buildPaths` —
+ * and the files inside them are still archived. Treating one as a subtree
+ * exclusion would measure every layer as zero, which is the opposite error and
+ * would silently disable `cache-budget` altogether.
+ */
+function fileExclusions(paths: string[]): RegExp[] {
+  return paths
+    .filter((path) => path.startsWith("!") && !path.endsWith("/"))
+    .map((path) => globToRegExp(path.slice(1)));
+}
+
 /** A path that is simply absent, which is normal rather than a failure. */
 function isMissing(error: unknown): boolean {
   return (
@@ -89,15 +136,25 @@ export interface MeasuredPaths {
 }
 
 /**
- * Sums the bytes under each path.
+ * Sums the bytes the archive would actually carry.
  *
  * A missing path is normal rather than exceptional — a workspace that has never
- * been built has no target directory — and negation entries are exclusions for
- * the archive, not directories to descend into.
+ * been built has no target directory. Negation entries are not directories to
+ * descend into; they are subtracted from what the walk finds.
+ *
+ * Honouring them is not cosmetic. The walk starts from `globRoot`, which strips
+ * a pattern at its first wildcard, so `<bin>/**` walks the whole of
+ * `$CARGO_HOME/bin` — every rustup shim included. Ignoring the negations
+ * reported 291 MB for an archive measured at 233 bytes, and `cache-budget` is
+ * checked against this number, so an entry carrying almost nothing could be
+ * refused a save for size it does not use. The over-report was tolerable while
+ * `build` was the only excluding layer, where the excluded subtrees are a
+ * fraction of `target/`; `bin` excludes very nearly everything it walks.
  */
 export function measurePaths(paths: string[], fs: StatFs): MeasuredPaths {
   let bytes = 0;
   const unmeasured: string[] = [];
+  const excluded = fileExclusions(paths);
   const pending = paths
     .filter((path) => !path.startsWith("!"))
     .map((path) => globRoot(path));
@@ -112,7 +169,9 @@ export function measurePaths(paths: string[], fs: StatFs): MeasuredPaths {
       continue;
     }
     if (!entry.isDirectory()) {
-      bytes += entry.size;
+      if (!excluded.some((pattern) => pattern.test(current))) {
+        bytes += entry.size;
+      }
       continue;
     }
     let children: string[];
