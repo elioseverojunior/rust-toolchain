@@ -4,8 +4,14 @@
 
 import { describe, expect, it } from "bun:test";
 
-import type { RegistryClient, ResolveDeps, ToolSpec } from "@/tools";
+import type {
+  RegistryClient,
+  ResolveDeps,
+  ResolvedTool,
+  ToolSpec,
+} from "@/tools";
 import {
+  hashToolSet,
   parseToolSpecs,
   resolveToolVersions,
   UNRESOLVED_VERSION,
@@ -322,5 +328,54 @@ describe("resolveToolVersions", () => {
     expect(result.unresolved).toEqual([
       { name: "cargo-deny", reason: "connection reset" },
     ]);
+  });
+});
+
+describe("hashToolSet", () => {
+  const tool = (name: string, version: string): ResolvedTool => ({
+    name,
+    version,
+  });
+
+  it("is stable for the same set", () => {
+    const set = [tool("cargo-deny", "0.16.1")];
+    expect(hashToolSet(set)).toBe(hashToolSet([...set]));
+  });
+
+  // The same width as `generateSpecCacheKey` and `hashBuildEnv`, so every
+  // segment of a derived key reads uniformly.
+  it("is eight lowercase hex characters", () => {
+    expect(hashToolSet([tool("cargo-deny", "0.16.1")])).toMatch(
+      /^[0-9a-f]{8}$/,
+    );
+  });
+
+  // Declaring the same tools in a different order is the same request, so it
+  // must not be a different cache entry.
+  it("ignores the order the tools were written in", () => {
+    expect(
+      hashToolSet([tool("a-tool", "1.0.0"), tool("z-tool", "2.0.0")]),
+    ).toBe(hashToolSet([tool("z-tool", "2.0.0"), tool("a-tool", "1.0.0")]));
+  });
+
+  it.each([
+    ["the version", [tool("cargo-deny", "0.17.0")]],
+    ["the name", [tool("cargo-udeps", "0.16.1")]],
+    ["the number of tools", [tool("cargo-deny", "0.16.1"), tool("x", "1.0.0")]],
+  ])("changes when %s differs", (_label, other) => {
+    expect(hashToolSet(other)).not.toBe(
+      hashToolSet([tool("cargo-deny", "0.16.1")]),
+    );
+  });
+
+  // Never special-cased to the empty string. `joinKeySegments` drops an empty
+  // segment, so a tools-less job's `bin` key would collapse to
+  // `bin-<os>-<arch>` while its widest restore rung stayed `bin-<os>-<arch>-` —
+  // which matches a *tooled* job's entry, and the tools-less job would restore
+  // binaries it never asked for.
+  it("gives an empty set a real digest rather than an empty segment", () => {
+    expect(hashToolSet([])).toMatch(/^[0-9a-f]{8}$/);
+    expect(hashToolSet([])).toBe(hashToolSet([]));
+    expect(hashToolSet([])).not.toBe(hashToolSet([tool("x", "1.0.0")]));
   });
 });

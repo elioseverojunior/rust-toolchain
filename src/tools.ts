@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+import { createHash } from "node:crypto";
+
 import { isRustupIdentifier, parseCommaList } from "@rust-toolchain/config";
 import { describeError } from "@rust-toolchain/errors";
 
@@ -211,4 +213,33 @@ async function resolveOne(spec: ToolSpec, deps: ResolveDeps): Promise<Outcome> {
     tool: { name: spec.name, version: UNRESOLVED_VERSION },
     failure: { name: spec.name, reason },
   };
+}
+
+/**
+ * Digests the resolved tool set into the `bin` key's segment.
+ *
+ * Lives here rather than in `cache/keys.ts` for the reason `hashBuildEnv`
+ * lives in `cache/env.ts` and `generateSpecCacheKey` in `core.ts`: a digest
+ * belongs with the thing it digests, and `keys.ts` assembles segments rather
+ * than computing them.
+ *
+ * Sorted before hashing, so declaring the same tools in a different order is
+ * the same cache entry. Joined on a newline, which is unambiguous because
+ * `parseToolSpecs` has already refused any name or version that could contain
+ * one. Truncated to 8 hex characters, the width the other two digests use, so
+ * every segment of a derived key reads uniformly.
+ *
+ * An empty set digests to a real value rather than the empty string.
+ * `joinKeySegments` drops an empty segment, so a tools-less job's key would
+ * collapse to `bin-<os>-<arch>` while its widest restore rung stayed
+ * `bin-<os>-<arch>-` — which matches a tooled job's entry, and the tools-less
+ * job would restore binaries it never asked for.
+ */
+export function hashToolSet(tools: ResolvedTool[]): string {
+  const canonical = tools
+    .map(({ name, version }) => `${name}@${version}`)
+    .sort()
+    .join("\n");
+
+  return createHash("sha256").update(canonical).digest("hex").slice(0, 8);
 }

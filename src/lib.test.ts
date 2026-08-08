@@ -68,6 +68,7 @@ describe("library barrel", () => {
         "buildActionOutputs",
         "toOutputEntries",
         // tools.ts
+        "hashToolSet",
         "parseToolSpecs",
         "resolveToolVersions",
         "UNRESOLVED_VERSION",
