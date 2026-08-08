@@ -139,6 +139,20 @@ export function parseCommaList(value?: string): string[] {
 const RUSTUP_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
+ * True when `value` is a plain identifier, in the sense above.
+ *
+ * Shared with `parseToolSpecs` so the character class deciding what may reach
+ * a command as argv has one definition, the way `parseCommaList` gives the
+ * separator grammar one. A predicate rather than the regex itself, so each
+ * caller words its own rejection for the kind of value it is rejecting —
+ * "rustup target" and "cargo tool" are not interchangeable in a message
+ * someone has to act on.
+ */
+export function isRustupIdentifier(value: string): boolean {
+  return RUSTUP_IDENTIFIER.test(value);
+}
+
+/**
  * Rejects values rustup could not accept as an identifier.
  *
  * These may come from a `rust-toolchain.toml` in an untrusted checkout.
@@ -187,7 +201,7 @@ export function assertProfileAvailable(
 
 function assertIdentifiers(kind: string, values: string[]): string[] {
   for (const value of values) {
-    if (!RUSTUP_IDENTIFIER.test(value)) {
+    if (!isRustupIdentifier(value)) {
       throw new Error(`"${value}" is not a valid rustup ${kind} name.`);
     }
   }
