@@ -11,7 +11,7 @@
  * out to `rustup`. Everything below is free of import-time side effects.
  *
  * Importing a single module directly (`@rust-toolchain/core`, …) stays
- * supported and is cheaper — this barrel loads all seventeen.
+ * supported and is cheaper — this barrel loads all eighteen.
  *
  * The re-exports below use the package specifier rather than `./action`, so
  * they resolve identically here and in a consumer that maps
@@ -27,6 +27,7 @@ export * from "@rust-toolchain/cache/inputs";
 export * from "@rust-toolchain/cache/keys";
 export * from "@rust-toolchain/cache/layers";
 export * from "@rust-toolchain/cache/lifecycle";
+export * from "@rust-toolchain/cache/metadata";
 export * from "@rust-toolchain/cache/paths";
 export * from "@rust-toolchain/cache/summary";
 export * from "@rust-toolchain/config";
