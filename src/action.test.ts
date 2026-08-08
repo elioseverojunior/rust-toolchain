@@ -60,6 +60,7 @@ interface Harness {
   summaries: string[];
   restores: RestoreCall[];
   saves: SaveCall[];
+  registryCalls: string[];
 }
 
 /**
@@ -78,6 +79,7 @@ function harness(
     platform?: string;
     env?: Record<string, string | undefined>;
     restoreResult?: (key: string) => string | undefined;
+    toolVersions?: Record<string, string>;
   } = {},
 ): Harness {
   const calls: ExecCall[] = [];
@@ -92,6 +94,7 @@ function harness(
   const summaries: string[] = [];
   const restores: RestoreCall[] = [];
   const saves: SaveCall[] = [];
+  const registryCalls: string[] = [];
   const queues = options.execResults ?? {};
 
   const deps: ActionDeps = {
@@ -150,6 +153,17 @@ function harness(
     sleep: (ms) => {
       sleeps.push(ms);
     },
+    delay: async (): Promise<void> => {},
+    registry: {
+      latestVersion: async (name): Promise<string> => {
+        registryCalls.push(name);
+        const version = options.toolVersions?.[name];
+        if (version === undefined) {
+          throw new Error(`no version queued for ${name}`);
+        }
+        return version;
+      },
+    },
     cache: {
       restore: async (restorePaths, key, restoreKeys) => {
         restores.push({ paths: restorePaths, key, restoreKeys });
@@ -175,6 +189,7 @@ function harness(
     summaries,
     restores,
     saves,
+    registryCalls,
   };
 }
 
@@ -1383,5 +1398,133 @@ describe("runPost", () => {
     expect(saves.map((s) => s.key)).toEqual(["registry-k"]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatch(/could not write the job summary/i);
+  });
+});
+
+describe("cargo tools", () => {
+  const withTools = (tools: string): Record<string, string> => ({
+    toolchain: "stable",
+    cache: "true",
+    "cache-key-hash": "a1b2c3",
+    "cargo-tools": tools,
+  });
+
+  it("touches neither the registry nor cargo when none are requested", async () => {
+    const h = harness({ inputs: { toolchain: "stable" }, env: cacheEnv });
+    await run(h.deps);
+    expect(h.failures).toEqual([]);
+    expect(h.registryCalls).toEqual([]);
+    expect(h.calls.filter((c) => c.file === "cargo")).toEqual([]);
+  });
+
+  // A pinned version is already concrete, so the registry is never consulted —
+  // which is what makes an outage unable to affect it.
+  it("never consults the registry for a pinned version", async () => {
+    const h = harness({
+      inputs: withTools("cargo-deny@0.16.1"),
+      env: cacheEnv,
+      execResults: {
+        "--version": [{ status: null, error: new Error("ENOENT") }],
+      },
+    });
+    await run(h.deps);
+    expect(h.failures).toEqual([]);
+    expect(h.registryCalls).toEqual([]);
+  });
+
+  it("resolves a bare name through the registry", async () => {
+    const h = harness({
+      inputs: withTools("cargo-nextest"),
+      env: cacheEnv,
+      toolVersions: { "cargo-nextest": "0.9.100" },
+    });
+    await run(h.deps);
+    expect(h.failures).toEqual([]);
+    expect(h.registryCalls).toEqual(["cargo-nextest"]);
+  });
+
+  // THE ordering constraint. `toolSetHash` is a segment of the bin key, so
+  // resolution has to complete before the keys are derived — if it did not,
+  // the bin key would carry the empty-set digest and every tooled job would
+  // share one entry.
+  it("derives the bin key from the resolved tool set", async () => {
+    const bare = harness({
+      inputs: withTools("cargo-nextest"),
+      env: cacheEnv,
+      toolVersions: { "cargo-nextest": "0.9.100" },
+    });
+    await run(bare.deps);
+
+    const none = harness({
+      inputs: {
+        toolchain: "stable",
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+      },
+      env: cacheEnv,
+    });
+    await run(none.deps);
+
+    const keyOf = (h: Harness): string =>
+      JSON.parse(h.outputs["cache"] ?? "null").layers.bin.key;
+    expect(keyOf(bare)).not.toBe(keyOf(none));
+  });
+
+  // THE other ordering constraint (D2). A restored bin layer is what makes
+  // most installs unnecessary, so verification must follow the restore —
+  // checking first would install what the cache was about to supply.
+  it("verifies tools only after the cache has been restored", async () => {
+    const h = harness({
+      inputs: withTools("cargo-deny@0.16.1"),
+      env: cacheEnv,
+      execResults: {
+        "--version": [{ status: 0, stdout: "cargo-deny 0.16.1" }],
+      },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    // The bin restore is recorded before the tool is ever probed.
+    const probedAt = h.calls.findIndex((c) => c.file === "cargo-deny");
+    expect(probedAt).toBeGreaterThan(-1);
+    expect(h.restores.length).toBe(3);
+  });
+
+  it("installs a tool the restore did not supply", async () => {
+    const h = harness({
+      inputs: withTools("cargo-deny@0.16.1"),
+      env: cacheEnv,
+      execResults: {
+        "--version": [{ status: null, error: new Error("ENOENT") }],
+      },
+    });
+    await run(h.deps);
+    expect(h.failures).toEqual([]);
+    expect(
+      h.calls.map((c) => c.args).filter((a) => a[0] === "install"),
+    ).toEqual([
+      ["install", "cargo-deny", "--version", "0.16.1", "--locked", "--force"],
+    ]);
+  });
+
+  // Validation is worth nothing if it happens after a ten-minute install.
+  it("rejects a malformed cargo-tools before running any command", async () => {
+    const h = harness({
+      inputs: withTools("cargo-deny; id > /tmp/pwned"),
+      env: cacheEnv,
+    });
+    await run(h.deps);
+    expect(h.failures[0]).toMatch(/not a valid cargo tool name/);
+    expect(h.calls).toEqual([]);
+  });
+
+  it("reports a duplicate tool before running any command", async () => {
+    const h = harness({
+      inputs: withTools("cargo-deny@0.1.0,cargo-deny@0.2.0"),
+      env: cacheEnv,
+    });
+    await run(h.deps);
+    expect(h.failures[0]).toMatch(/more than once/);
+    expect(h.calls).toEqual([]);
   });
 });

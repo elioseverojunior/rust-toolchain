@@ -12308,7 +12308,7 @@ var require_fetch = __commonJS((exports, module) => {
   function handleFetchDone(response) {
     finalizeAndReportTiming(response, "fetch");
   }
-  function fetch(input, init = undefined) {
+  function fetch2(input, init = undefined) {
     webidl.argumentLengthCheck(arguments, 1, "globalThis.fetch");
     let p = createDeferredPromise();
     let requestObject;
@@ -13198,7 +13198,7 @@ var require_fetch = __commonJS((exports, module) => {
     }
   }
   module.exports = {
-    fetch,
+    fetch: fetch2,
     Fetch,
     fetching,
     finalizeAndReportTiming
@@ -62894,15 +62894,131 @@ function readBooleanInput(reader, name, fallback) {
 
 // src/tools.ts
 import { createHash as createHash4 } from "node:crypto";
+var LATEST = "latest";
+function parseToolSpecs(value) {
+  const specs = parseCommaList(value).map(toSpec);
+  const seen = new Set;
+  for (const { name } of specs) {
+    if (seen.has(name)) {
+      throw new Error(`\`cargo-tools\` lists ${name} more than once. Two versions of one ` + "tool cannot both be installed, so pick the one you want rather " + "than leaving the choice to the order they were written in.");
+    }
+    seen.add(name);
+  }
+  return specs;
+}
+function toSpec(entry) {
+  const at = entry.indexOf("@");
+  const name = at === -1 ? entry : entry.slice(0, at);
+  const version3 = at === -1 ? LATEST : entry.slice(at + 1);
+  assertIdentifier("name", name, entry);
+  assertIdentifier("version", version3, entry);
+  return { name, version: version3 };
+}
+function assertIdentifier(kind, value, entry) {
+  if (isRustupIdentifier(value))
+    return;
+  throw new Error(`"${value}" is not a valid cargo tool ${kind}, in \`cargo-tools\` entry ` + `"${entry}". Entries look like \`<name>\` or \`<name>@<version>\`, ` + "where both halves are letters, digits, dots, underscores and dashes.");
+}
+var UNRESOLVED_VERSION = "unknown";
+async function resolveToolVersions(specs, deps) {
+  const outcomes = await Promise.all(specs.map((spec) => resolveOne(spec, deps)));
+  return {
+    tools: outcomes.map((outcome) => outcome.tool),
+    unresolved: outcomes.flatMap((outcome) => outcome.failure ? [outcome.failure] : [])
+  };
+}
+async function resolveOne(spec, deps) {
+  if (spec.version !== LATEST) {
+    return { tool: { name: spec.name, version: spec.version } };
+  }
+  let reason = "";
+  for (let attempt = 1;attempt <= deps.attempts; attempt++) {
+    try {
+      const version3 = await deps.client.latestVersion(spec.name);
+      return { tool: { name: spec.name, version: version3 } };
+    } catch (error2) {
+      reason = describeError(error2);
+      if (attempt < deps.attempts) {
+        await deps.delay(deps.backoffMs * 2 ** (attempt - 1));
+      }
+    }
+  }
+  return {
+    tool: { name: spec.name, version: UNRESOLVED_VERSION },
+    failure: { name: spec.name, reason }
+  };
+}
 function hashToolSet(tools) {
   const canonical = tools.map(({ name, version: version3 }) => `${name}@${version3}`).sort().join(`
 `);
   return createHash4("sha256").update(canonical).digest("hex").slice(0, 8);
 }
+function parseToolVersion(output) {
+  return /(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)/.exec(output)?.[1];
+}
+function installedVersion(name, deps) {
+  const result = deps.exec(name, ["--version"], {
+    env: deps.env,
+    timeoutMs: deps.timeoutMs,
+    capture: true
+  });
+  if (result.error || result.status !== 0)
+    return;
+  return parseToolVersion(result.stdout ?? "");
+}
+function installTool(tool, deps) {
+  const args = [
+    "install",
+    tool.name,
+    "--version",
+    tool.version,
+    "--locked",
+    "--force"
+  ];
+  let last = { status: null };
+  for (let attempt = 1;attempt <= deps.attempts; attempt++) {
+    last = deps.exec("cargo", args, {
+      env: deps.env,
+      timeoutMs: deps.timeoutMs
+    });
+    if (last.status === 0)
+      return;
+    if (attempt < deps.attempts) {
+      deps.sleep(deps.backoffMs * 2 ** (attempt - 1));
+    }
+  }
+  const detail = last.error ? `could not run: ${last.error.message}` : `failed with exit code ${last.status}`;
+  throw new Error(`cargo ${args.join(" ")} ${detail}`);
+}
+function ensureTools(resolution, deps) {
+  const unresolved = new Set(resolution.unresolved.map((tool) => tool.name));
+  return resolution.tools.map((tool) => {
+    const present = installedVersion(tool.name, deps);
+    if (unresolved.has(tool.name)) {
+      if (present === undefined) {
+        throw new Error(`${tool.name} could not be resolved against the registry and is not ` + "installed, so there is nothing to fall back to. Pin a version " + `(\`${tool.name}@<version>\`) to skip the registry entirely.`);
+      }
+      deps.log.warning(`${tool.name}: the registry could not be reached, so the installed ` + `binary (reporting ${present}) is used as-is and its version is ` + `published as ${UNRESOLVED_VERSION}. Pin a version to avoid this.`);
+      return { name: tool.name, version: tool.version, action: "unverified" };
+    }
+    if (present === tool.version) {
+      deps.log.info(`${tool.name}: already at ${tool.version}`);
+      return { name: tool.name, version: tool.version, action: "kept" };
+    }
+    deps.log.info(`${tool.name}: installing ${tool.version}` + (present === undefined ? "" : `, replacing ${present}`));
+    installTool(tool, deps);
+    return { name: tool.name, version: tool.version, action: "installed" };
+  });
+}
 
 // src/cache/inputs.ts
-var MISSING_LOCK_HASH_MESSAGE = "`cache-key-hash` is required when `cache` is true. This action cannot " + "compute it — `hashFiles()` is a workflow-expression function — so " + `pass the workflow's own value:
-` + "  cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}\n" + "Without it the cache keys never change: they hit exactly on every " + "run and serve the same crates for the life of the repository.";
+var LAYER_KEYS_ON_LOCK_HASH = {
+  registry: true,
+  build: true,
+  bin: false
+};
+var MISSING_LOCK_HASH_MESSAGE = "`cache-key-hash` is required when the `registry` or `build` layer is " + "enabled. This action cannot compute it — `hashFiles()` is a " + `workflow-expression function — so pass the workflow's own value:
+` + "  cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}\n" + "Without it those keys never change: they hit exactly on every run and " + "serve the same crates for the life of the repository. A `bin`-only " + "`cache-layers` needs no hash, because that layer keys on the resolved " + "cargo-tool set instead.";
 var MAX_CACHE_KEY_LENGTH = 512;
 var SPEC_CACHE_KEY_STAND_IN = generateSpecCacheKey("0".repeat(12), {
   channel: "",
@@ -62933,8 +63049,9 @@ function readCacheRequest(source) {
     return;
   const layers = parseCacheLayers(source.getInput("cache-layers").trim() || CACHE_LAYER_IDS.join(","));
   const lockHash = source.getInput("cache-key-hash").trim();
-  if (!lockHash)
+  if (!lockHash && layers.some((layer) => LAYER_KEYS_ON_LOCK_HASH[layer])) {
     throw new Error(MISSING_LOCK_HASH_MESSAGE);
+  }
   const suffix = readCacheKeySuffix(source);
   const context3 = {
     os: requireRunnerEnv(source, "RUNNER_OS"),
@@ -63103,6 +63220,7 @@ var RUSTUP_TIMEOUT_MS = 600000;
 var RUSTC_TIMEOUT_MS = 30000;
 var MAX_ATTEMPTS = 3;
 var BACKOFF_BASE_MS = 1000;
+var CARGO_INSTALL_TIMEOUT_MS = 900000;
 function describeFailure(args, result) {
   const command = ["rustup", ...args].join(" ");
   if (result.error)
@@ -63253,8 +63371,8 @@ function foldRestoredResults(cache, restored) {
   }
   return { ...cache, layers };
 }
-async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome) {
-  const cache = buildCacheOutputs(cacheRequest, specCacheKey, hashToolSet([]));
+async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome, toolSetHash) {
+  const cache = buildCacheOutputs(cacheRequest, specCacheKey, toolSetHash);
   if (!cacheRequest)
     return { cache, cacheHit: false };
   const plans = buildLayerPlans(cacheRequest, cache, cargoHome);
@@ -63280,6 +63398,7 @@ async function run(deps) {
       getInput: deps.core.getInput,
       env: deps.env
     });
+    const toolSpecs = parseToolSpecs(deps.core.getInput("cargo-tools"));
     const cacheOnFailure = readBooleanInput(deps.core, "cache-on-failure", false);
     deps.core.exportVariable("RUST_TOOLCHAIN_CACHE_ON_FAILURE", String(cacheOnFailure.value));
     const config = resolveConfiguration(deps);
@@ -63322,7 +63441,22 @@ async function run(deps) {
     deps.core.info(rustc.banner);
     applyCargoDefaults(deps, rustc.info.version);
     const specCacheKey = generateSpecCacheKey(rustc.info.cacheKey, spec);
-    const { cache, cacheHit } = await resolveCacheLifecycle(deps, cacheRequest, specCacheKey, rustupEnv.CARGO_HOME);
+    const toolResolution = await resolveToolVersions(toolSpecs, {
+      client: deps.registry,
+      attempts: MAX_ATTEMPTS,
+      backoffMs: BACKOFF_BASE_MS,
+      delay: deps.delay
+    });
+    const { cache, cacheHit } = await resolveCacheLifecycle(deps, cacheRequest, specCacheKey, rustupEnv.CARGO_HOME, hashToolSet(toolResolution.tools));
+    ensureTools(toolResolution, {
+      exec: deps.exec,
+      env,
+      attempts: MAX_ATTEMPTS,
+      backoffMs: BACKOFF_BASE_MS,
+      sleep: deps.sleep,
+      timeoutMs: CARGO_INSTALL_TIMEOUT_MS,
+      log: { info: deps.core.info, warning: deps.core.warning }
+    });
     const outputs = buildActionOutputs({
       spec,
       inputs: config.inputs,
@@ -63378,6 +63512,24 @@ var fs8 = {
   readdir: (dir) => readdirSync(dir),
   stat: (path12) => statSync2(path12)
 };
+var registry = {
+  latestVersion: async (name) => {
+    const response = await fetch(`https://crates.io/api/v1/crates/${encodeURIComponent(name)}`, {
+      headers: {
+        "user-agent": "elioseverojunior/rust-toolchain (https://github.com/elioseverojunior/rust-toolchain)"
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`crates.io answered ${response.status} for ${name}`);
+    }
+    const body2 = await response.json();
+    const version3 = body2.crate?.max_stable_version;
+    if (!version3) {
+      throw new Error(`crates.io published no stable version for ${name}`);
+    }
+    return version3;
+  }
+};
 if (process.env.STATE_isPost === "true") {
   await runPost({
     cache: client,
@@ -63417,6 +63569,8 @@ if (process.env.STATE_isPost === "true") {
     sleep: (ms) => {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
     },
-    cache: client
+    delay: (ms) => new Promise((resolve3) => setTimeout(resolve3, ms)),
+    cache: client,
+    registry
   });
 }

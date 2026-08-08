@@ -5,14 +5,18 @@
 import { describe, expect, it } from "bun:test";
 
 import type {
+  EnsureDeps,
   RegistryClient,
   ResolveDeps,
   ResolvedTool,
+  ToolExecResult,
   ToolSpec,
 } from "@/tools";
 import {
+  ensureTools,
   hashToolSet,
   parseToolSpecs,
+  parseToolVersion,
   resolveToolVersions,
   UNRESOLVED_VERSION,
 } from "@/tools";
@@ -377,5 +381,213 @@ describe("hashToolSet", () => {
     expect(hashToolSet([])).toMatch(/^[0-9a-f]{8}$/);
     expect(hashToolSet([])).toBe(hashToolSet([]));
     expect(hashToolSet([])).not.toBe(hashToolSet([tool("x", "1.0.0")]));
+  });
+});
+
+describe("parseToolVersion", () => {
+  it.each([
+    ["cargo-deny 0.16.1", "0.16.1"],
+    ["cargo-nextest-cargo-nextest 0.9.100", "0.9.100"],
+    ["something 1.0.0-beta.2", "1.0.0-beta.2"],
+  ])("reads %s", (banner, expected) => {
+    expect(parseToolVersion(banner)).toBe(expected);
+  });
+
+  it("returns undefined when there is no version to read", () => {
+    expect(parseToolVersion("command not found")).toBeUndefined();
+  });
+});
+
+interface ExecCall {
+  file: string;
+  args: string[];
+}
+
+/**
+ * Records every invocation and answers from a queue keyed on the first argv
+ * word, so a test can make one `cargo install` attempt fail and the next
+ * succeed. An unqueued call answers success with no stdout, which is what a
+ * `--version` probe for an absent tool must NOT look like — those queue an
+ * explicit spawn error instead.
+ */
+const runner = (
+  answers: Record<string, ToolExecResult[]> = {},
+): EnsureDeps & { calls: ExecCall[]; pauses: number[] } => {
+  const calls: ExecCall[] = [];
+  const pauses: number[] = [];
+  return {
+    calls,
+    pauses,
+    env: {},
+    attempts: 3,
+    backoffMs: 1_000,
+    timeoutMs: 600_000,
+    sleep: (ms): void => {
+      pauses.push(ms);
+    },
+    log: { info: (): void => {}, warning: (): void => {} },
+    exec: (file, args): ToolExecResult => {
+      calls.push({ file, args });
+      return answers[file]?.shift() ?? { status: 0, stdout: "" };
+    },
+  };
+};
+
+const absent: ToolExecResult = { status: null, error: new Error("ENOENT") };
+
+const resolution = (
+  tools: ResolvedTool[],
+  unresolved: { name: string; reason: string }[] = [],
+): {
+  tools: ResolvedTool[];
+  unresolved: { name: string; reason: string }[];
+} => ({
+  tools,
+  unresolved,
+});
+
+describe("ensureTools", () => {
+  it("keeps a tool already at the resolved version", () => {
+    const deps = runner({
+      "cargo-deny": [{ status: 0, stdout: "cargo-deny 0.16.1" }],
+    });
+    const outcomes = ensureTools(
+      resolution([{ name: "cargo-deny", version: "0.16.1" }]),
+      deps,
+    );
+    expect(outcomes).toEqual([
+      { name: "cargo-deny", version: "0.16.1", action: "kept" },
+    ]);
+    expect(deps.calls.map((c) => c.file)).toEqual(["cargo-deny"]);
+  });
+
+  // Exact comparison, not containment: 0.16.1 is a substring of 0.16.10, and
+  // treating that as a match would leave the wrong binary in place.
+  it("reinstalls when the installed version merely looks similar", () => {
+    const deps = runner({
+      "cargo-deny": [{ status: 0, stdout: "cargo-deny 0.16.10" }],
+    });
+    const outcomes = ensureTools(
+      resolution([{ name: "cargo-deny", version: "0.16.1" }]),
+      deps,
+    );
+    expect(outcomes[0]?.action).toBe("installed");
+  });
+
+  it("installs an absent tool with a locked, forced, pinned argv", () => {
+    const deps = runner({ "cargo-nextest": [absent] });
+    ensureTools(
+      resolution([{ name: "cargo-nextest", version: "0.9.100" }]),
+      deps,
+    );
+    expect(deps.calls[1]).toEqual({
+      file: "cargo",
+      args: [
+        "install",
+        "cargo-nextest",
+        "--version",
+        "0.9.100",
+        "--locked",
+        "--force",
+      ],
+    });
+  });
+
+  it("retries a failed install with growing backoff", () => {
+    const deps = runner({
+      "cargo-deny": [absent],
+      cargo: [{ status: 1 }, { status: 0 }],
+    });
+    const outcomes = ensureTools(
+      resolution([{ name: "cargo-deny", version: "0.16.1" }]),
+      deps,
+    );
+    expect(outcomes[0]?.action).toBe("installed");
+    expect(deps.pauses).toEqual([1_000]);
+  });
+
+  it("fails once the install attempts are exhausted", () => {
+    const deps = runner({
+      "cargo-deny": [absent],
+      cargo: [{ status: 1 }, { status: 1 }, { status: 1 }],
+    });
+    expect(() =>
+      ensureTools(
+        resolution([{ name: "cargo-deny", version: "0.16.1" }]),
+        deps,
+      ),
+    ).toThrow(/cargo install cargo-deny/);
+  });
+
+  it("names a spawn failure rather than an exit code", () => {
+    const deps = runner({
+      "cargo-deny": [absent],
+      cargo: [absent, absent, absent],
+    });
+    expect(() =>
+      ensureTools(
+        resolution([{ name: "cargo-deny", version: "0.16.1" }]),
+        deps,
+      ),
+    ).toThrow(/could not run/);
+  });
+
+  // D1: a registry outage must not fail a job whose tool is already present.
+  it("accepts an unresolved tool that is already installed, and warns", () => {
+    const warnings: string[] = [];
+    const deps = runner({
+      "cargo-deny": [{ status: 0, stdout: "cargo-deny 0.15.0" }],
+    });
+    deps.log.warning = (message): void => {
+      warnings.push(message);
+    };
+    const outcomes = ensureTools(
+      resolution(
+        [{ name: "cargo-deny", version: UNRESOLVED_VERSION }],
+        [{ name: "cargo-deny", reason: "503" }],
+      ),
+      deps,
+    );
+    expect(outcomes).toEqual([
+      { name: "cargo-deny", version: UNRESOLVED_VERSION, action: "unverified" },
+    ]);
+    expect(deps.calls.map((c) => c.file)).toEqual(["cargo-deny"]);
+    expect(warnings.join("\n")).toMatch(/registry could not be reached/);
+  });
+
+  // ...but with nothing to fall back to there is no honest way to continue.
+  it("fails an unresolved tool that is not installed", () => {
+    const deps = runner({ "cargo-deny": [absent] });
+    expect(() =>
+      ensureTools(
+        resolution(
+          [{ name: "cargo-deny", version: UNRESOLVED_VERSION }],
+          [{ name: "cargo-deny", reason: "503" }],
+        ),
+        deps,
+      ),
+    ).toThrow(/nothing to fall back to/);
+  });
+
+  it("handles a mixed set in the order requested", () => {
+    const deps = runner({
+      "a-tool": [{ status: 0, stdout: "a-tool 1.0.0" }],
+      "b-tool": [absent],
+    });
+    expect(
+      ensureTools(
+        resolution([
+          { name: "a-tool", version: "1.0.0" },
+          { name: "b-tool", version: "2.0.0" },
+        ]),
+        deps,
+      ).map((o) => `${o.name}:${o.action}`),
+    ).toEqual(["a-tool:kept", "b-tool:installed"]);
+  });
+
+  it("does nothing when no tools were requested", () => {
+    const deps = runner();
+    expect(ensureTools(resolution([]), deps)).toEqual([]);
+    expect(deps.calls).toEqual([]);
   });
 });

@@ -51,7 +51,14 @@ import {
   toOutputEntries,
   type CacheOutputs,
 } from "@rust-toolchain/outputs";
-import { hashToolSet } from "@rust-toolchain/tools";
+import {
+  ensureTools,
+  hashToolSet,
+  parseToolSpecs,
+  resolveToolVersions,
+  type RegistryClient,
+  type ToolResolution,
+} from "@rust-toolchain/tools";
 
 /** Outcome of one process invocation. */
 export interface ExecResult {
@@ -96,8 +103,18 @@ export interface ActionDeps {
   /** `process.platform` — decides the rustup installer and path layout. */
   platform: string;
   sleep: (ms: number) => void;
+  /**
+   * Promise-based pause, for the concurrent registry lookups.
+   *
+   * Separate from `sleep` because that one blocks the thread through
+   * `Atomics.wait`, which would serialise `resolveToolVersions` into one
+   * lookup at a time. `sleep` stays for the synchronous `spawnSync` retries.
+   */
+  delay: (ms: number) => Promise<void>;
   /** The only real implementation wraps `@actions/cache`, in `src/index.ts`. */
   cache: CacheClient;
+  /** The only real implementation calls crates.io, also in `src/index.ts`. */
+  registry: RegistryClient;
 }
 
 /** Toolchain downloads are network-bound; a stalled one must not hang the job. */
@@ -105,6 +122,8 @@ const RUSTUP_TIMEOUT_MS = 600_000;
 const RUSTC_TIMEOUT_MS = 30_000;
 const MAX_ATTEMPTS = 3;
 const BACKOFF_BASE_MS = 1_000;
+/** `cargo install` compiles from source, so it needs far longer than rustup. */
+const CARGO_INSTALL_TIMEOUT_MS = 900_000;
 
 function describeFailure(args: string[], result: ExecResult): string {
   const command = ["rustup", ...args].join(" ");
@@ -419,12 +438,9 @@ async function resolveCacheLifecycle(
   cacheRequest: CacheRequest | undefined,
   specCacheKey: string,
   cargoHome: string,
+  toolSetHash: string,
 ): Promise<{ cache: CacheOutputs; cacheHit: boolean }> {
-  // `hashToolSet([])` because nothing resolves cargo tools yet — Task 6 of the
-  // Phase C plan replaces this with the resolved set. The empty digest is a
-  // real 8-character value rather than the empty string, so the `bin` key keeps
-  // its shape and does not collapse a segment in the meantime.
-  const cache = buildCacheOutputs(cacheRequest, specCacheKey, hashToolSet([]));
+  const cache = buildCacheOutputs(cacheRequest, specCacheKey, toolSetHash);
   if (!cacheRequest) return { cache, cacheHit: false };
 
   const plans = buildLayerPlans(cacheRequest, cache, cargoHome);
@@ -486,6 +502,12 @@ export async function run(deps: ActionDeps): Promise<void> {
       getInput: deps.core.getInput,
       env: deps.env,
     });
+
+    // Parsed alongside the cache inputs, and for the same reason: it is
+    // checked against nothing but itself, so a malformed tool name must fail
+    // before the rustup bootstrap it would otherwise throw away. Resolution is
+    // network-bound and waits until further down.
+    const toolSpecs = parseToolSpecs(deps.core.getInput("cargo-tools"));
 
     // Exported as early as possible: `post-if` reads this even when the job
     // fails at a later, unrelated step, long after this action returned.
@@ -576,6 +598,20 @@ export async function run(deps: ActionDeps): Promise<void> {
     applyCargoDefaults(deps, rustc.info.version);
 
     const specCacheKey = generateSpecCacheKey(rustc.info.cacheKey, spec);
+
+    // BEFORE the keys are derived, unavoidably: `toolSetHash` is a segment of
+    // the `bin` key, so resolving afterwards would key every tooled job on the
+    // empty-set digest and collapse them onto one entry. A pinned version never
+    // reaches the client, so this is a no-op for a fully pinned `cargo-tools`.
+    const toolResolution: ToolResolution = await resolveToolVersions(
+      toolSpecs,
+      {
+        client: deps.registry,
+        attempts: MAX_ATTEMPTS,
+        backoffMs: BACKOFF_BASE_MS,
+        delay: deps.delay,
+      },
+    );
     // Lands here, after the toolchain install, unavoidably: the `build` key
     // carries `specCacheKey`, which does not exist until rustc has run. These
     // are cargo caches for later `cargo` steps, not rustup itself, so the
@@ -585,7 +621,24 @@ export async function run(deps: ActionDeps): Promise<void> {
       cacheRequest,
       specCacheKey,
       rustupEnv.CARGO_HOME,
+      hashToolSet(toolResolution.tools),
     );
+
+    // AFTER the restore, and that ordering is the point (D2 of the Phase C
+    // plan). A restored `bin` layer is what makes most of these a no-op, so
+    // verifying first would install exactly what the cache was about to
+    // supply. It lives outside `cache/lifecycle.ts` because it needs `exec`,
+    // which that module deliberately does without so it stays testable against
+    // plain values.
+    ensureTools(toolResolution, {
+      exec: deps.exec,
+      env,
+      attempts: MAX_ATTEMPTS,
+      backoffMs: BACKOFF_BASE_MS,
+      sleep: deps.sleep,
+      timeoutMs: CARGO_INSTALL_TIMEOUT_MS,
+      log: { info: deps.core.info, warning: deps.core.warning },
+    });
 
     const outputs = buildActionOutputs({
       spec,
