@@ -215,8 +215,20 @@ export interface RegistryClient {
 
 export interface ResolvedTool {
   name: string;
-  /** The concrete version, or `"unknown"` after a registry outage (see D1). */
+  /** The concrete version, or `UNRESOLVED_VERSION` after an outage (see D1). */
   version: string;
+}
+
+/** A tool the registry could not answer for, and why. */
+export interface UnresolvedTool {
+  name: string;
+  reason: string;
+}
+
+/** Every tool, plus the subset the registry could not answer for. */
+export interface ToolResolution {
+  tools: ResolvedTool[];
+  unresolved: UnresolvedTool[];
 }
 ```
 
@@ -225,6 +237,19 @@ spec is resolved through `RegistryClient`, retried with the same bounded backoff
 exhaustion the resolver does not throw: it reports the tool as unresolved, and Task 6 decides what to do with that
 under D1. Resolution runs concurrently across tools, each caught at its own boundary, so one unreachable tool
 cannot lose the results of the others — the same shape `saveLayers` uses.
+
+**Two shapes this task settled, recorded because they differ from the sketch above as first written.**
+
+`resolveToolVersions` returns `ToolResolution`, not a bare `ResolvedTool[]`. A sentinel version alone cannot carry
+_why_ the registry failed, and D1 requires the step to warn loudly — a warning naming the cause is the whole point
+of warning. The two-list shape is `measurePaths`'s (`{ bytes, unmeasured }`), for the same reason. `unresolved` is
+the authoritative signal and callers must branch on it rather than on `version === UNRESOLVED_VERSION`, since
+nothing stops someone pinning `@unknown`.
+
+The retry policy arrives through `ResolveDeps` rather than being restated in `src/tools.ts`. `MAX_ATTEMPTS` and
+`BACKOFF_BASE_MS` are module-private in `src/action.ts`, and `action.ts` will import `tools.ts` in Task 6 — so
+importing them back would be a cycle. Its `delay` is promise-based rather than reusing `ActionDeps.sleep`, whose
+`Atomics.wait` would block the thread and serialise the concurrent resolution above into one lookup at a time.
 
 **Steps:**
 

@@ -69,6 +69,8 @@ describe("library barrel", () => {
         "toOutputEntries",
         // tools.ts
         "parseToolSpecs",
+        "resolveToolVersions",
+        "UNRESOLVED_VERSION",
       ].sort(),
     );
   });
