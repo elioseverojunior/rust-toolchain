@@ -1261,23 +1261,33 @@ describe("cache-on-failure export", () => {
 describe("runPost", () => {
   const postDeps = (
     state: Record<string, string>,
-    options: { summaryFails?: boolean } = {},
+    options: {
+      summaryFails?: boolean;
+      metadata?: string;
+      metadataFails?: boolean;
+      files?: string[];
+      fingerprintDirs?: string[];
+      sizes?: (paths: string[]) => number;
+    } = {},
   ): {
     deps: PostDeps;
     restores: { key: string }[];
     saves: { key: string }[];
     summaries: string[];
     warnings: string[];
+    logs: string[];
   } => {
     const restores: { key: string }[] = [];
     const saves: { key: string }[] = [];
     const summaries: string[] = [];
     const warnings: string[] = [];
+    const logs: string[] = [];
     return {
       restores,
       saves,
       summaries,
       warnings,
+      logs,
       deps: {
         cache: {
           restore: async (
@@ -1293,7 +1303,9 @@ describe("runPost", () => {
         },
         core: {
           getState: (name) => state[name] ?? "",
-          info: (): void => {},
+          info: (message): void => {
+            logs.push(message);
+          },
           warning: (message): void => {
             warnings.push(message);
           },
@@ -1308,7 +1320,18 @@ describe("runPost", () => {
             }),
           },
         },
-        measure: () => ({ bytes: 128, unmeasured: [] }),
+        measure: (paths: string[]) => ({
+          bytes: options.sizes?.(paths) ?? 128,
+          unmeasured: [],
+        }),
+        metadata: {
+          read: async (): Promise<string> => {
+            if (options.metadataFails) throw new Error("cargo: not found");
+            return options.metadata ?? JSON.stringify({ packages: [] });
+          },
+        },
+        walk: () => options.files ?? [],
+        readdir: () => options.fingerprintDirs ?? [],
       },
     };
   };
@@ -1400,6 +1423,221 @@ describe("runPost", () => {
     expect(saves.map((s) => s.key)).toEqual(["registry-k"]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatch(/could not write the job summary/i);
+  });
+
+  describe("post-phase pruning", () => {
+    const WS = [{ manifestDir: "/w", targetDir: "/w/target" }];
+    const FILES = [
+      "/w/target/debug/deps/libserde-aaaaaaaaaaaaaaaa.rlib",
+      "/w/target/debug/deps/libgone-bbbbbbbbbbbbbbbb.rlib",
+    ];
+    const METADATA = JSON.stringify({
+      packages: [
+        { id: "r#serde@1.0.0", name: "serde", version: "1.0.0" },
+        { id: "p#w@0.1.0", name: "w", version: "0.1.0" },
+      ],
+      workspace_members: ["p#w@0.1.0"],
+    });
+
+    const cacheState = (prune: string | undefined): Record<string, string> => ({
+      isPost: "true",
+      cache: JSON.stringify({
+        budget: 0,
+        prune,
+        workspaces: prune === undefined ? undefined : WS,
+        cargoHome: "/c",
+        plans: [
+          { layer: "registry", key: "reg-k", restoreKeys: [], paths: ["/c"] },
+          {
+            layer: "build",
+            key: "build-k",
+            restoreKeys: [],
+            paths: ["/w/target/**"],
+          },
+        ],
+        restored: [
+          { layer: "registry", result: "miss" },
+          { layer: "build", result: "miss" },
+        ],
+      }),
+    });
+
+    // Half the bytes belong to the dropped crate, so the guard's threshold is
+    // comfortably cleared and pruning actually applies.
+    const sizes = (paths: string[]): number =>
+      paths.some((p) => p.includes("libgone")) ? 200 : 100;
+
+    it("narrows the build layer to the keep-set and the registry to resolved crates", async () => {
+      const saved: string[][] = [];
+      const { deps } = postDeps(cacheState("safe"), {
+        metadata: METADATA,
+        files: FILES,
+        fingerprintDirs: ["serde-aaaaaaaaaaaaaaaa", "gone-bbbbbbbbbbbbbbbb"],
+        sizes,
+      });
+      const original = deps.cache.save;
+      deps.cache.save = async (paths, key): Promise<void> => {
+        saved.push(paths);
+        await original(paths, key);
+      };
+
+      await runPost(deps);
+
+      const build = saved.find((p) => p.some((x) => x.includes("/w/target/")));
+      expect(build).toContain(
+        "/w/target/debug/deps/libserde-aaaaaaaaaaaaaaaa.rlib",
+      );
+      expect(build).not.toContain(
+        "/w/target/debug/deps/libgone-bbbbbbbbbbbbbbbb.rlib",
+      );
+      const registry = saved.find((p) =>
+        p.some((x) => x.includes("/c/registry")),
+      );
+      expect(registry).toContain("/c/registry/cache/**/serde-1.0.0.crate");
+    });
+
+    it("reports what pruning removed in the summary", async () => {
+      const { deps, summaries } = postDeps(cacheState("safe"), {
+        metadata: METADATA,
+        files: FILES,
+        fingerprintDirs: ["serde-aaaaaaaaaaaaaaaa", "gone-bbbbbbbbbbbbbbbb"],
+        sizes,
+      });
+      await runPost(deps);
+      expect(summaries[0]).toMatch(/\| build \| miss \| \d+ \|/);
+    });
+
+    // `off` must not even ask cargo, which is what makes it usable on a runner
+    // that has no cargo on PATH at all.
+    it("does not consult cargo at all when pruning is off", async () => {
+      let asked = false;
+      const { deps } = postDeps(cacheState("off"), { files: FILES });
+      deps.metadata = {
+        read: async (): Promise<string> => {
+          asked = true;
+          return METADATA;
+        },
+      };
+      await runPost(deps);
+      expect(asked).toBe(false);
+    });
+
+    // THE invariant. Every failure converges on an empty keep-set, and saving
+    // one is a poisoned entry: it hits its key, restores nothing, and leaves
+    // every later job rebuilding while believing it was warm.
+    it("falls back to the unpruned paths when cargo metadata fails", async () => {
+      const saved: string[][] = [];
+      const { deps, warnings } = postDeps(cacheState("safe"), {
+        metadataFails: true,
+        files: FILES,
+      });
+      const original = deps.cache.save;
+      deps.cache.save = async (paths, key): Promise<void> => {
+        saved.push(paths);
+        await original(paths, key);
+      };
+      await runPost(deps);
+      expect(saved).toContainEqual(["/w/target/**"]);
+      expect(warnings.some((w) => /saving everything instead/.test(w))).toBe(
+        true,
+      );
+    });
+
+    it("falls back when the package set resolves to nothing", async () => {
+      const saved: string[][] = [];
+      const { deps } = postDeps(cacheState("safe"), {
+        metadata: JSON.stringify({ packages: [] }),
+        files: FILES,
+      });
+      const original = deps.cache.save;
+      deps.cache.save = async (paths, key): Promise<void> => {
+        saved.push(paths);
+        await original(paths, key);
+      };
+      await runPost(deps);
+      expect(saved).toContainEqual(["/w/target/**"]);
+    });
+
+    // Task 4 measured the bad trade directly: an unchurned tree spent 904 ms of
+    // glob resolution to drop 0.2% of the bytes. Below the threshold the
+    // unpruned paths are cheaper and lose almost nothing.
+    it("keeps the unpruned paths when pruning would drop too little", async () => {
+      const saved: string[][] = [];
+      const { deps } = postDeps(cacheState("safe"), {
+        metadata: METADATA,
+        files: FILES,
+        fingerprintDirs: ["serde-aaaaaaaaaaaaaaaa", "gone-bbbbbbbbbbbbbbbb"],
+        sizes: () => 100,
+      });
+      const original = deps.cache.save;
+      deps.cache.save = async (paths, key): Promise<void> => {
+        saved.push(paths);
+        await original(paths, key);
+      };
+      await runPost(deps);
+      expect(saved).toContainEqual(["/w/target/**"]);
+    });
+
+    // A payload written by a main phase that predates these fields. Absent means
+    // "no pruning was planned", not a fault, so it must not warn — that would
+    // fire on every mid-upgrade job about something nobody can act on.
+    // The bin layer is never pruned -- its key is the resolved tool set, and
+    // its contents are whole binaries with no package to attribute them to --
+    // so it must pass through the rewrite untouched. And an artifact carrying
+    // a hash no fingerprint claims is reported rather than silently kept,
+    // since that count is the only signal that `aggressive` would behave
+    // differently from `safe` on this workspace.
+    it("leaves the bin layer alone and reports unattributable artifacts", async () => {
+      const saved: string[][] = [];
+      const state = JSON.parse(cacheState("safe").cache ?? "{}") as {
+        plans: {
+          layer: string;
+          key: string;
+          restoreKeys: string[];
+          paths: string[];
+        }[];
+      };
+      state.plans.push({
+        layer: "bin",
+        key: "bin-k",
+        restoreKeys: [],
+        paths: ["/c/bin/**"],
+      });
+      const withBin = {
+        isPost: "true",
+        cache: JSON.stringify({
+          ...JSON.parse(cacheState("safe").cache ?? "{}"),
+          plans: state.plans,
+        }),
+      };
+      const { deps, logs } = postDeps(withBin, {
+        metadata: METADATA,
+        files: [
+          ...FILES,
+          "/w/target/debug/deps/libmystery-dddddddddddddddd.rlib",
+        ],
+        fingerprintDirs: ["serde-aaaaaaaaaaaaaaaa", "gone-bbbbbbbbbbbbbbbb"],
+        sizes,
+      });
+      const original = deps.cache.save;
+      deps.cache.save = async (paths, key): Promise<void> => {
+        saved.push(paths);
+        await original(paths, key);
+      };
+
+      await runPost(deps);
+
+      expect(saved).toContainEqual(["/c/bin/**"]);
+      expect(logs.some((l) => /matched no package and were kept/.test(l))).toBe(
+        true,
+      );
+    });
+
+    it("prunes nothing and warns nothing for a pre-upgrade state payload", async () => {
+      const { deps, warnings } = postDeps(cacheState(undefined), {});
+      await runPost(deps);
+      expect(warnings).toEqual([]);
+    });
   });
 });
 

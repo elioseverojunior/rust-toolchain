@@ -43,6 +43,40 @@ const client = {
   },
 };
 
+/**
+ * Every file beneath a directory.
+ *
+ * Here rather than in a library module for the same reason the other adapters
+ * are: it is unmockable filesystem recursion, and `src/index.ts` is invisible
+ * to the coverage gate. `computeKeepSet` takes the resulting list as data.
+ */
+const walk = (dir: string): string[] => {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = `${dir}/${entry}`;
+    if (statSync(full).isDirectory()) out.push(...walk(full));
+    else out.push(full);
+  }
+  return out;
+};
+
+/**
+ * The `cargo metadata` half of the wiring.
+ *
+ * `--locked` on purpose: resolving against a lockfile that would have to be
+ * updated is exactly the case where the package set is untrustworthy, and a
+ * non-zero exit here is caught upstream and downgraded to "save everything".
+ * A wrong package set would prune artifacts a later build needs.
+ */
+const metadata = {
+  read: async (manifestDir: string): Promise<string> =>
+    spawnSync("cargo", ["metadata", "--format-version", "1", "--locked"], {
+      cwd: manifestDir,
+      encoding: "utf-8",
+      maxBuffer: 64 * 1024 * 1024,
+    }).stdout ?? "",
+};
+
 const fs = {
   readdir: (dir: string): string[] => readdirSync(dir),
   stat: (path: string): { size: number; isDirectory: () => boolean } =>
@@ -92,6 +126,9 @@ if (process.env.STATE_isPost === "true") {
     cache: client,
     core: { getState, info, warning, summary },
     measure: (paths) => measurePaths(paths, fs),
+    metadata,
+    walk,
+    readdir: (dir) => readdirSync(dir),
   });
 } else {
   await run({

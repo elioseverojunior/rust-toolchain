@@ -5,6 +5,8 @@
 import type { MeasuredPaths } from "@rust-toolchain/cache/budget";
 import type { CacheClient } from "@rust-toolchain/cache/client";
 import type { CacheLayerId } from "@rust-toolchain/cache/layers";
+import type { Workspace } from "@rust-toolchain/cache/paths";
+import type { PrunePolicy } from "@rust-toolchain/cache/prune";
 import { describeError } from "@rust-toolchain/errors";
 
 /** Everything needed to restore or save one layer. */
@@ -79,6 +81,24 @@ export interface CachePhaseState {
   plans: LayerPlan[];
   restored: RestoredLayer[];
   budget: number;
+  /**
+   * What to do with unattributable artifacts, validated in the main phase.
+   *
+   * Carried across the handoff rather than re-read from the input in the post
+   * phase, so an invalid value fails the job before anything is installed
+   * instead of after a build has already run.
+   */
+  prune: PrunePolicy;
+  /**
+   * The workspaces whose `target/` directories the `build` layer covers.
+   *
+   * The post phase needs both halves: `manifestDir` is where `cargo metadata`
+   * has to run, and `targetDir` is what gets walked. The plans carry only
+   * resolved glob patterns, which neither answers.
+   */
+  workspaces: Workspace[];
+  /** Where the registry layer lives, for pruning its `.crate` files. */
+  cargoHome: string;
 }
 
 /**

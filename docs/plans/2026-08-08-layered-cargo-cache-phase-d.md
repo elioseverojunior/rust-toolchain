@@ -364,9 +364,15 @@ Rebuilds the bundle in this task, because it changes `action.yml`.
 
 **Steps:**
 
-- [ ] Tests: `cache-prune` validated before any command runs; the keep-set computed in the post phase; a metadata failure warning and falling back; an empty package set falling back; `off` using the Phase B set without calling metadata at all.
-- [ ] Implement, wire `src/index.ts`, declare the input in `action.yml`, rebuild `dist/`, gates.
-- [ ] `git commit -S -m "feat(cache): prune the build layer against the resolved package set"`
+- [x] Tests: `cache-prune` validated before any command runs; the keep-set computed in the post phase; a metadata failure warning and falling back; an empty package set falling back; `off` using the Phase B set without calling metadata at all.
+- [x] Implement, wire `src/index.ts`, declare the input in `action.yml`, rebuild `dist/`, gates.
+- [x] `git commit -S -m "feat(cache): prune the build layer against the resolved package set"`
+
+**One guard added that the plan did not foresee, and one that Task 4 required.**
+
+Task 4's threshold shipped as `PRUNE_WORTH_IT`: below a 5% share of the bytes, the unpruned paths are kept, because resolution costs about 1.5 ms per kept entry and therefore grows the _less_ there is to prune. Both measurements it needs were already being taken for `prunedBytes`, so the check is nearly free.
+
+The second was found by a failing test rather than by design. `CachePhaseState` is a **cross-version contract** — `action.yml` invokes `dist/index.js` as two unrelated processes, and during an upgrade the post phase can read a payload written by a main phase that predates `prune`, `workspaces` and `cargoHome`. Treating absent as a fault made the pruning throw and emit a warning on every mid-upgrade job, about something nobody could act on. Absent now means "no pruning was planned" and is silent.
 
 ---
 
