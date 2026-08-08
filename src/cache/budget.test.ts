@@ -132,3 +132,78 @@ describe("measurePaths", () => {
     });
   });
 });
+
+describe("measurePaths honours negations", () => {
+  // The bin layer's shape, which is what exposed this: the negations exclude
+  // ~100% of what the glob root walks. Ignoring them reported 291 MB for a
+  // 233-byte archive — and `cache-budget` is checked against that number.
+  it("excludes files matching an exact negation", () => {
+    const fs = fakeFs({
+      "/c/bin": ["cargo", "rustc", "act-fake-tool"],
+      "/c/bin/cargo": 20_000_000,
+      "/c/bin/rustc": 20_000_000,
+      "/c/bin/act-fake-tool": 50,
+    });
+    expect(
+      measurePaths(["/c/bin/**", "!/c/bin/cargo", "!/c/bin/rustc"], fs).bytes,
+    ).toBe(50);
+  });
+
+  // `**` spans any number of segments, including zero — the depth mistake
+  // Phase B's first `buildPaths` made with a single-level `*`.
+  it.each([
+    ["at depth", "/t/debug/incremental/x"],
+    ["at the root", "/t/incremental/x"],
+  ])("excludes files under a ** negation %s", (_label, victim) => {
+    const fs = fakeFs({
+      "/t": ["debug", "incremental"],
+      "/t/debug": ["incremental"],
+      "/t/debug/incremental": ["x"],
+      "/t/debug/incremental/x": 500,
+      "/t/incremental": ["x"],
+      "/t/incremental/x": 500,
+      "/t/keep": 7,
+    });
+    const measured = measurePaths(["/t/**", "!/t/**/incremental/**"], fs);
+    expect(measured.bytes).toBe(0);
+    expect(victim).toContain("incremental");
+  });
+
+  // THE subtlety. A trailing slash negates DIRECTORY ENTRIES so the tar
+  // manifest stays files-only; it does not exclude the files inside. Treating
+  // it as a subtree exclusion would measure every layer as zero — the opposite
+  // error, and one that would silently disable the budget entirely.
+  it("does not let a directory-only negation exclude the files inside", () => {
+    const fs = fakeFs({
+      "/t": ["debug"],
+      "/t/debug": ["app"],
+      "/t/debug/app": 1_234,
+    });
+    expect(measurePaths(["/t/**", "!/t/", "!/t/**/"], fs).bytes).toBe(1_234);
+  });
+
+  // No path builder emits a single `*` today, so this pins the grammar rather
+  // than a caller: a lone star stays within one segment, and without the
+  // branch a future `*` pattern would be matched as a literal and silently
+  // exclude nothing.
+  it("matches a single star within one segment only", () => {
+    const fs = fakeFs({
+      "/t": ["a.tmp", "keep.rs", "sub"],
+      "/t/a.tmp": 10,
+      "/t/keep.rs": 20,
+      "/t/sub": ["b.tmp"],
+      "/t/sub/b.tmp": 40,
+    });
+    // `/t/*.tmp` takes a.tmp and leaves sub/b.tmp, which is a segment deeper.
+    expect(measurePaths(["/t/**", "!/t/*.tmp"], fs).bytes).toBe(60);
+  });
+
+  it("still counts what no negation matches", () => {
+    const fs = fakeFs({
+      "/t": ["a", "b"],
+      "/t/a": 100,
+      "/t/b": 200,
+    });
+    expect(measurePaths(["/t/**", "!/t/nope"], fs).bytes).toBe(300);
+  });
+});
