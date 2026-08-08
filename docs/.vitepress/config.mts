@@ -157,6 +157,10 @@ export default defineConfig({
             text: "Phase C",
             link: "/plans/2026-08-07-layered-cargo-cache-phase-c",
           },
+          {
+            text: "Phase D",
+            link: "/plans/2026-08-08-layered-cargo-cache-phase-d",
+          },
         ],
       },
     ],
