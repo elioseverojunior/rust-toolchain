@@ -23,10 +23,16 @@ export function renderSummary(
     const note = outcome?.saved
       ? `saved ${outcome.bytes} bytes`
       : (outcome?.reason ?? "not saved");
-    return `| ${entry.layer} | ${entry.result} | ${note} |`;
+    // A dash rather than `0`: "pruned nothing" and "did not prune" are
+    // different states, and a reader deciding whether `cache-prune` is earning
+    // its resolution cost has to be able to tell them apart.
+    const pruned = outcome?.prunedBytes ?? "—";
+    return `| ${entry.layer} | ${entry.result} | ${pruned} | ${note} |`;
   });
 
-  return ["| Layer | Result | Save |", "| --- | --- | --- |", ...rows].join(
-    "\n",
-  );
+  return [
+    "| Layer | Result | Pruned | Save |",
+    "| --- | --- | --- | --- |",
+    ...rows,
+  ].join("\n");
 }
