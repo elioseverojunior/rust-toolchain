@@ -61787,14 +61787,23 @@ function parseWorkspaces(value, root) {
   }
   return workspaces;
 }
-function registryPaths(cargoHome) {
-  return [
-    `${cargoHome}/registry/index`,
-    `${cargoHome}/registry/cache`,
-    `${cargoHome}/git/db`
-  ];
+function registryPaths(cargoHome, packages) {
+  if (packages === undefined || packages.size === 0) {
+    return [
+      `${cargoHome}/registry/index`,
+      `${cargoHome}/registry/cache`,
+      `${cargoHome}/git/db`
+    ];
+  }
+  const crates = [...packages].map((id) => {
+    const at = id.lastIndexOf("@");
+    return `${cargoHome}/registry/cache/**/${id.slice(0, at)}-${id.slice(at + 1)}.crate`;
+  });
+  return [`${cargoHome}/registry/index`, ...crates, `${cargoHome}/git/db`];
 }
-function buildPaths(workspaces) {
+function buildPaths(workspaces, keepSet) {
+  if (keepSet !== undefined && keepSet.length > 0)
+    return [...keepSet];
   return workspaces.flatMap(({ targetDir }) => [
     `${targetDir}/**`,
     `!${targetDir}/**/incremental/**`,
@@ -63105,8 +63114,8 @@ async function restoreLayers(client, plans, log2) {
     }
   }));
 }
-function skipped(layer, reason, bytes) {
-  return { layer, saved: false, reason, bytes };
+function skipped(layer, reason, bytes, prunedBytes) {
+  return { layer, saved: false, reason, bytes, prunedBytes };
 }
 function measureForSave(plan, { measure, log: log2 }) {
   try {
@@ -63124,27 +63133,27 @@ async function saveLayer(plan, previous, args) {
   const { layer } = plan;
   if (previous?.result === "exact") {
     log2.info(`${layer}: unchanged since an exact hit, not saving`);
-    return skipped(layer, "unchanged since an exact hit", 0);
+    return skipped(layer, "unchanged since an exact hit", 0, plan.prunedBytes);
   }
   const measurement = measureForSave(plan, args);
   if (!measurement.measured) {
     const { message } = measurement;
     log2.warning(`${layer}: could not measure its size, not saving — ${message}`);
-    return skipped(layer, `could not measure its size — ${message}`, 0);
+    return skipped(layer, `could not measure its size — ${message}`, 0, plan.prunedBytes);
   }
   const { bytes } = measurement;
   if (budget > 0 && bytes > budget) {
     log2.warning(`${layer}: ${bytes} bytes exceeds the ${budget}-byte \`cache-budget\`, ` + "so it was not saved. An oversized entry evicts other workflows' " + "caches. Raise `cache-budget` to keep it.");
-    return skipped(layer, `over the ${budget}-byte budget`, bytes);
+    return skipped(layer, `over the ${budget}-byte budget`, bytes, plan.prunedBytes);
   }
   try {
     await client.save(plan.paths, plan.key);
     log2.info(`${layer}: saved ${bytes} bytes as ${plan.key}`);
-    return { layer, saved: true, bytes };
+    return { layer, saved: true, bytes, prunedBytes: plan.prunedBytes };
   } catch (error2) {
     const message = describeError(error2);
     log2.warning(`${layer}: save failed, continuing — ${message}`);
-    return skipped(layer, message, bytes);
+    return skipped(layer, message, bytes, plan.prunedBytes);
   }
 }
 async function saveLayers(args) {
@@ -63155,14 +63164,146 @@ async function saveLayers(args) {
   }));
 }
 
+// src/cache/metadata.ts
+var isRecord = (value) => typeof value === "object" && value !== null;
+var identify = (name, version3) => `${name}@${version3}`;
+function readPackage(entry, index) {
+  if (!isRecord(entry)) {
+    throw new Error(`\`cargo metadata\` listed a package at index ${index} that is not an object.`);
+  }
+  const { id, name, version: version3 } = entry;
+  if (typeof name !== "string" || name === "") {
+    throw new Error(`\`cargo metadata\` listed a package at index ${index} with no name.`);
+  }
+  if (typeof version3 !== "string" || version3 === "") {
+    throw new Error(`\`cargo metadata\` listed ${name} with no version, so its artifacts cannot be identified.`);
+  }
+  if (typeof id !== "string" || id === "") {
+    throw new Error(`\`cargo metadata\` listed ${name} with no id, so it cannot be matched against workspace_members.`);
+  }
+  return { id, packageId: identify(name, version3) };
+}
+function parsePackageSet(json) {
+  let document2;
+  try {
+    document2 = JSON.parse(json);
+  } catch (error2) {
+    throw new Error(`\`cargo metadata\` did not emit valid JSON: ${describeError(error2)}`, { cause: error2 });
+  }
+  const raw = isRecord(document2) ? document2.packages : undefined;
+  if (!Array.isArray(raw)) {
+    throw new Error("`cargo metadata` emitted no `packages` array, so no package set could be resolved.");
+  }
+  const packages = new Set;
+  const byId = new Map;
+  raw.forEach((entry, index) => {
+    const { id, packageId } = readPackage(entry, index);
+    packages.add(packageId);
+    byId.set(id, packageId);
+  });
+  const members = isRecord(document2) ? document2.workspace_members : undefined;
+  const workspaceMembers = new Set;
+  if (Array.isArray(members)) {
+    for (const member of members) {
+      const packageId = typeof member === "string" ? byId.get(member) : undefined;
+      if (packageId !== undefined)
+        workspaceMembers.add(packageId);
+    }
+  }
+  return { packages, workspaceMembers };
+}
+
+// src/cache/prune.ts
+var POLICIES = {
+  off: true,
+  safe: true,
+  aggressive: true
+};
+var DEFAULT_POLICY = "safe";
+function parsePrunePolicy(value) {
+  const normalised = value.trim().toLowerCase();
+  if (normalised === "")
+    return DEFAULT_POLICY;
+  if (Object.hasOwn(POLICIES, normalised))
+    return normalised;
+  throw new Error(`\`cache-prune\` is \`${value.trim()}\`, which is not a prune policy. ` + `Valid values are off, safe, aggressive.`);
+}
+function readFingerprints(fingerprintDir, fs8) {
+  const map = new Map;
+  let entries;
+  try {
+    entries = fs8.readdir(fingerprintDir);
+  } catch {
+    return map;
+  }
+  for (const entry of entries) {
+    const split = entry.lastIndexOf("-");
+    if (split <= 0)
+      continue;
+    const name = entry.slice(0, split);
+    const hash = entry.slice(split + 1);
+    if (name !== "" && hash !== "")
+      map.set(hash, name);
+  }
+  return map;
+}
+var ALWAYS_DROP = ["/incremental/", "/examples/"];
+var UNUSABLE = { keep: [], unattributable: [], usable: false };
+var packageName = (id) => id.slice(0, id.lastIndexOf("@"));
+var HASH = /-([0-9a-f]{16})(?:[./]|$)/;
+function artifactHash(file) {
+  return HASH.exec(file)?.[1];
+}
+function computeKeepSet(request) {
+  const { files, fingerprints, packageSet, policy } = request;
+  if (policy === "off")
+    return UNUSABLE;
+  if (packageSet.packages.size === 0)
+    return UNUSABLE;
+  const wanted = new Set;
+  for (const id of packageSet.packages)
+    wanted.add(packageName(id));
+  const members = new Set;
+  for (const id of packageSet.workspaceMembers)
+    members.add(packageName(id));
+  const keep = [];
+  const unattributable = [];
+  for (const file of files) {
+    if (ALWAYS_DROP.some((fragment) => file.includes(fragment)))
+      continue;
+    const hash = artifactHash(file);
+    if (hash === undefined) {
+      keep.push(file);
+      continue;
+    }
+    const owner = fingerprints.get(hash);
+    if (owner === undefined) {
+      unattributable.push(file);
+      if (policy === "safe")
+        keep.push(file);
+      continue;
+    }
+    if (members.has(owner))
+      continue;
+    if (wanted.has(owner))
+      keep.push(file);
+  }
+  return { keep, unattributable, usable: true };
+}
+
 // src/cache/summary.ts
 function renderSummary(restored, saved) {
   const rows = restored.map((entry) => {
     const outcome = saved.find((item) => item.layer === entry.layer);
     const note = outcome?.saved ? `saved ${outcome.bytes} bytes` : outcome?.reason ?? "not saved";
-    return `| ${entry.layer} | ${entry.result} | ${note} |`;
+    const pruned = outcome?.prunedBytes ?? "—";
+    return `| ${entry.layer} | ${entry.result} | ${pruned} | ${note} |`;
   });
-  return ["| Layer | Result | Save |", "| --- | --- | --- |", ...rows].join(`
+  return [
+    "| Layer | Result | Pruned | Save |",
+    "| --- | --- | --- | --- |",
+    ...rows
+  ].join(`
 `);
 }
 
@@ -63373,7 +63514,7 @@ function foldRestoredResults(cache, restored) {
   }
   return { ...cache, layers };
 }
-async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome, toolSetHash) {
+async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome, toolSetHash, prune) {
   const cache = buildCacheOutputs(cacheRequest, specCacheKey, toolSetHash);
   if (!cacheRequest)
     return { cache, cacheHit: false };
@@ -63385,7 +63526,10 @@ async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome
   const state3 = {
     plans,
     restored,
-    budget: cacheRequest.budget
+    budget: cacheRequest.budget,
+    prune,
+    workspaces: cacheRequest.workspaces,
+    cargoHome
   };
   deps.core.saveState("cache", JSON.stringify(state3));
   return {
@@ -63400,6 +63544,7 @@ async function run(deps) {
       getInput: deps.core.getInput,
       env: deps.env
     });
+    const prunePolicy = parsePrunePolicy(deps.core.getInput("cache-prune"));
     const toolSpecs = parseToolSpecs(deps.core.getInput("cargo-tools"));
     const cacheOnFailure = readBooleanInput(deps.core, "cache-on-failure", false);
     deps.core.exportVariable("RUST_TOOLCHAIN_CACHE_ON_FAILURE", String(cacheOnFailure.value));
@@ -63449,7 +63594,7 @@ async function run(deps) {
       backoffMs: BACKOFF_BASE_MS,
       delay: deps.delay
     });
-    const { cache, cacheHit } = await resolveCacheLifecycle(deps, cacheRequest, specCacheKey, rustupEnv.CARGO_HOME, hashToolSet(toolResolution.tools));
+    const { cache, cacheHit } = await resolveCacheLifecycle(deps, cacheRequest, specCacheKey, rustupEnv.CARGO_HOME, hashToolSet(toolResolution.tools), prunePolicy);
     ensureTools(toolResolution, {
       exec: deps.exec,
       env,
@@ -63477,6 +63622,62 @@ async function run(deps) {
     deps.core.setFailed(describeError(error2));
   }
 }
+var PRUNE_WORTH_IT = 0.05;
+async function prunePlans(plans, state3, deps) {
+  if (state3.prune === undefined || state3.workspaces === undefined)
+    return plans;
+  if (state3.prune === "off")
+    return plans;
+  const packages = new Set;
+  const members = new Set;
+  const keep = [];
+  let allFiles = [];
+  for (const workspace of state3.workspaces) {
+    const set = parsePackageSet(await deps.metadata.read(workspace.manifestDir));
+    for (const id of set.packages)
+      packages.add(id);
+    for (const id of set.workspaceMembers)
+      members.add(id);
+    const files = deps.walk(workspace.targetDir);
+    allFiles = allFiles.concat(files);
+    const result = computeKeepSet({
+      files,
+      fingerprints: readFingerprints(`${workspace.targetDir}/debug/.fingerprint`, {
+        readdir: deps.readdir
+      }),
+      packageSet: set,
+      policy: state3.prune
+    });
+    if (!result.usable)
+      return plans;
+    keep.push(...result.keep);
+    if (result.unattributable.length > 0) {
+      deps.core.info(`prune: ${result.unattributable.length} artifact(s) under ` + `${workspace.targetDir} matched no package and were ` + `${state3.prune === "safe" ? "kept" : "dropped"}`);
+    }
+  }
+  if (keep.length === 0 || packages.size === 0)
+    return plans;
+  const total = deps.measure(allFiles).bytes;
+  const kept = deps.measure(keep).bytes;
+  const dropped = total - kept;
+  if (total === 0 || dropped / total < PRUNE_WORTH_IT) {
+    deps.core.info(`prune: would drop ${dropped} of ${total} bytes, below the ` + `${PRUNE_WORTH_IT * 100}% threshold, so the unpruned paths are kept`);
+    return plans;
+  }
+  return plans.map((plan) => {
+    if (plan.layer === "build") {
+      return {
+        ...plan,
+        paths: buildPaths(state3.workspaces, keep),
+        prunedBytes: dropped
+      };
+    }
+    if (plan.layer === "registry") {
+      return { ...plan, paths: registryPaths(state3.cargoHome, packages) };
+    }
+    return plan;
+  });
+}
 async function writeSummarySafely(core, restored, saved) {
   try {
     await core.summary.addRaw(renderSummary(restored, saved)).write();
@@ -63489,7 +63690,14 @@ async function runPost(deps) {
     const raw = deps.core.getState("cache");
     if (!raw)
       return;
-    const { plans, restored, budget } = JSON.parse(raw);
+    const state3 = JSON.parse(raw);
+    const { restored, budget } = state3;
+    let plans = state3.plans;
+    try {
+      plans = await prunePlans(plans, state3, deps);
+    } catch (error2) {
+      deps.core.warning(`prune: could not narrow the cache to the resolved package set, ` + `saving everything instead — ${describeError(error2)}`);
+    }
     const saved = await saveLayers({
       client: deps.cache,
       plans,
@@ -63510,6 +63718,24 @@ var client = {
   save: async (paths, key) => {
     await saveCache2(paths.slice(), key);
   }
+};
+var walk = (dir) => {
+  const out = [];
+  for (const entry of readdirSync(dir)) {
+    const full = `${dir}/${entry}`;
+    if (statSync2(full).isDirectory())
+      out.push(...walk(full));
+    else
+      out.push(full);
+  }
+  return out;
+};
+var metadata2 = {
+  read: async (manifestDir) => spawnSync("cargo", ["metadata", "--format-version", "1", "--locked"], {
+    cwd: manifestDir,
+    encoding: "utf-8",
+    maxBuffer: 64 * 1024 * 1024
+  }).stdout ?? ""
 };
 var fs8 = {
   readdir: (dir) => readdirSync(dir),
@@ -63537,7 +63763,10 @@ if (process.env.STATE_isPost === "true") {
   await runPost({
     cache: client,
     core: { getState, info, warning, summary },
-    measure: (paths) => measurePaths(paths, fs8)
+    measure: (paths) => measurePaths(paths, fs8),
+    metadata: metadata2,
+    walk,
+    readdir: (dir) => readdirSync(dir)
   });
 } else {
   await run({

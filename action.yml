@@ -183,6 +183,31 @@ inputs:
     required: false
     default: "2GB"
 
+  cache-prune:
+    description: >
+      What to archive from the `build` and `registry` layers: `off`, `safe`
+      (default) or `aggressive`. With `safe` or `aggressive` the action asks
+      `cargo metadata` which packages the workspace still resolves to, maps
+      artifacts back to packages through the fingerprint records cargo already
+      writes under `target/<profile>/.fingerprint/`, and archives only what a
+      later build can use. A dependency you removed stops being cached on the
+      next run rather than riding along until the lockfile hash happens to
+      change. On a measured tree that dropped 46% of a 220MB archive.
+      The two non-off values differ only over artifacts no package claims:
+      `safe` keeps them, `aggressive` drops them, and both say how many they
+      found. `safe` is the default because trading cache size for never
+      dropping something a build needed is the right side to err on.
+      `off` is not the pre-pruning behaviour and should not be read as it:
+      it disables the keep-set entirely, so the layers fall back to the
+      coarse exclusions, which still drop `incremental/` and `examples/`.
+      Nothing is ever deleted from the working tree — pruning decides what
+      the archive carries and touches nothing on disk. Pruning is also
+      skipped automatically when it would drop only a small share of the
+      bytes, because resolving a large explicit file list costs more than
+      the transfer it would save.
+    required: false
+    default: "safe"
+
   cache-on-failure:
     description: >
       Whether to save the cache when the job failed (default false). A failed

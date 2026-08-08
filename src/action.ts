@@ -25,10 +25,21 @@ import {
   type SavedLayer,
 } from "@rust-toolchain/cache/lifecycle";
 import {
+  parsePackageSet,
+  type MetadataReader,
+  type PackageSet,
+} from "@rust-toolchain/cache/metadata";
+import {
   binPaths,
   buildPaths,
   registryPaths,
 } from "@rust-toolchain/cache/paths";
+import {
+  computeKeepSet,
+  parsePrunePolicy,
+  readFingerprints,
+  type PrunePolicy,
+} from "@rust-toolchain/cache/prune";
 import { renderSummary } from "@rust-toolchain/cache/summary";
 import {
   assertProfileAvailable,
@@ -439,6 +450,7 @@ async function resolveCacheLifecycle(
   specCacheKey: string,
   cargoHome: string,
   toolSetHash: string,
+  prune: PrunePolicy,
 ): Promise<{ cache: CacheOutputs; cacheHit: boolean }> {
   const cache = buildCacheOutputs(cacheRequest, specCacheKey, toolSetHash);
   if (!cacheRequest) return { cache, cacheHit: false };
@@ -456,6 +468,9 @@ async function resolveCacheLifecycle(
     plans,
     restored,
     budget: cacheRequest.budget,
+    prune,
+    workspaces: cacheRequest.workspaces,
+    cargoHome,
   };
   deps.core.saveState("cache", JSON.stringify(state));
 
@@ -507,6 +522,9 @@ export async function run(deps: ActionDeps): Promise<void> {
     // checked against nothing but itself, so a malformed tool name must fail
     // before the rustup bootstrap it would otherwise throw away. Resolution is
     // network-bound and waits until further down.
+    // Validated here, with the other cache inputs, so a typo fails the job
+    // before a toolchain is downloaded rather than after a ten-minute build.
+    const prunePolicy = parsePrunePolicy(deps.core.getInput("cache-prune"));
     const toolSpecs = parseToolSpecs(deps.core.getInput("cargo-tools"));
 
     // Exported as early as possible: `post-if` reads this even when the job
@@ -622,6 +640,7 @@ export async function run(deps: ActionDeps): Promise<void> {
       specCacheKey,
       rustupEnv.CARGO_HOME,
       hashToolSet(toolResolution.tools),
+      prunePolicy,
     );
 
     // AFTER the restore, and that ordering is the point (D2 of the Phase C
@@ -667,6 +686,116 @@ export interface PostDeps {
   cache: CacheClient;
   core: Pick<ActionDeps["core"], "getState" | "info" | "warning" | "summary">;
   measure: (paths: string[]) => MeasuredPaths;
+  /** Runs `cargo metadata`; the real one is in `src/index.ts`. */
+  metadata: MetadataReader;
+  /** Every file under a directory, recursively. */
+  walk: (dir: string) => string[];
+  /** One directory's entries, for reading `.fingerprint/`. */
+  readdir: (dir: string) => string[];
+}
+
+/**
+ * Below this share of the bytes, pruning is not worth its own resolution cost.
+ *
+ * Task 4 measured both ends of the trade on real cargo trees. A churned
+ * workspace dropped 46% of a 220 MB archive for 495 ms of `@actions/glob`
+ * resolution — clearly worth it. An unchurned one spent 904 ms to drop 0.2%,
+ * which is pure loss: resolution runs about 1.5 ms per kept entry, so the
+ * explicit manifest costs more the *less* there is to prune.
+ */
+const PRUNE_WORTH_IT = 0.05;
+
+/**
+ * Narrows the plans to a keep-set, when one can be computed and is worth using.
+ *
+ * Every failure here falls back to the plans the main phase already built,
+ * which are the Phase B glob set. That is the invariant the whole phase turns
+ * on: **an empty or unusable keep-set must never be saved.** Saving one is not
+ * a small cache but a poisoned one — an entry that exists, hits its key,
+ * restores nothing, and leaves every later job rebuilding while believing it
+ * was warm. `cargo metadata` missing, a workspace with no manifest, a lockfile
+ * `--locked` rejects, and a fingerprint layout cargo has restructured all
+ * converge on that same empty result, so the fallback is the common path and
+ * not the rare one.
+ */
+async function prunePlans(
+  plans: LayerPlan[],
+  state: CachePhaseState,
+  deps: PostDeps,
+): Promise<LayerPlan[]> {
+  // The state is a cross-version contract: `action.yml` invokes `dist/index.js`
+  // twice as two unrelated processes, and during an upgrade the payload can
+  // have been written by a main phase that predates these fields. Absent is
+  // therefore an ordinary case meaning "no pruning was planned", not a fault —
+  // warning about it would fire on every mid-upgrade job for something nobody
+  // can act on.
+  if (state.prune === undefined || state.workspaces === undefined) return plans;
+  if (state.prune === "off") return plans;
+
+  const packages = new Set<string>();
+  const members = new Set<string>();
+  const keep: string[] = [];
+  let allFiles: string[] = [];
+
+  for (const workspace of state.workspaces) {
+    const set: PackageSet = parsePackageSet(
+      await deps.metadata.read(workspace.manifestDir),
+    );
+    for (const id of set.packages) packages.add(id);
+    for (const id of set.workspaceMembers) members.add(id);
+
+    const files = deps.walk(workspace.targetDir);
+    allFiles = allFiles.concat(files);
+    const result = computeKeepSet({
+      files,
+      fingerprints: readFingerprints(
+        `${workspace.targetDir}/debug/.fingerprint`,
+        {
+          readdir: deps.readdir,
+        },
+      ),
+      packageSet: set,
+      policy: state.prune,
+    });
+    if (!result.usable) return plans;
+    keep.push(...result.keep);
+    if (result.unattributable.length > 0) {
+      deps.core.info(
+        `prune: ${result.unattributable.length} artifact(s) under ` +
+          `${workspace.targetDir} matched no package and were ` +
+          `${state.prune === "safe" ? "kept" : "dropped"}`,
+      );
+    }
+  }
+
+  if (keep.length === 0 || packages.size === 0) return plans;
+
+  // The guard Task 4's measurement forced. Both measurements are needed for
+  // `prunedBytes` regardless, so deciding on them is nearly free.
+  const total = deps.measure(allFiles).bytes;
+  const kept = deps.measure(keep).bytes;
+  const dropped = total - kept;
+  if (total === 0 || dropped / total < PRUNE_WORTH_IT) {
+    deps.core.info(
+      `prune: would drop ${dropped} of ${total} bytes, below the ` +
+        `${PRUNE_WORTH_IT * 100}% threshold, so the unpruned paths are kept`,
+    );
+    return plans;
+  }
+
+  return plans.map((plan) => {
+    if (plan.layer === "build") {
+      return {
+        ...plan,
+        paths: buildPaths(state.workspaces, keep),
+        prunedBytes: dropped,
+      };
+    }
+    if (plan.layer === "registry") {
+      return { ...plan, paths: registryPaths(state.cargoHome, packages) };
+    }
+    return plan;
+  });
 }
 
 /**
@@ -708,7 +837,21 @@ export async function runPost(deps: PostDeps): Promise<void> {
 
     // Cast to the same interface the main phase serialised, so a rename on
     // either side is a compile error rather than a silent `undefined`.
-    const { plans, restored, budget } = JSON.parse(raw) as CachePhaseState;
+    const state = JSON.parse(raw) as CachePhaseState;
+    const { restored, budget } = state;
+
+    // Pruning happens here, not in the main phase: it describes what to save,
+    // and the main phase has not built anything yet — computing it there would
+    // read a `target/` that does not exist.
+    let plans = state.plans;
+    try {
+      plans = await prunePlans(plans, state, deps);
+    } catch (error) {
+      deps.core.warning(
+        `prune: could not narrow the cache to the resolved package set, ` +
+          `saving everything instead — ${describeError(error)}`,
+      );
+    }
 
     const saved = await saveLayers({
       client: deps.cache,
