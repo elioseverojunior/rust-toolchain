@@ -61,6 +61,14 @@ jobs:
           profile = "minimal"
           EOF
 
+      # `hexyl` is pinned deliberately. It is unambiguously a binary crate whose
+      # binary name matches its crate name — `ensureTools` probes
+      # `<crate> --version`, so a crate like `ripgrep`, whose binary is `rg`,
+      # would fail that probe and reinstall every run. It also has few enough
+      # dependencies to compile in a container without dominating the run.
+      #
+      # Pinned rather than `latest` so the derived `bin` key is stable across
+      # runs; an unpinned tool would move the key every time upstream released.
       - name: Run Rust Toolchain Action
         id: rust-toolchain
         uses: ./
@@ -69,6 +77,7 @@ jobs:
           cache-key-hash: ${{ hashFiles('bun.lock') }}
           cache-key-suffix: act-cache
           cache-workspaces: act-probe -> act-probe/target
+          cargo-tools: hexyl@0.17.0
 
       # A real crate, so there is something for the post step to save. Without
       # one the build layer resolves to nothing, `saveCache` refuses an empty
@@ -98,33 +107,47 @@ jobs:
 
           test -d act-probe/target || { echo "::error::no target dir was produced"; exit 1; }
 
-      # The `bin` layer's whole point is excluding rustup's shims, and neither a
-      # unit test nor a post-restore directory listing can prove it: the unit
-      # test cannot see tar, and the shims are present after any restore because
-      # rustup put them there, archived or not.
+      # Two claims need evidence, and neither survives a naive check.
       #
-      # So plant evidence instead. A fake tool is what the layer SHOULD carry;
-      # a marker appended to a shim is what it should NOT. The warm job then
-      # distinguishes the two directly. Verified against the image: this
-      # directory holds exactly the fourteen shims and nothing else, so without
-      # the fake tool the selection is empty and `saveCache` refuses it.
+      # "The tool round-trips" cannot be shown by finding hexyl on disk: a
+      # broken restore would simply have reinstalled it, leaving the same
+      # binary at the same version. "The shims stay out" cannot be shown by
+      # listing the directory either, because rustup puts them there whether or
+      # not they were archived.
       #
-      # Appending to the shim is safe and deliberate — trailing bytes on an ELF
-      # binary are ignored, and this is the last step in the job, so nothing
-      # runs rustup afterwards.
+      # So mark both. A marker on hexyl must come BACK — only a restore
+      # preserves it, since a reinstall overwrites the binary. A marker on the
+      # rustup shim must NOT — its return would mean the shim was archived.
+      # One marker proves the layer carries what it should, the other that it
+      # carries nothing it should not.
+      #
+      # Appending is safe: trailing bytes on an ELF binary are ignored, both
+      # binaries still run, and this is the job's last step so nothing invokes
+      # rustup afterwards. The hexyl marker survives the seed job's own
+      # post-step because ensureTools already ran and left the binary alone.
       - name: Plant Bin-Layer Evidence
         shell: bash
         run: |
           set -eo pipefail
 
           bin="${CARGO_HOME:-$HOME/.cargo}/bin"
-          find "$bin" -maxdepth 1 -mindepth 1 -exec basename {} \; | sort | sed 's/^/  pre-existing: /'
+          find "$bin" -maxdepth 1 -mindepth 1 -exec basename {} \; | sort | sed 's/^/  installed: /'
 
-          printf '#!/bin/sh\necho act-fake-tool\n' > "$bin/act-fake-tool"
-          chmod +x "$bin/act-fake-tool"
+          # The action installed hexyl above. Marking THAT binary is what lets
+          # the warm job tell a cache restore from a fresh reinstall: both end
+          # with hexyl present at 0.17.0, so its mere presence proves nothing.
+          # Only the marker distinguishes them, and it survives because
+          # ensureTools sees the right version and leaves the binary alone.
+          test -x "$bin/hexyl" || {
+            echo "::error::the action did not install hexyl, so nothing downstream can be proved"
+            exit 1
+          }
+          printf 'TOOL_MARKER_FROM_SEED' >> "$bin/hexyl"
+
+          # The shim marker is the mirror image: it must NOT come back.
           printf 'SHIM_MARKER_DO_NOT_ARCHIVE' >> "$bin/rustup"
 
-          echo "planted act-fake-tool and marked the rustup shim"
+          echo "marked the installed hexyl and the rustup shim"
 
       - name: Report The Derived Keys
         shell: bash
@@ -178,6 +201,7 @@ jobs:
           cache-key-hash: ${{ hashFiles('bun.lock') }}
           cache-key-suffix: act-cache
           cache-workspaces: act-probe -> act-probe/target
+          cargo-tools: hexyl@0.17.0
 
       # DELIBERATELY WEAKER THAN `cicd.yml`'s `e2e-warm`, WHICH ASSERTS
       # `cache-hit == 'true'`. Do not reconcile the two by weakening that one.
@@ -236,9 +260,9 @@ jobs:
           echo "round-trip verified: both layers restored, target directory repopulated"
           find act-probe/target -type f | head -5
 
-      # THE assertion the bin layer exists for. The seed job planted a fake tool
-      # and marked a shim; a correct archive carries the first and not the
-      # second.
+      # THE assertion the bin layer exists for. The seed job `cargo install`ed a
+      # real tool and marked both it and a shim; a correct archive carries the
+      # first and not the second.
       #
       # Note what makes the shim half meaningful: `rustup` is on disk here
       # either way, because this job installed it. The marker is what
@@ -261,30 +285,62 @@ jobs:
             exit 1
           fi
 
-          if [[ ! -x "$bin/act-fake-tool" ]]; then
-            echo "::error::act-fake-tool did not come back; the bin layer archived nothing useful"
+          if [[ ! -x "$bin/hexyl" ]]; then
+            echo "::error::hexyl is not present at all; neither the cache nor the installer produced it"
             exit 1
           fi
+
+          # Presence alone proves nothing — a broken restore would simply have
+          # reinstalled it. The seed's marker is what distinguishes "restored
+          # from the bin layer" from "compiled again", and it survives only
+          # because ensureTools saw the right version and left it alone.
+          if ! grep -qa TOOL_MARKER_FROM_SEED "$bin/hexyl"; then
+            echo "::error::hexyl is present but carries no seed marker, so it was reinstalled rather than restored — the bin layer is not doing its job"
+            exit 1
+          fi
+
+          "$bin/hexyl" --version | sed 's/^/  hexyl reports: /'
 
           if grep -qa SHIM_MARKER_DO_NOT_ARCHIVE "$bin/rustup"; then
             echo "::error::the marked rustup shim was restored from the cache, so binPaths archived the shims — the negations are inert, exactly the tar --files-from regression buildPaths hit"
             exit 1
           fi
 
-          echo "bin layer verified: the fake tool round-tripped, the shims did not"
+          echo "bin layer verified: hexyl round-tripped, the shims did not"
 
       # What this workflow does NOT establish, so nobody reads it as complete:
       #
-      # `act-fake-tool` is a 29-byte stand-in. Until Task 6 of the Phase C plan
-      # installs something through `cargo install`, no REAL tool has round
-      # tripped — only a file planted where one would land.
+      # The crates.io adapter is never called. `hexyl@0.17.0` is pinned, and
+      # `resolveToolVersions` returns a pinned spec without touching the client
+      # — which is the whole point of pinning, and is exactly why this harness
+      # is reproducible offline. The consequence is that the one piece of
+      # `cargo-tools` living in `src/index.ts`, outside the coverage gate, is
+      # covered by neither this nor the unit suite. Only a `cargo-tools` entry
+      # with no version would exercise it, at the cost of a network dependency
+      # and a version that changes under the test.
+      #
+      # `ensureTools` probes `<crate-name> --version`, assuming the binary is
+      # named after the crate. hexyl satisfies that, so the "kept" path is
+      # genuinely exercised — but a crate whose binary differs (`ripgrep` ships
+      # `rg`) fails the probe every run and reinstalls despite a perfect cache
+      # hit. Correctness is unaffected; the caching is not. Nothing here catches
+      # that, because the fixture was chosen to avoid it.
       #
       # The `.exe` half of every shim negation is never exercised here. act runs
       # Linux only, so those patterns are pinned by `paths.test.ts` and executed
       # solely by `cicd.yml`'s `windows-latest` E2E leg.
       #
-      # And the archive itself is not inspected. The strongest available check
-      # is decompressing act's stored entry and listing it — 233 bytes, one
-      # file, no shim and no directory entry, which is how the exclusion was
-      # first confirmed. That store is act-local, so it stays a manual step:
-      #   zstd -dc ~/.cache/actcache/cache/<xx>/<n> | tar -tf -
+      # And the archive itself is not inspected by any step here. The marker
+      # pair is indirect: it proves the shims were not restored, not that they
+      # were never written. The direct check is to decompress act's stored entry
+      # and list it, which is act-local and therefore manual:
+      #   zstd -dc ~/.cache/actcache/cache/<xx>/<n> | tar -tvf -
+      #
+      # Run against this workflow it lists exactly two entries — the 29-byte
+      # stand-in inherited through the `bin-Linux-X64-` rung, and hexyl at
+      # 1354157 bytes — with no shim and no directory entry. Those sum to the
+      # 1354186 bytes the post step reports, so `measurePaths` and tar agree
+      # byte for byte. That equality is the real invariant: when the negations
+      # were missing from the measurement it read 291743789 for the same
+      # directory, and `cache-budget` was silently comparing against a number
+      # the archive never had.
