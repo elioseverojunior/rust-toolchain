@@ -150,6 +150,37 @@ subsections.
   the `CacheClient` port (`src/cache/client.ts`) instead, so tests inject a
   fake and the real adapter is exercised only by the actual runtime, plus
   CI's `E2E` and `E2E Warm Cache` jobs.
+- **Pruning filters the manifest; it never deletes from the working tree.**
+  Phase D computes a keep-set from `cargo metadata` plus cargo's fingerprint
+  records (`src/cache/metadata.ts`, `src/cache/prune.ts`) and passes it to
+  `buildPaths`/`registryPaths` as the paths to archive. It is the same
+  principle as the negation-glob rule above, and a reader who finds only one of
+  them will assume the other was an oversight. The design document's pruning
+  steps say "prune everything outside the keep-set" and "always drop" — that
+  language predates this rule and does not describe what ships. A post step
+  that deleted from `target/` would be destructive at the worst moment: it runs
+  after the job's real work, so a bad keep-set surfaces as a build that
+  succeeded and a checkout now missing artifacts, and on a self-hosted runner
+  the damage outlives the job. Both inputs are outside our control — cargo
+  concedes the fingerprint format has no stability guarantee — and a filter
+  that misreads them yields a wrong-sized archive where a deleter yields lost
+  work. Save failures are already downgraded to warnings; a delete cannot be
+  undone by a `catch`.
+- **An empty or unusable keep-set falls back to the coarse globs, never to an
+  empty archive.** Every failure mode converges on the same symptom — no
+  packages resolved, therefore nothing attributable, therefore zero files —
+  and saving that is not a small cache but a **poisoned** one: an entry that
+  exists, hits its key, restores nothing, and leaves every later job rebuilding
+  from scratch while believing it was warm. `computeKeepSet` refuses to mark
+  such a set usable, `buildPaths` treats an empty keep-set as absent, and
+  `prunePlans` returns the unpruned plans on every failure path. Three guards
+  for one mistake, because it is silent and paid by every later run.
+- **Pruning is skipped when it would not pay.** `PRUNE_WORTH_IT` in
+  `src/action.ts` keeps the unpruned paths when the keep-set would drop under
+  5% of the bytes. Measured, not guessed: resolution runs about 1.5 ms per kept
+  entry, so an explicit manifest costs _more_ the less there is to prune — a
+  churned tree dropped 46% of 220 MB for 495 ms, an unchurned one spent 904 ms
+  to drop 0.2%.
 - **The `bin` layer excludes rustup's shims, and only a marker can prove it.**
   `binPaths` (`src/cache/paths.ts`) emits `<cargo-home>/bin/**` plus a
   `!<bin>/<shim>` and `!<bin>/<shim>.exe` pair for each of the fourteen names

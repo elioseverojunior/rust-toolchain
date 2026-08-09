@@ -76,7 +76,7 @@ toolchain action, your cache action and your key-computation step in one move. S
 
 ## Built to be trusted
 
-- **451 tests, 100% line/function/statement coverage**, enforced in CI — the gate fails the build, it is
+- **501 tests, 100% line/function/statement coverage**, enforced in CI — the gate fails the build, it is
   not a badge
 - **No shell, ever** — every command is an argv array. Channel, targets, components and profile can come
   from an untrusted workspace `rust-toolchain.toml`, so none of them is ever interpolated into a string
@@ -135,13 +135,14 @@ The caching story ships in phases, each independently useful. Phases A and B are
 absorbed two pieces originally planned for later phases, so C, D and E below are restated to match
 what actually shipped rather than what was originally scoped.
 
-| Phase | What it adds                                                                                                                                                                                                                                                      | Status                    |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| **A** | Layered cache **key derivation** — `registry` and `build` keys with restore-key ladders, as the `cache` output                                                                                                                                                    | ✅ **Released**           |
-| **B** | Restore and save, a per-layer size budget, and a per-layer job summary — `cache: true` restores at job start, saves from a `post:` step, skips an oversized layer, and reports what actually happened to each one. `Swatinem/rust-cache` comes out too            | ✅ **Released**           |
-| **C** | `cargo-tools` — installs cargo binaries and caches them in a third `bin` layer keyed on the resolved tool set alone, with rustup's own shims excluded so a compiler bump does not reinstall them. `moonrepo/setup-rust` and `taiki-e/install-action` come out too | ✅ **Released**           |
-| **D** | Deterministic pruning from `cargo metadata`, replacing Phase B's negation-glob exclusions                                                                                                                                                                         | Planned                   |
-| **E** | Per-layer job summary and reporting                                                                                                                                                                                                                               | ✅ **Shipped in Phase B** |
+| Phase | What it adds                                                                                                                                                                                                                                                                                                       | Status                    |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- |
+| **A** | Layered cache **key derivation** — `registry` and `build` keys with restore-key ladders, as the `cache` output                                                                                                                                                                                                     | ✅ **Released**           |
+| **B** | Restore and save, a per-layer size budget, and a per-layer job summary — `cache: true` restores at job start, saves from a `post:` step, skips an oversized layer, and reports what actually happened to each one. `Swatinem/rust-cache` comes out too                                                             | ✅ **Released**           |
+| **D** | Deterministic pruning — `cache-prune` computes a keep-set from `cargo metadata` and cargo's own fingerprint records, so a dependency you removed stops being cached instead of riding along. Measured at 46% off a 220 MB archive. Nothing is deleted from your checkout; pruning decides what the archive carries | ✅ **Released**           |
+| **C** | `cargo-tools` — installs cargo binaries and caches them in a third `bin` layer keyed on the resolved tool set alone, with rustup's own shims excluded so a compiler bump does not reinstall them. `moonrepo/setup-rust` and `taiki-e/install-action` come out too                                                  | ✅ **Released**           |
+| **D** | Deterministic pruning from `cargo metadata`, replacing Phase B's negation-glob exclusions                                                                                                                                                                                                                          | Planned                   |
+| **E** | Per-layer job summary and reporting                                                                                                                                                                                                                                                                                | ✅ **Shipped in Phase B** |
 
 ### Why layers, and why it matters
 

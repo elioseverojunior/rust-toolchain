@@ -207,10 +207,15 @@ argv array with no shell, consistent with the existing rustup invariants.
 1. cargo metadata --format-version 1 --locked          → exact package set
 2. read target/<profile>/.fingerprint/<pkg>-<hash>/*.json → hash → package
 3. keep-set = artifacts whose hash maps to a package still present in (1)
-4. prune everything in deps/ and .fingerprint/ outside the keep-set
-5. always drop: incremental/, examples/, the workspace's own crates,
-                build/<pruned-pkg>/out, and registry/src/
+4. archive only what is inside the keep-set; everything else is left out
+5. never archive: incremental/, examples/, the workspace's own crates,
+                  build/<pruned-pkg>/out, and registry/src/
 ```
+
+_(Amended in Phase D. Steps 4 and 5 originally read "prune" and "always drop", the language of deletion. What ships
+filters the tar manifest and never touches the working tree — see the pruning invariants in `CLAUDE.md`. A post step
+that deleted from `target/` would run after the job's real work, so a bad keep-set would surface as a build that
+succeeded and a checkout now missing artifacts.)_
 
 Step 2 is the difference from `rust-cache`, which infers ownership by stripping a trailing `-$hash` from a filename and
 string-comparing the remainder. The fingerprint directories already record the mapping authoritatively.
@@ -235,8 +240,14 @@ on.
 
 ## Budget
 
-`cache-budget` accepts a size (`2GB`) and defaults to `0`, meaning disabled. When set, a layer still exceeding the
-budget after pruning is **not saved**, and the action warns with the measured size and the input to raise.
+`cache-budget` accepts a size and defaults to `2GB`; `0` disables it. When set, a layer still exceeding the budget
+after pruning is **not saved**, and the action warns with the measured size and the input to raise.
+
+_(Amended in Phase D. This section originally specified a `0` default. Phase B shipped `2GB` and Phase D kept it:
+pruning lowers the typical entry, which makes the ceiling less likely to bite — an argument for keeping a guard that
+now rarely fires, not for removing it. The default was never about typical size anyway. An oversized entry does not
+degrade its own hit rate; it evicts other workflows out of the repository's shared budget, and pruning does not change
+that externality.)_
 
 Refusing to save keeps the cost attached to the job that caused it. An over-budget save externalises its cost onto
 unrelated workflows through global least-recent-use eviction, and surfaces as a mystery cache miss elsewhere.
