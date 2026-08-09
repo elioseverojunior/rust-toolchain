@@ -256,19 +256,32 @@ unrelated workflows through global least-recent-use eviction, and surfaces as a 
 
 `core.summary` writes one table per run:
 
-| Layer    | Result  | Restored | Pruned | Saved               |
-| -------- | ------- | -------- | ------ | ------------------- |
-| registry | exact   | 412 MB   | 38 MB  | skipped — unchanged |
-| build    | partial | 1.2 GB   | 340 MB | 1.1 GB              |
-| bin      | miss    | —        | —      | 46 MB               |
+| Layer    | Result  | Pruned | Save                |
+| -------- | ------- | ------ | ------------------- |
+| registry | exact   | 38 MB  | skipped — unchanged |
+| build    | partial | 340 MB | 1.1 GB              |
+| bin      | miss    | —      | 46 MB               |
 
 Outputs:
 
 - `cache-hit` — `true` only when every enabled layer hit exactly.
-- `cache` — per-layer JSON carrying key, restore key, result, and restored, pruned and saved byte counts.
+- `cache` — per-layer JSON carrying key, restore-key ladder and result.
 - `cargo-tools` — resolved `name@version` values as a JSON array.
 
 All three also fold into the existing `json` output, following the pattern `src/outputs.ts` already establishes.
+
+_Amended in Phase D, in two places, because the original specified numbers that cannot exist where it put them.
+There is no **Restored** column. Measuring what a restore produced means walking the tree immediately after
+restoring, in the main phase — and `restoreLayers` deliberately takes only a client, plans and a log, which is what
+makes it the cheapest and least failure-prone part of the lifecycle. Measuring instead in the post phase, where the
+walk already happens, would report what the **build** left on disk rather than what the cache supplied: a number that
+looks authoritative and is wrong. An absent column beats a misleading one._
+
+_The `cache` output carries no byte counts either. It is serialised during the main phase, before anything has been
+saved, and a `setOutput` from the post phase is not readable by any later step — so there is nowhere for a restored,
+pruned or saved figure to come from. `CacheLayerOutput` did carry a `bytes?` field from Phase A until Phase D,
+documented as "measured for the save decision" and never once assigned; it was removed rather than left promising a
+value that was always `undefined`. Per-layer sizes live in the job summary, which runs where they exist._
 
 ## Input and output surface
 
