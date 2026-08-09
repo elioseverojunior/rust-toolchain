@@ -417,6 +417,13 @@ jobs:
 
           [dependencies]
           cfg-if = "1"
+          # Built here and REMOVED before the post step saves, so its artifacts
+          # are provably on disk and provably stale. That ordering is the whole
+          # assertion: `E2E Warm Cache` can then require them absent from the
+          # restored tree, which proves the keep-set dropped them rather than
+          # them never having existed. Asserting absence without building it
+          # first would pass on a cache that pruned nothing at all.
+          itoa = "1"
           EOF
           # Deliberately does not reference cfg-if. `cfg_if!` is an item macro,
           # not an expression one, so the obvious one-liner does not compile —
@@ -519,6 +526,29 @@ jobs:
       # break. `rust-gdbgui` is the target because nothing in this workflow
       # runs it. `rm -f` before writing means this works whether or not the
       # shim was there to begin with.
+      # Removes a dependency whose artifacts were just built. `cargo metadata`
+      # in the post step then resolves a package set without it, so the keep-set
+      # must drop every itoa-* artifact while keeping the cfg-if ones. Both
+      # halves matter: an assertion that only checked for absence would also
+      # pass if pruning had dropped everything.
+      - name: Drop A Dependency After Building It
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          echo "itoa artifacts present before pruning:"
+          find e2e-probe/target -name 'libitoa-*' -o -name 'itoa-*' | head -5
+          find e2e-probe/target -name 'libitoa-*' | grep -q . \
+            || { echo "::error::itoa was never built, so the pruning assertion would be vacuous"; exit 1; }
+
+          python3 - <<'PY'
+          import re
+          p = "e2e-probe/Cargo.toml"
+          s = open(p).read()
+          open(p, "w").write(re.sub(r'itoa = "1"\n', "", s))
+          PY
+          cat e2e-probe/Cargo.toml
+
       - name: Plant Bin-Layer Evidence
         shell: bash
         run: |
@@ -658,6 +688,43 @@ jobs:
       # from an archive that wrongly contained it" from "recreated by rustup",
       # which is why the previous job replaced the shim with a marked plain
       # file rather than merely noting its existence.
+      # Phase D's acceptance criterion. Both halves are required, and the
+      # second is what stops it being vacuous: cfg-if stayed in Cargo.toml so
+      # its artifacts MUST come back, while itoa was built and then removed so
+      # its artifacts must not. Asserting only the absence would pass on an
+      # archive that pruned everything, on a stale archive saved before itoa
+      # existed, and on a build layer that missed entirely.
+      - name: Verify Pruning Dropped The Removed Dependency
+        shell: bash
+        env:
+          BUILD_RESULT: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.build.result }}
+        run: |
+          set -eo pipefail
+
+          echo "build layer result: $BUILD_RESULT"
+          if [[ "$BUILD_RESULT" == "miss" ]]; then
+            echo "::error::the build layer restored nothing, so this assertion would be vacuous"
+            exit 1
+          fi
+
+          # The keep half. Without it, an archive that dropped everything --
+          # or one saved before itoa was ever built -- would pass below.
+          if ! find e2e-probe/target -name 'libcfg_if-*' | grep -q .; then
+            echo "::error::cfg-if artifacts are absent from the restored tree, so the keep-set dropped a dependency the workspace still resolves to"
+            find e2e-probe/target -type f | head -20
+            exit 1
+          fi
+          echo "kept: $(find e2e-probe/target -name 'libcfg_if-*' | head -3)"
+
+          # The drop half.
+          if find e2e-probe/target -name 'libitoa-*' | grep -q .; then
+            echo "::error::itoa artifacts survived into the restored cache; the keep-set did not drop a package cargo metadata no longer resolves"
+            find e2e-probe/target -name 'libitoa-*'
+            exit 1
+          fi
+
+          echo "pruning verified: cfg-if round-tripped, the removed itoa did not"
+
       - name: Verify The Shims Stayed Out Of The Archive
         shell: bash
         run: |

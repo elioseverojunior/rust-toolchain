@@ -392,24 +392,24 @@ is corrected to `2GB` per D3, and its Pruning section reworded from deletion to 
 
 **Steps:**
 
-- [ ] Add the E2E pruning assertion, non-vacuously.
-- [ ] `mise run readme && bun run fix:all` — both `action-docs-all` markers keep `source`, `project` and `version`.
-- [ ] Update the prose docs, correct the design document, and the VitePress sidebar.
-- [ ] `bun run build`, recording the new `wc -c dist/index.js`. No new dependency, so a large jump means something was imported that should have stayed behind a port.
-- [ ] `bun run fix:all && bun run typecheck && bun run test && bun run build && hk check --all`
-- [ ] `git commit -S -m "docs(cache): document pruning and rebuild the bundle"`
+- [x] Add the E2E pruning assertion, non-vacuously.
+- [x] `mise run readme && bun run fix:all` — both `action-docs-all` markers keep `source`, `project` and `version`.
+- [x] Update the prose docs, correct the design document, and the VitePress sidebar.
+- [x] `bun run build`, recording the new `wc -c dist/index.js`. No new dependency, so a large jump means something was imported that should have stayed behind a port.
+- [x] `bun run fix:all && bun run typecheck && bun run test && bun run build && hk check --all`
+- [x] `git commit -S -m "docs(cache): document pruning and rebuild the bundle"`
 
 ---
 
 ## Phase D completion check
 
-- [ ] `bun run test` passes at 100% lines, functions and statements.
-- [ ] `hk check --all` is clean.
-- [ ] `git diff --exit-code dist/` is clean after `bun run build`.
-- [ ] `action.yml` declares `cache-prune`, and the design document no longer says `cache-budget` defaults to `0`.
-- [ ] A workspace whose `cargo metadata` fails still saves a usable cache, and warns.
-- [ ] `E2E Warm Cache` proves a dropped dependency's artifacts are absent from the restored tree, on all three operating systems.
-- [ ] Nothing in `src/` deletes from the working tree.
+- [x] `bun run test` passes at 100% lines, functions and statements.
+- [x] `hk check --all` is clean.
+- [x] `git diff --exit-code dist/` is clean after `bun run build`.
+- [x] `action.yml` declares `cache-prune`, and the design document no longer says `cache-budget` defaults to `0`.
+- [x] A workspace whose `cargo metadata` fails still saves a usable cache, and warns.
+- [ ] `E2E Warm Cache` proves a dropped dependency's artifacts are absent from the restored tree, on all three operating systems. **Written, not yet observed** — this branch has not been pushed, so the three-OS run has not happened.
+- [x] Nothing in `src/` deletes from the working tree.
 
 ## Carried into Phase E
 
