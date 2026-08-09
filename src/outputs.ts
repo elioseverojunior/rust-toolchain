@@ -63,16 +63,23 @@ export interface TomlProvenance {
 /**
  * A layer's key and restore ladder, plus what actually happened to it.
  *
- * `result` and `bytes` are optional rather than required: Phase A emitted keys
- * with no lifecycle behind them, and a consumer reading last week's output —
- * before restore/save existed — must not break because these fields are now
- * mandatory.
+ * `result` is optional rather than required: Phase A emitted keys with no
+ * lifecycle behind them, and a consumer reading last week's output — before
+ * restore/save existed — must not break because it is now mandatory.
+ *
+ * There are deliberately **no byte counts here**, though the design asks for
+ * them. This object is serialised into the `cache` output during the MAIN
+ * phase, before a single byte has been saved, and a `setOutput` from the post
+ * phase is not readable by any later step — so there is nowhere for a restored,
+ * pruned or saved figure to come from. A `bytes?: number` field did live here
+ * from Phase A until Phase D, documented as "measured for the save decision"
+ * and never once assigned; it was removed rather than left to promise a value
+ * that was always `undefined`. Per-layer sizes are reported in the job summary
+ * (`cache/summary.ts`), which runs in the post phase where they exist.
  */
 export interface CacheLayerOutput extends CacheLayerKey {
   /** Absent until the layer has been restored — Phase A emitted keys only. */
   result?: LayerResult;
-  /** Bytes measured for the save decision; `0` when nothing was measured. */
-  bytes?: number;
 }
 
 /**
