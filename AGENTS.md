@@ -13,8 +13,11 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 - **TypeScript**: `tsc --build` for typechecking (strict mode). The root
   `tsconfig.json` is solution-style (`files: []` + `references`), so
   `tsc --noEmit` alone would check zero files — `--build` is what traverses
-  the references and actually checks both the action (`tsconfig.src.json`)
-  and the site (`docs/tsconfig.json`).
+  the references and actually checks the action (`tsconfig.src.json`). It
+  does NOT check the site: `docs/tsconfig.json` is deliberately not
+  referenced from the root, because CI's Lint job never installs
+  `docs/node_modules` (see CLAUDE.md → "`docs/` is a Docusaurus site"). The
+  site is type-checked separately by `mise run docs:typecheck`.
 
 ## Commands (run in this order before commit)
 

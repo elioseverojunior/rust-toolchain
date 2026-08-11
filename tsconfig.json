@@ -1,11 +1,24 @@
 {
   // Solution-style config: this file type-checks nothing itself (`files: []`)
-  // and instead points `tsc --build` at the two independent projects that
-  // make up the repository. `tsconfig.src.json` is the action's own config
-  // (formerly this file); `docs/tsconfig.json` is the site's
-  // self-managing config with its own DOM/React types. Keeping them as
-  // separate referenced projects — rather than merging — is what lets the
-  // action's type-check stay free of `docs/`'s `DOM` lib.
+  // and instead points `tsc --build` at `tsconfig.src.json`, the action's own
+  // config. `docs/tsconfig.json` — the site's self-managing config with its
+  // own DOM/React types — is deliberately NOT referenced here. It used to
+  // be: CI's Lint job runs `hk check --all` -> `bun run typecheck` ->
+  // `tsc --build`, but `.github/actions/setup/action.yml` installs only the
+  // repository root (`bun install --frozen-lockfile`), never
+  // `docs/node_modules`. With the reference in place, that job hit 40+
+  // `TS2307 Cannot find module '@docusaurus/…'` on every run — invisible on
+  // any machine that had ever run `mise run docs:*` and gained
+  // `docs/node_modules` locally, which is how the defect reached review
+  // undetected. The site is instead type-checked by `mise run
+  // docs:typecheck`, which `gh-pages.yml` runs (with `dir = "docs"`, so it
+  // installs and uses the site's own `tsconfig.json`) before `mise run
+  // docs:build`. Installing `docs/` in the shared setup action was rejected
+  // as the fix: it would cost every action CI job the whole Docusaurus tree
+  // — 320 packages/21.9s for the action alone versus 644/61.3s with `docs/`
+  // pulled in, the same cost CLAUDE.md's Bun-workspace bullet measured and
+  // rejected for the identical reason. See CLAUDE.md → "`docs/` is a
+  // Docusaurus site" for the full writeup.
   //
   // `compilerOptions.paths` below is a deliberate duplicate of
   // `tsconfig.src.json`'s, not a stray leftover: it is here for a consumer
@@ -28,8 +41,5 @@
     }
   },
   "files": [],
-  "references": [
-    { "path": "./tsconfig.src.json" },
-    { "path": "./docs/tsconfig.json" }
-  ]
+  "references": [{ "path": "./tsconfig.src.json" }]
 }
