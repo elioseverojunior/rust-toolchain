@@ -7,6 +7,7 @@ import type { CacheClient } from "@rust-toolchain/cache/client";
 import type { CacheLayerId } from "@rust-toolchain/cache/layers";
 import type { Workspace } from "@rust-toolchain/cache/paths";
 import type { PrunePolicy } from "@rust-toolchain/cache/prune";
+import type { StageRoot } from "@rust-toolchain/cache/stage";
 import { describeError } from "@rust-toolchain/errors";
 
 /** Everything needed to restore or save one layer. */
@@ -15,8 +16,17 @@ export interface LayerPlan {
   key: string;
   restoreKeys: string[];
   paths: string[];
-  /** Bytes the keep-set excluded, when `paths` came from one. */
+  /** Bytes the keep-set excluded, when one applied. */
   prunedBytes?: number;
+  /**
+   * The stage directories this layer archives from, when it is staged.
+   *
+   * Present exactly when `paths` names stage directories rather than the tree
+   * itself, and carried on the plan rather than recomputed per phase so the
+   * two halves of the handoff cannot disagree about it. Absent for `bin`,
+   * which has nothing to prune, and for every layer under `cache-prune: off`.
+   */
+  stageRoots?: StageRoot[];
 }
 
 /** `exact` means the key matched; `partial` means a restore-key prefix did. */
