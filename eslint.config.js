@@ -41,11 +41,14 @@ export default [
       // code nobody wrote. `.gitignore` already lists it, but flat config does
       // not read `.gitignore`, so it has to be repeated here.
       "**/.stryker-tmp/**",
-      // Self-managing subproject with its own eslint.config.mjs, the same way
-      // `docs/` has its own. Its React/JSX and DOM globals are configured
-      // there, not here, so linting it from the root reports hundreds of
-      // errors about rules it was never meant to be held to.
-      "docusaurus/**",
+      // Docusaurus' generated output, mirrored from the site's former own
+      // config now that this file lints `docusaurus/**` directly. `build/` is
+      // the production bundle and `.docusaurus/` the dev-time codegen; both
+      // are minified or machine-written, and linting them reports hundreds of
+      // no-undef/no-redeclare errors against webpack runtime chunks nobody
+      // edits.
+      "docusaurus/build/**",
+      "docusaurus/.docusaurus/**",
     ],
   },
   js.configs.recommended,
@@ -166,6 +169,81 @@ export default [
           // design). `builtin` removed so the `bun:**` rule above
           // applies even when the resolver classifies bun: modules as
           // builtin.
+          pathGroupsExcludedImportTypes: ["type"],
+        },
+      ],
+      "import-x/first": "error",
+      "import-x/no-duplicates": "error",
+    },
+  },
+  {
+    // The Docusaurus site. It was previously excluded above (see the removed
+    // `docusaurus/**` ignore) and linted through its own `eslint.config.mjs`,
+    // which is now deleted — this block is that config's TypeScript rules
+    // block, folded in here. It differs from the `**/*.ts` block above in
+    // exactly two ways: the glob also matches `.tsx` (the block above never
+    // did — `**/*.ts` does not match `.tsx`, which is what let the entire
+    // site go unlinted despite looking covered), and the globals are
+    // `browser`, not `node`, since this code runs in the reader's tab rather
+    // than under bun. `jsx: true` in parserOptions is required for the
+    // `.tsx` files to parse at all.
+    files: ["docusaurus/**/*.{ts,tsx}"],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: {
+        ecmaVersion: 2024,
+        sourceType: "module",
+        ecmaFeatures: { jsx: true },
+      },
+      globals: {
+        ...globals.browser,
+      },
+    },
+    plugins: {
+      "@typescript-eslint": tsPlugin,
+      "import-x": importPlugin,
+    },
+    settings: {
+      "import-x/parsers": {
+        "@typescript-eslint/parser": [".ts", ".tsx"],
+      },
+      "import-x/resolver": {
+        typescript: true,
+        node: {
+          extensions: [".ts", ".tsx", ".js", ".mjs"],
+        },
+      },
+    },
+    linterOptions: {
+      reportUnusedDisableDirectives: "error",
+    },
+    rules: {
+      ...tsPlugin.configs.recommended.rules,
+      "no-console": "off",
+      "no-undef": "off",
+      "no-unused-vars": "off",
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+      "@typescript-eslint/explicit-function-return-type": "error",
+      "@typescript-eslint/no-explicit-any": "error",
+      "import-x/order": [
+        "error",
+        {
+          groups: [
+            "builtin",
+            "external",
+            "internal",
+            "parent",
+            ["sibling", "index"],
+          ],
+          "newlines-between": "always",
+          alphabetize: { order: "asc", caseInsensitive: true },
+          pathGroups: [
+            { pattern: "bun:**", group: "external", position: "before" },
+            { pattern: "@site/**", group: "internal", position: "before" },
+          ],
           pathGroupsExcludedImportTypes: ["type"],
         },
       ],
