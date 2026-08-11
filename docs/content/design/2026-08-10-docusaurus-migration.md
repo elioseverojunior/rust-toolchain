@@ -47,8 +47,9 @@ this repository already documents for its own configs, fixed the same way, and p
   docs and one language.
 - Migrating the personal-portfolio content from `docusaurus/`. None of its eleven React components describe this
   action.
-- Changing what is published, where, or by whom. The `gh-pages` branch, `peaceiris/actions-gh-pages`, `keep_files`
-  and the `cicd.yml` → `gh-pages.yml` call chain are all unchanged.
+- Changing what is published, where, or by whom. This migration left the publish chain alone. (It has since moved
+  from a `peaceiris/actions-gh-pages` branch push to an artifact deployment, but that change was made separately
+  and is not part of this work — see the note under **Stale URLs persist** in Risks.)
 - Custom-domain hosting. `DOCS_BASE=/` keeps working for it, exactly as today, but nothing is set up.
 
 ## Architecture
@@ -130,10 +131,15 @@ The content subdirectory is `content/`, not the plugin's default `docs/`, becaus
 
 `routeBasePath: "/"` is the load-bearing half of that line, and it is about URLs rather than tidiness. VitePress
 served these pages at `/rust-toolchain/ARCHITECTURE`; the Docusaurus docs plugin would default to
-`/rust-toolchain/docs/ARCHITECTURE`. Since `keep_files: true` leaves the old published output in place on the
-`gh-pages` branch, a changed route would not 404 — it would leave the **stale VitePress page still serving** at the
-old URL while the new one appeared elsewhere, which is worse than a broken link because nothing reports it. Serving
-from the root keeps every existing URL, and every external link to one, pointing at the new build.
+`/rust-toolchain/docs/ARCHITECTURE`. Serving from the root keeps every existing URL, and every external link to
+one, pointing at the new build.
+
+**Note, added after implementation.** When this was written, publishing ran `peaceiris/actions-gh-pages` with
+`keep_files: true`, which never deleted anything — so a changed route would not even 404, it would leave the stale
+VitePress page serving at the old URL beside the new one. Publishing has since moved to an artifact deployment
+(`upload-pages-artifact` + `deploy-pages`), which replaces the published site wholesale, so that failure mode no
+longer exists. The decision stands on the surviving reason: inbound links from the README, the Marketplace listing
+and anywhere else already point at these URLs, and nothing checks them.
 
 ### What is lifted from `docusaurus/`, and what is discarded
 
@@ -279,8 +285,10 @@ the sidebar — and that is a plan-time escape hatch, not a second design.
 | `mise run docs:typecheck`     | `tsc --noEmit -p tsconfig.json`                 | unchanged — `dir = "docs"`, the site's own `tsc` |
 | Base URL                      | `DOCS_BASE ?? "/rust-toolchain/"`               | same variable, now Docusaurus `baseUrl`          |
 
-Unchanged: the `peaceiris` publish step, `publish_branch: gh-pages`, `keep_files: true`, the `permissions` blocks,
-the artifact hand-off between the `build` and `publish` jobs, and `gh-pages.yml`'s `paths:` filter on `docs/**`.
+Unchanged by this migration: the publish step, the `permissions` blocks, the hand-off between the `build` and
+`publish` jobs, and `gh-pages.yml`'s `paths:` filter on `docs/**`. The publish step was subsequently rewritten from
+a `peaceiris` branch push to `upload-pages-artifact` + `deploy-pages`, independently of this work; only the
+directory it uploads (`docs/build`) came from here.
 
 The `Typecheck`-before-`Build` ordering is kept. Its original justification — that `vitepress build` transpiles
 without type-checking, so an error in the config only ever surfaced in an editor — holds identically for
@@ -322,12 +330,12 @@ bullet named the pre-migration `tsc -p tsconfig.json --noEmit` invocation, which
   linked, not the network/CPU cost the CI-jobs-must-not-pay claim above actually depends on.
 - **`@docusaurus/faster` is the least-trodden path.** It is already in the copied project and swaps in Rspack and
   SWC. Keep it, but it is the first thing to drop if the build misbehaves.
-- **Stale URLs persist.** `keep_files: true` means the published VitePress output is not cleared when the new site
-  lands. VitePress used `cleanUrls` and Docusaurus uses `trailingSlash: false`, so most paths coincide, but a prune
-  commit against the `gh-pages` branch is deliberately **not** part of this plan — it rewrites a published branch,
-  which cannot be scripted from this repository, so it stays a manual follow-up after the first successful
-  publish. `routeBasePath: "/"` above makes it cosmetic rather than urgent, because every URL that mattered is
-  reoccupied by the new build.
+- **Stale URLs persist — RETIRED, and worth recording why.** This risk assumed publishing through
+  `peaceiris/actions-gh-pages` with `keep_files: true`, which never deleted, so the old VitePress output would have
+  survived alongside the new site and needed a manual prune. Publishing moved to an artifact deployment
+  (`upload-pages-artifact` + `deploy-pages`) while this migration was in flight; an artifact deploy replaces the
+  published site in full, so nothing stale can survive and the manual prune this risk called for is unnecessary.
+  Nothing in the migration had to change — `routeBasePath: "/"` was already keeping every URL reoccupied.
 - **The coverage gate is adjacent but should not fire.** `bunfig.toml` gates `src/` at 100% and its
   `coveragePathIgnorePatterns` do not mention a docs site. Bun reports only files it actually loads, and no test
   imports the site, so the site's `.tsx` should stay invisible exactly as `src/index.ts` does. This is asserted, not

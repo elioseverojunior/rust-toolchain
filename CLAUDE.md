@@ -384,11 +384,17 @@ docs:build`. Installing `docs/` in the shared setup action was rejected as
   without reading the output.
 - **Content lives in `docs/content/`, served from the site root.** The docs
   plugin in `docusaurus.config.ts` sets `path: "content"` and
-  `routeBasePath: "/"`. Moving it changes every published URL — and because
-  the `gh-pages` publish step runs `peaceiris/actions-gh-pages` with
-  `keep_files: true`, the OLD pages keep serving at their old URLs while the
-  new ones appear elsewhere. No 404, no CI failure — just two sites, with
-  every inbound link pointing at the stale one.
+  `routeBasePath: "/"`. Moving it changes every published URL, and the URLs it
+  currently serves are the ones VitePress served — so `README.md`, the
+  Marketplace listing and every external link already point at them. Nothing in
+  CI checks an inbound link, so a route change is silent: the build stays green
+  and the links rot. It used to carry a second, sharper hazard: publishing ran
+  `peaceiris/actions-gh-pages` with `keep_files: true`, which never deleted, so
+  a moved route left the OLD page serving at the old URL alongside the new one —
+  two sites, no error anywhere. Publishing is now an artifact deployment
+  (`upload-pages-artifact` + `deploy-pages`), which replaces the site wholesale,
+  so that trap is gone. The rule survives it: the reason is inbound links, not
+  stale files.
 - **Markdown files carry NO SPDX header; `.ts`/`.tsx` files do.**
   `REUSE.toml` licenses everything, `docs/**` included, through its
   `path = ["**"]` aggregate annotation, and its own comment records that
