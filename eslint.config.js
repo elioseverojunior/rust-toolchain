@@ -42,13 +42,13 @@ export default [
       // not read `.gitignore`, so it has to be repeated here.
       "**/.stryker-tmp/**",
       // Docusaurus' generated output, mirrored from the site's former own
-      // config now that this file lints `docusaurus/**` directly. `build/` is
+      // config now that this file lints `docs/**` directly. `build/` is
       // the production bundle and `.docusaurus/` the dev-time codegen; both
       // are minified or machine-written, and linting them reports hundreds of
       // no-undef/no-redeclare errors against webpack runtime chunks nobody
       // edits.
-      "docusaurus/build/**",
-      "docusaurus/.docusaurus/**",
+      "docs/build/**",
+      "docs/.docusaurus/**",
     ],
   },
   js.configs.recommended,
@@ -178,7 +178,7 @@ export default [
   },
   {
     // The Docusaurus site. It was previously excluded above (see the removed
-    // `docusaurus/**` ignore) and linted through its own `eslint.config.mjs`,
+    // `docs/**` ignore) and linted through its own `eslint.config.mjs`,
     // which is now deleted — this block is that config's TypeScript rules
     // block, folded in here. It differs from the `**/*.ts` block above in
     // exactly two ways: the glob also matches `.tsx` (the block above never
@@ -187,7 +187,7 @@ export default [
     // `browser`, not `node`, since this code runs in the reader's tab rather
     // than under bun. `jsx: true` in parserOptions is required for the
     // `.tsx` files to parse at all.
-    files: ["docusaurus/**/*.{ts,tsx}"],
+    files: ["docs/**/*.{ts,tsx}"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {

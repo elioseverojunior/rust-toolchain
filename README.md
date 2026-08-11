@@ -110,7 +110,7 @@ toolchain action, your cache action and your key-computation step in one move. S
 - **Resilient** — argv arrays with no shell, validated inputs, a timeout on every command, and three retries with backoff on network-bound ones
 - **Caching is restored and saved automatically** — `cache: true` restores every enabled layer at the start of the job and saves it again from a `post:` step; no `actions/cache` step, no `Swatinem/rust-cache`. `cache-workspaces` (default `. -> target`) names the `<manifest-dir> -> <target-dir>` pairs to save, `cache-budget` (default `2GB`, `0` disables it) caps what a single layer will save, and `cache-hit` reports `true` only when **every** enabled layer matched its exact key — a partial match through a restore key counts as `false`, because that layer is saved again under the new key
 
-See [docs/COMPARISON.md](docs/COMPARISON.md) for a feature-by-feature comparison against the wider
+See [docs/content/COMPARISON.md](docs/content/COMPARISON.md) for a feature-by-feature comparison against the wider
 Rust action ecosystem.
 
 ## Versioning
@@ -904,9 +904,9 @@ in a nested crate ends up resolving.
 
 ## Development
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
-[docs/COMPARISON.md](docs/COMPARISON.md) and
-[docs/RUNBOOKS.md](docs/RUNBOOKS.md).
+See [docs/content/ARCHITECTURE.md](docs/content/ARCHITECTURE.md),
+[docs/content/COMPARISON.md](docs/content/COMPARISON.md) and
+[docs/content/RUNBOOKS.md](docs/content/RUNBOOKS.md).
 
 ```sh
 bun install          # Install dependencies

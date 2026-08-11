@@ -2,10 +2,10 @@
   // Solution-style config: this file type-checks nothing itself (`files: []`)
   // and instead points `tsc --build` at the two independent projects that
   // make up the repository. `tsconfig.src.json` is the action's own config
-  // (formerly this file); `docusaurus/tsconfig.json` is the site's
+  // (formerly this file); `docs/tsconfig.json` is the site's
   // self-managing config with its own DOM/React types. Keeping them as
   // separate referenced projects — rather than merging — is what lets the
-  // action's type-check stay free of `docusaurus/`'s `DOM` lib.
+  // action's type-check stay free of `docs/`'s `DOM` lib.
   //
   // `compilerOptions.paths` below is a deliberate duplicate of
   // `tsconfig.src.json`'s, not a stray leftover: it is here for a consumer
@@ -30,6 +30,6 @@
   "files": [],
   "references": [
     { "path": "./tsconfig.src.json" },
-    { "path": "./docusaurus/tsconfig.json" }
+    { "path": "./docs/tsconfig.json" }
   ]
 }

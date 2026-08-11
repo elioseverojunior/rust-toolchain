@@ -530,31 +530,31 @@ run = "bun install --frozen-lockfile"
 
 [tasks."docs:build"]
 alias = ["docsb"]
-description = "Build the VitePress site into docs/.vitepress/dist. Set DOCS_BASE=/ for a custom domain; the default /rust-toolchain/ matches GitHub project pages"
+description = "Build the Docusaurus site into docs/build. Set DOCS_BASE=/ for a custom domain; the default /rust-toolchain/ matches GitHub project pages"
 depends = ["docs:install"]
 dir = "docs"
 run = "bun run build"
 
 [tasks."docs:dev"]
 alias = ["docs", "docsd"]
-description = "Serve the docs site with hot reload on http://localhost:5273"
+description = "Serve the docs site with hot reload on http://localhost:5273. DOCS_PORT overrides the port"
 depends = ["docs:install"]
 dir = "docs"
-run = "bun run dev"
+run = 'bun run start --port {{env.DOCS_PORT | default(value="5273")}}'
 
 [tasks."docs:typecheck"]
 alias = ["docstc"]
-description = "Type-check the site's .ts/.mts sources. Nothing else does: vitepress build transpiles without type-checking, so an error in config.mts only ever surfaced in an editor"
+description = "Type-check the site. Nothing else does: docusaurus build transpiles without type-checking, so an error in the config only ever surfaced in an editor"
 depends = ["docs:install"]
 dir = "docs"
 run = "bun run typecheck"
 
 [tasks."docs:preview"]
 alias = ["docsp"]
-description = "Serve the built docs site on http://localhost:5273, to check the production build before publishing"
+description = "Serve the built docs site on http://localhost:5273, to check the production build before publishing. DOCS_PORT overrides the port"
 depends = ["docs:build"]
 dir = "docs"
-run = "bun run preview"
+run = 'bun run serve --port {{env.DOCS_PORT | default(value="5273")}}'
 
 [tasks.readme]
 description = "Regenerate README.md from action.yml using action-docs"
