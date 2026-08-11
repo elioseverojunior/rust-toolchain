@@ -39,6 +39,26 @@ and whitespace/EOF hygiene over the whole repo. Fix Markdown with
 `mise run markdownlint:fix`. `mise run yamllint` exists but is wired into
 neither hk nor CI.
 
+`mise run mutate` is **not** in that list and is not a gate. It runs Stryker
+over the modules dense with boundary logic, reports a mutation score and never
+fails on it. Reach for it when changing a threshold, a comparison or an error
+path — a full run is minutes, and `mise run mutate <file>` is seconds. Three
+things about it are not guessable and cost a run each to rediscover:
+
+- Stryker runs under **Node**, not Bun; `bunx --bun` dies before the first
+  mutant on its Babel instrumenter. Only the command it invokes is `bun test`.
+- **`stryker-bunfig.toml` must exist.** The command runner judges a mutant by
+  exit code, and `bunfig.toml`'s 100% coverage threshold fails on instrumented
+  code, so every mutant would be recorded as killed — the score inflates
+  silently, survivors included. `bun test` can only switch coverage _on_, so a
+  second config passed with `--config=` is the only way off.
+- The config file is a **positional** argument; `--configFile` is not a flag.
+
+A surviving mutant is a question, not a defect. Some are equivalent — no test
+can kill them — and chasing those is how a suite starts serving the tool. What
+mutation testing cannot see at all is a fake that misrepresents the real thing,
+which is why `src/cache/fs.ts` is tested against a real filesystem.
+
 ## `dist/` is committed
 
 `action.yml` runs `dist/index.js` on the `node24` runtime, so the bundle is
