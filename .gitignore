@@ -51,11 +51,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # working directory by the browser tooling, never part of the project.
 .playwright-mcp/
 
-# VitePress build artifacts — the dep cache alone is ~2.8 MB of prebundled
-# JS and source maps, which trips hk's check-added-large-files.
-docs/.vitepress/cache/
-docs/.vitepress/dist/
-
 # Add
 !CLAUDE.md
 !AGENTS.md

@@ -51,7 +51,5 @@
 
     "types": ["bun", "node"]
   },
-  "exclude": [".docusaurus", "build"],
-  "outDir": "../github-pages",
-  "rootDir": "."
+  "exclude": [".docusaurus", "build"]
 }
