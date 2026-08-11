@@ -12,13 +12,18 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 **Goal:** Replace the VitePress site under `docs/` with Docusaurus 3.10.2, folded into the repository root through Bun
 workspaces so there is one lockfile.
 
+> **REVISED 2026-08-11 after Task 1:** the Bun workspace is NOT created.
+> `--filter` was measured and does not scope install cost, so `docs/` keeps its own `package.json` and `bun.lock`.
+> See the note at the head of Task 8.
+
 **Architecture:** The site is assembled in `docusaurus/` — already present as a working scaffold copied from the
 author's personal site — and takes the `docs/` name in the final task, so a buildable tree exists at every step. Three
-independent mechanisms carry the workspace split: Bun workspaces for dependencies, TypeScript project references for
-type-checking, and one ESLint flat config with a per-glob block.
+independent mechanisms were proposed to carry the split. Two survive — TypeScript project references for
+type-checking and one ESLint flat config with a per-glob block. The third, a Bun workspace for dependencies, was
+disproved by Task 1 and dropped; the site keeps its own lockfile.
 
 **Tech Stack:** Docusaurus 3.10.2, React 19, `@docusaurus/theme-mermaid`, `@easyops-cn/docusaurus-search-local`, Bun
-1.3.14 workspaces, TypeScript 6.0.
+1.3.14, TypeScript 6.0 project references.
 
 **Design:** [Docusaurus Migration — Design](../design/2026-08-10-docusaurus-migration.md)
 
@@ -657,27 +662,36 @@ git commit -S -m "docs(site): restore offline search"
 
 ---
 
-### Task 8: Fold the site into the root as a Bun workspace
+### Task 8: Unify type-checking and linting, keep the lockfiles apart
+
+> **REVISED after Task 1.** This task originally declared a Bun workspace so the repository would have one lockfile.
+> Task 1 disproved the assumption that made that affordable, so the workspace is **not** created and the site keeps
+> its own `package.json` and `bun.lock`. What remains — project references and one ESLint config — never depended on
+> a workspace and is unchanged.
+>
+> The evidence, measured on a cold cache: `bun install --filter` scopes what is **linked** into `node_modules` but
+> still downloads and extracts the unfiltered workspace's whole graph. Action dependencies alone install 320 packages
+> in 21.9s; the same install inside a workspace, filtered to the action, pulls 644 packages in 61.3s. Every job that
+> installs would pay 2.8x for a docs site it never imports.
+>
+> **Do not add a `"workspaces"` key to the root `package.json` in this task or any later one.**
 
 **Files:**
 
-- Modify: `package.json`, `tsconfig.json`, `eslint.config.js`
+- Modify: `tsconfig.json`, `eslint.config.js`
 - Create: `tsconfig.src.json`
 - Delete: `docusaurus/eslint.config.mjs`
+- Do NOT modify: `package.json`, `bun.lock`, `docusaurus/package.json`, `docusaurus/bun.lock`
 
 **Interfaces:**
 
-- Consumes: the `"name": "docs"` set in Task 2, and Task 1's verdict on `--filter`.
-- Produces: one root `bun.lock`; `bun run --filter docs <script>` from the root.
+- Consumes: the `"name": "docs"` set in Task 2.
+- Produces: a solution-style root `tsconfig.json` that type-checks both projects in one `tsc --build`, and a single
+  `eslint.config.js` covering the action and the site. Two lockfiles remain, by decision.
 
 **Steps:**
 
-- [ ] **Step 1: Declare the workspace**
-
-In the root `package.json` add `"workspaces": ["docusaurus"]`. It becomes `["docs"]` in Task 9, when the directory is
-renamed — the key names a **path**, not a package name.
-
-- [ ] **Step 2: Split the action's tsconfig out**
+- [ ] **Step 1: Split the action's tsconfig out**
 
 Create `tsconfig.src.json` holding what `tsconfig.json` has today (`extends`, `outDir`, `rootDir`, `paths`,
 `include: ["**/*.ts"]`), then add `"exclude": ["node_modules", "docusaurus", "docs"]` so the site never reaches the
@@ -695,7 +709,7 @@ Replace `tsconfig.json` with a solution-style config:
 }
 ```
 
-- [ ] **Step 3: Add the site's ESLint block**
+- [ ] **Step 2: Add the site's ESLint block**
 
 In the root `eslint.config.js`, after the existing `files: ["**/*.ts"]` block:
 
@@ -713,13 +727,23 @@ In the root `eslint.config.js`, after the existing `files: ["**/*.ts"]` block:
 
 Then `rm docusaurus/eslint.config.mjs`.
 
-- [ ] **Step 4: Install from the root and verify one lockfile**
+- [ ] **Step 3: Verify both lockfiles are untouched**
 
 ```bash
-rm -f docusaurus/bun.lock
-bun install
-ls bun.lock && test ! -f docusaurus/bun.lock && echo "one lockfile"
+git status --short package.json bun.lock docusaurus/package.json docusaurus/bun.lock
 ```
+
+Expected: no output. If any of the four appears, this task has strayed into the workspace change that Task 1 ruled
+out — revert those four paths before continuing.
+
+- [ ] **Step 4: Verify both projects type-check through the references**
+
+```bash
+bunx tsc --build --dry tsconfig.json
+bun run typecheck
+```
+
+Expected: the first lists both referenced projects; the second still passes.
 
 - [ ] **Step 5: Verify the action's gate is unaffected**
 
@@ -734,9 +758,14 @@ imports the site, so its `.tsx` should stay invisible exactly as `src/index.ts` 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add package.json tsconfig.json tsconfig.src.json eslint.config.js bun.lock docusaurus/
-git commit -S -m "build(deps): fold the docs site into a Bun workspace"
+git add tsconfig.json tsconfig.src.json eslint.config.js
+git rm --cached -q docusaurus/eslint.config.mjs 2>/dev/null || true
+git add -u docusaurus/eslint.config.mjs
+git commit -S -m "build(config): type-check and lint the site from the root"
 ```
+
+Note the commit does NOT include `package.json` or either lockfile. If `git status` shows them modified, something
+went wrong — see Step 3.
 
 ---
 
@@ -768,16 +797,17 @@ git mv docusaurus docs
 
 - [ ] **Step 2: Update the workspace and reference paths**
 
-In `package.json` set `"workspaces": ["docs"]`; in `tsconfig.json` change the reference to `./docs/tsconfig.json`; in
-`tsconfig.src.json` the `exclude` already lists `docs`.
+In `tsconfig.json` change the reference to `./docs/tsconfig.json`; in `tsconfig.src.json` the `exclude` already lists
+`docs`. Do **not** add a `"workspaces"` key to `package.json` — see the note at the head of Task 8.
 
 - [ ] **Step 3: Rewrite the mise tasks**
 
 ```toml
 [tasks."docs:install"]
 alias = ["docsi"]
-description = "Install the docs site dependencies (root workspace, filtered to the site)"
-run = "bun install --frozen-lockfile --filter=docs"
+description = "Install the docs site dependencies (docs/ has its own lockfile)"
+dir = "docs"
+run = "bun install --frozen-lockfile"
 
 [tasks."docs:build"]
 alias = ["docsb"]
@@ -808,14 +838,17 @@ dir = "docs"
 run = "bun run typecheck"
 ```
 
-If Task 1 found that `--filter` does not scope installs, `docs:install` becomes `dir = "docs"` with a plain
-`bun install --frozen-lockfile`.
+The `docs:install` task above is already the post-Task-1 form: `dir = "docs"` with a plain
+`bun install --frozen-lockfile`, because `--filter` was measured and rejected. This is the only mise task whose
+shape changed from the original plan; the other four differ from today's only in the command they run.
 
 - [ ] **Step 4: Update the workflow**
 
 In `.github/workflows/gh-pages.yml`: change the upload `path:` from `docs/.vitepress/dist` to `docs/build`; change
-the lockfile assertion from `git diff --exit-code -- docs/bun.lock` to `-- bun.lock`; change `bun-version-file` from
-`docs/.bun-version` to `.bun-version`. Leave the `peaceiris` publish step, `publish_branch`, `keep_files` and the
+**leave** the lockfile assertion as `git diff --exit-code -- docs/bun.lock` and `bun-version-file` as
+`docs/.bun-version` — both were only going to change if the site joined a root workspace, which Task 1 ruled out, and
+both paths keep working because the site lands at `docs/` with its own lockfile and pin. Leave the `peaceiris`
+publish step, `publish_branch`, `keep_files` and the
 `paths:` filter alone.
 
 - [ ] **Step 5: Verify end to end**
@@ -860,8 +893,8 @@ Carry two across, because they are still true of Docusaurus:
 - A page reaching a file outside `docs/` needs an absolute repository URL.
 
 Add three that are new: content lives in `docs/content/` with `routeBasePath: "/"` and moving it changes every
-published URL while `keep_files: true` leaves the old ones serving; the site is a Bun workspace, so add dependencies
-with `bun add --filter docs`; and mermaid is `@docusaurus/theme-mermaid`, not 652 lines of local Vue.
+published URL while `keep_files: true` leaves the old ones serving; the site keeps its own lockfile, so add
+dependencies with `bun add` from inside `docs/`; and mermaid is `@docusaurus/theme-mermaid`, not 652 lines of local Vue.
 
 - [ ] **Step 2: Mark the design document done**
 

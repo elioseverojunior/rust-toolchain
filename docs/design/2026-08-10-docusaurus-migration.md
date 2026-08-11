@@ -12,8 +12,11 @@ Supersedes: the VitePress site described in `CLAUDE.md` → "`docs/` is a VitePr
 
 ## Summary
 
-Replace the VitePress site under `docs/` with Docusaurus 3.10.2, outright rather than side by side, and fold its
-dependencies into the repository root through Bun workspaces so there is one lockfile instead of two.
+Replace the VitePress site under `docs/` with Docusaurus 3.10.2, outright rather than side by side.
+
+The site keeps its own `package.json` and `bun.lock`. That was not the original intent — this document proposed
+folding both into the root through Bun workspaces so there would be one lockfile — but Task 1 of the plan measured
+the idea and it does not pay. See **Dependencies** below for the numbers and what they cost.
 
 The migration is worth doing for one measurable reason: it deletes 652 lines of bespoke Vue and TypeScript that exist
 only to work around gaps in VitePress's mermaid story, replacing them with roughly six lines of configuration against
@@ -57,17 +60,34 @@ this repository already documents for its own configs, fixed the same way, and p
 
 ### Workspace topology
 
-Three separate mechanisms carry the "one project, many sub-projects" idea. They are independent and all three are
-needed; using only the first leaves the type-checker broken.
+Three separate mechanisms were proposed to carry the "one project, many sub-projects" idea. Two of them ship. They
+are independent of each other, which is why losing the first costs the other two nothing.
 
-**Dependencies — Bun workspaces.** The root `package.json` gains `"workspaces": ["docs"]`. `docs/package.json`
-shrinks to a name and the thirteen new packages. One `bun.lock` at the root; shared dependencies are hoisted and
-installed once, and Bun fails the install if the two ever disagree on a version. That converts today's silent
-fourteen-way duplication into an enforced invariant.
+**Dependencies — two lockfiles, deliberately.** `docs/` keeps its own `package.json` and `bun.lock`. The root does
+**not** declare `"workspaces"`.
 
-The action's own CI jobs must not pay to install React. `bun install --filter=<workspace>` scopes an install to
-matching workspaces, so the test, build and lint jobs install the root only and the docs job installs everything.
-This flag is the single load-bearing assumption in the plan and is proved first, before anything is built.
+This reverses what this document originally proposed, on measurement rather than taste. The workspace idea rested on
+one assumption: that `bun install --filter=<workspace>` would let the action's own CI jobs install without paying for
+React and Docusaurus. Task 1 tested it and the assumption is false. `--filter` scopes what gets **linked** into
+`node_modules` — the unfiltered workspace's `node_modules` is never even created — but Bun still resolves, downloads
+and fully extracts that workspace's entire dependency graph into its shared package cache. Confirmed twice, the
+second time with a provably cold `--cache-dir` to rule out a warm cache.
+
+The cost of being wrong about this is not theoretical. Measured on a cold cache:
+
+| Install                               | Packages | Time  |
+| ------------------------------------- | -------- | ----- |
+| Action dependencies alone             | 320      | 21.9s |
+| Workspace, `--filter`ed to the action | 644      | 61.3s |
+
+Every job that installs would pay 2.8x for a docs site it never imports. Two lockfiles is the cheaper mistake.
+
+What this forfeits is real and worth naming: Bun would have failed the install if the two manifests ever disagreed on
+one of their fourteen shared pins, and nothing enforces that now. The cheap replacement is a CI check that compares
+the shared pins directly — it buys the drift protection back for no install cost. That is a follow-up, not part of
+this migration.
+
+The other two mechanisms below are unaffected: neither depends on a workspace.
 
 **Type-checking — TypeScript project references.** This layer cannot be merged into one file. The action needs
 `lib: ["ESNext"]` with `types: ["bun", "node"]`; the site needs `lib: ["ESNext", "DOM"]`, `jsx: "preserve"` and
@@ -84,14 +104,15 @@ a `files: ["docs/**/*.{ts,tsx}"]` block carrying `globals.browser` and the React
 
 ```text
 rust-toolchain/
-├── package.json          "workspaces": ["docs"]; action deps + action-docs
-├── bun.lock              the only lockfile
-├── .bun-version          1.3.14, the only copy
+├── package.json          action deps + action-docs; NO "workspaces" key
+├── bun.lock              the action's lockfile; docs/ keeps its own
 ├── tsconfig.json         solution style: "files": [], "references": [...]
 ├── tsconfig.src.json     the action: lib ESNext, types bun+node
 ├── eslint.config.js      + a files:["docs/**/*.{ts,tsx}"] block
 └── docs/
-    ├── package.json      name "docs", only the 13 new dependencies
+    ├── package.json      name "docs", its own dependencies
+    ├── bun.lock          the site's own lockfile, not merged into the root
+    ├── .bun-version      1.3.14, matching the root's copy
     ├── tsconfig.json     the TS6-safe config, lifted from docusaurus/
     ├── docusaurus.config.ts
     ├── sidebars.ts
@@ -235,18 +256,18 @@ the sidebar — and that is a plan-time escape hatch, not a second design.
 
 ## Build and CI
 
-| Concern                       | From                                            | To                                                  |
-| ----------------------------- | ----------------------------------------------- | --------------------------------------------------- |
-| Build output                  | `docs/.vitepress/dist`                          | `docs/build`                                        |
-| `gh-pages.yml` upload `path:` | `docs/.vitepress/dist`                          | `docs/build`                                        |
-| Lockfile assertion            | `git diff --exit-code -- docs/bun.lock`         | `git diff --exit-code -- bun.lock`                  |
-| `bun-version-file`            | `docs/.bun-version`                             | `.bun-version`                                      |
-| `mise run docs:install`       | `dir = "docs"`, `bun install --frozen-lockfile` | root, `bun install --frozen-lockfile --filter=docs` |
-| `mise run docs:dev`           | `vitepress dev` on 5273                         | `docusaurus start --port 5273`                      |
-| `mise run docs:build`         | `vitepress build`                               | `docusaurus build`                                  |
-| `mise run docs:preview`       | `vitepress preview --port 5273`                 | `docusaurus serve --port 5273`                      |
-| `mise run docs:typecheck`     | `tsc --noEmit -p tsconfig.json`                 | unchanged in intent, now via project references     |
-| Base URL                      | `DOCS_BASE ?? "/rust-toolchain/"`               | same variable, now Docusaurus `baseUrl`             |
+| Concern                       | From                                            | To                                              |
+| ----------------------------- | ----------------------------------------------- | ----------------------------------------------- |
+| Build output                  | `docs/.vitepress/dist`                          | `docs/build`                                    |
+| `gh-pages.yml` upload `path:` | `docs/.vitepress/dist`                          | `docs/build`                                    |
+| Lockfile assertion            | `git diff --exit-code -- docs/bun.lock`         | unchanged                                       |
+| `bun-version-file`            | `docs/.bun-version`                             | unchanged                                       |
+| `mise run docs:install`       | `dir = "docs"`, `bun install --frozen-lockfile` | unchanged                                       |
+| `mise run docs:dev`           | `vitepress dev` on 5273                         | `docusaurus start --port 5273`                  |
+| `mise run docs:build`         | `vitepress build`                               | `docusaurus build`                              |
+| `mise run docs:preview`       | `vitepress preview --port 5273`                 | `docusaurus serve --port 5273`                  |
+| `mise run docs:typecheck`     | `tsc --noEmit -p tsconfig.json`                 | unchanged in intent, now via project references |
+| Base URL                      | `DOCS_BASE ?? "/rust-toolchain/"`               | same variable, now Docusaurus `baseUrl`         |
 
 Unchanged: the `peaceiris` publish step, `publish_branch: gh-pages`, `keep_files: true`, the `permissions` blocks,
 the artifact hand-off between the `build` and `publish` jobs, and `gh-pages.yml`'s `paths:` filter on `docs/**`.
@@ -302,7 +323,8 @@ Two bullets survive and must be carried across verbatim in substance:
 - `mise run docs:build` produces `docs/build` and the published site renders all eleven pages plus the rewritten
   home page, each at the URL it had under VitePress.
 - All nine mermaid diagrams render, and `.vitepress/` no longer exists.
-- One `bun.lock` and one `.bun-version` at the repository root, and no `docusaurus/` directory — because it has
+- Two lockfiles, deliberately: `bun.lock` at the root for the action, `docs/bun.lock` for the site. No `docusaurus/`
+  directory — because it has
   become `docs/`, not because it was removed.
 - `bun run typecheck`, `bun run test`, `bun run build` and `hk check --all` all pass from the root.
 - The action's CI jobs do not install React, verified by inspecting the install step's package count.
