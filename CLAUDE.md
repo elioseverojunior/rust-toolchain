@@ -150,37 +150,59 @@ subsections.
   the `CacheClient` port (`src/cache/client.ts`) instead, so tests inject a
   fake and the real adapter is exercised only by the actual runtime, plus
   CI's `E2E` and `E2E Warm Cache` jobs.
-- **Pruning filters the manifest; it never deletes from the working tree.**
-  Phase D computes a keep-set from `cargo metadata` plus cargo's fingerprint
-  records (`src/cache/metadata.ts`, `src/cache/prune.ts`) and passes it to
-  `buildPaths`/`registryPaths` as the paths to archive. It is the same
-  principle as the negation-glob rule above, and a reader who finds only one of
-  them will assume the other was an oversight. The design document's pruning
-  steps say "prune everything outside the keep-set" and "always drop" — that
-  language predates this rule and does not describe what ships. A post step
-  that deleted from `target/` would be destructive at the worst moment: it runs
-  after the job's real work, so a bad keep-set surfaces as a build that
-  succeeded and a checkout now missing artifacts, and on a self-hosted runner
-  the damage outlives the job. Both inputs are outside our control — cargo
-  concedes the fingerprint format has no stability guarantee — and a filter
-  that misreads them yields a wrong-sized archive where a deleter yields lost
-  work. Save failures are already downgraded to warnings; a delete cannot be
-  undone by a `catch`.
-- **An empty or unusable keep-set falls back to the coarse globs, never to an
-  empty archive.** Every failure mode converges on the same symptom — no
-  packages resolved, therefore nothing attributable, therefore zero files —
-  and saving that is not a small cache but a **poisoned** one: an entry that
-  exists, hits its key, restores nothing, and leaves every later job rebuilding
-  from scratch while believing it was warm. `computeKeepSet` refuses to mark
-  such a set usable, `buildPaths` treats an empty keep-set as absent, and
-  `prunePlans` returns the unpruned plans on every failure path. Three guards
-  for one mistake, because it is silent and paid by every later run.
+- **The paths array is a cache entry's identity, so pruning must never touch
+  it.** `@actions/cache` does not look an entry up by key. It matches on
+  `(key, version)` where
+  `version = sha256(paths.join("|") | compressionMethod | salt)` —
+  see `getCacheVersion` in `node_modules/@actions/cache/lib/internal/cacheUtils.js`.
+  A save that narrows `paths` to a computed keep-set therefore writes an entry
+  under a version no restore ever asks for. This is not a degraded hit rate but
+  a **permanent** miss: the restore cannot know the content it has not built
+  yet, so it asks under the coarse array forever, and the layer pays the upload
+  on every run while never once being readable. It shipped that way and cost
+  every `build` and `registry` hit until the staging rewrite; the only layer
+  that kept working was `bin`, the one nothing rewrote. Whatever else changes
+  here, **both phases must derive the identical `paths` array**, which is why
+  `layerPathsByLayer` switches on the `cache-prune` _input_ and never on
+  whether a keep-set turned out to be usable.
+- **Pruning fills a stage; it never deletes from the working tree and never
+  rewrites the manifest.** `buildStageRoots`/`registryStageRoot`
+  (`src/cache/stage.ts`) name one directory per tree —
+  `<target>/.rust-toolchain-stage`, `<cargo-home>/.rust-toolchain-stage` — and
+  that single directory is the whole `paths` array. `stageLayers`
+  (`src/action.ts`) hard-links the keep-set into it before the save, and
+  `unstageRestored` moves the files back out after a restore. Hard links
+  because they cost an inode reference rather than the bytes and share the
+  source file's mtime, which is what cargo's freshness check reads; the stage
+  lives _inside_ the tree it mirrors because a link cannot cross a filesystem
+  and both locations are already git-ignored. Nothing is removed from the
+  checkout — a link is an addition — so a save failure still cannot damage the
+  working tree. A post step that deleted from `target/` would be destructive at
+  the worst moment: it runs after the job's real work, so a bad keep-set
+  surfaces as a build that succeeded and a checkout now missing artifacts, and
+  on a self-hosted runner the damage outlives the job. Both inputs are outside
+  our control — cargo concedes the fingerprint format has no stability
+  guarantee — and a filter that misreads them yields a wrong-sized archive
+  where a deleter yields lost work.
+- **An empty or unusable keep-set stages the whole tree, never an empty
+  stage.** Every failure mode converges on the same symptom — no packages
+  resolved, therefore nothing attributable, therefore zero files — and saving
+  that is not a small cache but a **poisoned** one: an entry that exists, hits
+  its key, restores nothing, and leaves every later job rebuilding from scratch
+  while believing it was warm. Three guards, because it is silent and paid by
+  every later run: `computeKeepSet` refuses to mark such a set usable;
+  `stageLayers` catches a keep-set it cannot resolve **itself** rather than
+  letting it reach `runPost`'s outer guard, since under staging an escaping
+  throw would leave every stage empty where the old design still archived
+  everything; and any layer that ends with zero files staged is dropped from
+  the plans so it is never saved at all.
 - **Pruning is skipped when it would not pay.** `PRUNE_WORTH_IT` in
-  `src/action.ts` keeps the unpruned paths when the keep-set would drop under
-  5% of the bytes. Measured, not guessed: resolution runs about 1.5 ms per kept
-  entry, so an explicit manifest costs _more_ the less there is to prune — a
+  `src/action.ts` stages the whole tree when the keep-set would drop under 5%
+  of the bytes. Measured, not guessed: resolution runs about 1.5 ms per kept
+  entry, so an explicit keep-set costs _more_ the less there is to prune — a
   churned tree dropped 46% of 220 MB for 495 ms, an unchurned one spent 904 ms
-  to drop 0.2%.
+  to drop 0.2%. Note this decides only what goes _into_ the stage; it cannot
+  decide the `paths` array, for the reason the first bullet gives.
 - **The `bin` layer excludes rustup's shims, and only a marker can prove it.**
   `binPaths` (`src/cache/paths.ts`) emits `<cargo-home>/bin/**` plus a
   `!<bin>/<shim>` and `!<bin>/<shim>.exe` pair for each of the fourteen names
