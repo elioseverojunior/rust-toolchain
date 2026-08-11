@@ -24921,16 +24921,7 @@ var require_commonjs2 = __commonJS((exports) => {
 
 // src/index.ts
 import { spawnSync } from "node:child_process";
-import {
-  existsSync as existsSync4,
-  linkSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync as statSync2
-} from "node:fs";
+import { readFileSync } from "node:fs";
 
 // node_modules/@actions/core/lib/command.js
 import * as os from "os";
@@ -63893,35 +63884,54 @@ async function runPost(deps) {
   }
 }
 
-// src/index.ts
-var client = {
-  restore: (paths, key, restoreKeys) => restoreCache(paths.slice(), key, restoreKeys.slice()),
-  save: async (paths, key) => {
-    await saveCache2(paths.slice(), key);
-  }
-};
-var walk = (dir) => {
+// src/cache/fs.ts
+import {
+  existsSync as existsSync4,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync as statSync2
+} from "node:fs";
+function walkFiles(dir) {
   if (!existsSync4(dir))
     return [];
   const out = [];
   for (const entry of readdirSync(dir)) {
     const full = `${dir}/${entry}`;
     if (statSync2(full).isDirectory())
-      out.push(...walk(full));
+      out.push(...walkFiles(full));
     else
       out.push(full);
   }
   return out;
+}
+var nodeStatFs = {
+  readdir: (dir) => readdirSync(dir),
+  stat: (path12) => statSync2(path12)
 };
-var stageFs = {
+var nodeStageFs = {
   mkdirp: (dir) => {
     mkdirSync(dir, { recursive: true });
   },
-  link: (from, to) => linkSync(from, to),
-  walk: (dir) => existsSync4(dir) ? walk(dir) : [],
-  move: (from, to) => renameSync(from, to),
+  link: (from, to) => {
+    linkSync(from, to);
+  },
+  walk: walkFiles,
+  move: (from, to) => {
+    renameSync(from, to);
+  },
   remove: (dir) => {
     rmSync(dir, { recursive: true, force: true });
+  }
+};
+
+// src/index.ts
+var client = {
+  restore: (paths, key, restoreKeys) => restoreCache(paths.slice(), key, restoreKeys.slice()),
+  save: async (paths, key) => {
+    await saveCache2(paths.slice(), key);
   }
 };
 var metadata2 = {
@@ -63930,10 +63940,6 @@ var metadata2 = {
     encoding: "utf-8",
     maxBuffer: 64 * 1024 * 1024
   }).stdout ?? ""
-};
-var fs8 = {
-  readdir: (dir) => readdirSync(dir),
-  stat: (path12) => statSync2(path12)
 };
 var registry = {
   latestVersion: async (name) => {
@@ -63957,11 +63963,11 @@ if (process.env.STATE_isPost === "true") {
   await runPost({
     cache: client,
     core: { getState, info, warning, summary },
-    measure: (paths) => measurePaths(paths, fs8),
+    measure: (paths) => measurePaths(paths, nodeStatFs),
     metadata: metadata2,
-    walk,
-    readdir: (dir) => readdirSync(dir),
-    stageFs
+    walk: walkFiles,
+    readdir: nodeStatFs.readdir,
+    stageFs: nodeStageFs
   });
 } else {
   await run({
@@ -63999,6 +64005,6 @@ if (process.env.STATE_isPost === "true") {
     delay: (ms) => new Promise((resolve3) => setTimeout(resolve3, ms)),
     cache: client,
     registry,
-    stageFs
+    stageFs: nodeStageFs
   });
 }

@@ -3,16 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  linkSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { readFileSync } from "node:fs";
 
 import * as cache from "@actions/cache";
 import {
@@ -30,15 +21,27 @@ import {
 
 import { run, runPost } from "@rust-toolchain/action";
 import { measurePaths } from "@rust-toolchain/cache/budget";
+import { nodeStageFs, nodeStatFs, walkFiles } from "@rust-toolchain/cache/fs";
 
 /**
  * GitHub Action entry point.
  *
  * Wiring only — every decision lives in `./action`, where it is tested. Keep
  * this file free of logic: nothing imports it, so it is invisible to the
- * coverage gate. That is also why the `@actions/cache` adapter is built only
- * here: it is 1.39 MB of Azure storage SDK and unmockable network code, and a
- * library module importing it would pull it into every test process.
+ * coverage gate.
+ *
+ * What remains here earns the exemption individually, rather than by living
+ * in this file. The `@actions/cache` client vendors 1.39 MB of Azure storage
+ * SDK and unmockable network code, so a library module importing it would pull
+ * that into every test process. `metadata` shells out to `cargo`, and
+ * `registry` calls crates.io.
+ *
+ * The `node:fs` adapters used to be here too, and that was a mistake: they
+ * have no network and no vendored SDK, so they were exempt by proximity
+ * rather than for a reason. Their only description was a hand-written test
+ * fake that disagreed with `readdirSync` about a missing directory, and the
+ * disagreement cost every pruned cache layer its save. They now live in
+ * `cache/fs.ts`, where `cache/fs.test.ts` holds them to a real filesystem.
  */
 const client = {
   restore: (
@@ -49,52 +52,6 @@ const client = {
     cache.restoreCache(paths.slice(), key, restoreKeys.slice()),
   save: async (paths: string[], key: string): Promise<void> => {
     await cache.saveCache(paths.slice(), key);
-  },
-};
-
-/**
- * Every file beneath a directory.
- *
- * Here rather than in a library module for the same reason the other adapters
- * are: it is unmockable filesystem recursion, and `src/index.ts` is invisible
- * to the coverage gate. `computeKeepSet` takes the resulting list as data.
- */
-const walk = (dir: string): string[] => {
-  // An absent directory is empty, not an error. `readdirSync` throws ENOENT
-  // instead, and that throw is what once cost every pruned layer its save: a
-  // workspace with no git dependencies has no $CARGO_HOME/git/db, the registry
-  // file list walked it anyway, and the exception escaped the whole staging
-  // loop. The library guards this too -- see `walkOptional` -- but the port
-  // documents "empty when it is absent", so the adapter has to honour it.
-  if (!existsSync(dir)) return [];
-
-  const out: string[] = [];
-  for (const entry of readdirSync(dir)) {
-    const full = `${dir}/${entry}`;
-    if (statSync(full).isDirectory()) out.push(...walk(full));
-    else out.push(full);
-  }
-  return out;
-};
-
-/**
- * The staging half of the wiring.
- *
- * Hard links rather than copies, for the reason `stageFiles` gives: they cost
- * an inode reference instead of the bytes, and they share the source file's
- * mtime, which is what cargo's freshness check reads. `walk` tolerates a
- * missing directory here because a stage that was never written is the normal
- * case on a cache miss.
- */
-const stageFs = {
-  mkdirp: (dir: string): void => {
-    mkdirSync(dir, { recursive: true });
-  },
-  link: (from: string, to: string): void => linkSync(from, to),
-  walk: (dir: string): string[] => (existsSync(dir) ? walk(dir) : []),
-  move: (from: string, to: string): void => renameSync(from, to),
-  remove: (dir: string): void => {
-    rmSync(dir, { recursive: true, force: true });
   },
 };
 
@@ -113,12 +70,6 @@ const metadata = {
       encoding: "utf-8",
       maxBuffer: 64 * 1024 * 1024,
     }).stdout ?? "",
-};
-
-const fs = {
-  readdir: (dir: string): string[] => readdirSync(dir),
-  stat: (path: string): { size: number; isDirectory: () => boolean } =>
-    statSync(path),
 };
 
 /**
@@ -163,11 +114,11 @@ if (process.env.STATE_isPost === "true") {
   await runPost({
     cache: client,
     core: { getState, info, warning, summary },
-    measure: (paths) => measurePaths(paths, fs),
+    measure: (paths) => measurePaths(paths, nodeStatFs),
     metadata,
-    walk,
-    readdir: (dir) => readdirSync(dir),
-    stageFs,
+    walk: walkFiles,
+    readdir: nodeStatFs.readdir,
+    stageFs: nodeStageFs,
   });
 } else {
   await run({
@@ -211,6 +162,6 @@ if (process.env.STATE_isPost === "true") {
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     cache: client,
     registry,
-    stageFs,
+    stageFs: nodeStageFs,
   });
 }
