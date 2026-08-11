@@ -316,21 +316,6 @@ itself still goes through `docs/` — `mise run docs:build` / `mise run
 docs:dev` (aliases `docsb`/`docsd`), not `bun run build` from the repo root,
 which only rebuilds the action's `dist/index.js`.
 
-- **The site keeps its own `package.json` and `bun.lock`; the root declares
-  no `"workspaces"`.** This is a deliberate reversal, measured rather than
-  assumed: folding the two into a Bun workspace was the original plan, but
-  `bun install --filter=<workspace>` only scopes what gets **linked** into
-  `node_modules` — the unfiltered workspace's dependency graph is still
-  resolved, downloaded and fully extracted into Bun's shared cache. Cold-cache
-  measurement: the action's own dependencies alone install 320 packages in
-  21.9s; the identical install inside a workspace filtered to the action pulls
-  644 packages in 61.3s — 2.8x, paid by every CI job for a docs site it never
-  imports. Add a site dependency with `bun add --filter docs <pkg>` (or
-  `cd docs && bun add <pkg>`), never from the root `package.json`. The cost is
-  real: nothing now enforces that the two manifests agree on their fourteen
-  shared pins, and they have ALREADY drifted — root pins
-  `@typescript-eslint/*` at 8.67.0 against the site's 8.66.0. A CI check
-  comparing the shared pins is the cheap fix and is not yet written.
 - **`bun run typecheck` is `tsc --build`, and it must stay that way.** The
   root `tsconfig.json` is solution-style — `"files": []` plus a `references`
   entry to `tsconfig.src.json` — so a plain `tsc --noEmit` against it
@@ -344,7 +329,8 @@ which only rebuilds the action's `dist/index.js`.
   used to be a second `references` entry, so one `tsc --build` covered both —
   until CI proved that wrong. `hk check --all`'s `typecheck` step runs `bun
 run typecheck` in the Lint job, but `.github/actions/setup/action.yml`
-  installs only the repository root (`bun install --frozen-lockfile`), never
+  installs only the action's workspace
+  (`bun install --frozen-lockfile --filter rust-toolchain`), never
   `docs/node_modules`. With the reference in place, the Lint job hit 40+
   `TS2307 Cannot find module '@docusaurus/…'` on every run — invisible on any
   machine that had ever run `mise run docs:*` and picked up
@@ -353,9 +339,8 @@ run typecheck` in the Lint job, but `.github/actions/setup/action.yml`
 docs:typecheck`, which `gh-pages.yml` runs (`dir = "docs"`, so it installs
   and uses the site's own `tsconfig.json` and dependencies) before `mise run
 docs:build`. Installing `docs/` in the shared setup action was rejected as
-  the fix: it would cost every action CI job the whole Docusaurus tree, the
-  same 320-packages/21.9s versus 644/61.3s cost the workspace bullet above
-  measured and rejected for the identical reason. To prove the root typecheck
+  the fix: it would cost every action CI job the whole Docusaurus tree, which
+  is exactly what `--filter rust-toolchain` exists to avoid. To prove the root typecheck
   still works after touching this, move `docs/node_modules` aside and run
   `bun run typecheck` — it must still PASS, since it no longer touches
   `docs/` at all; a pass with the directory present proves nothing, since

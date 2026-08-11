@@ -143,11 +143,12 @@ jobs:
       - name: Build
         run: mise run docs:build
 
-      # `bun.lock` is tracked as the site's supply-chain record. An install that
+      # `bun.lock` -- the single workspace lockfile at the repository root, not
+      # a second one under `docs/` -- is tracked as the supply-chain record. An install that
       # rewrites it means the manifest and the lock disagree, which is worth
       # failing on here rather than discovering as a silent dependency drift.
       - name: Check the lockfile was not rewritten
-        run: git diff --exit-code -- docs/bun.lock
+        run: git diff --exit-code -- bun.lock
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

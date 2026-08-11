@@ -520,13 +520,16 @@ printf 'v%s\nv%s.%s\nv%s\n' "${BASE}" "${MAJOR}" "${MINOR}" "${MAJOR}" | awk '!s
 
 [tasks."docs:install"]
 alias = ["docsi"]
-description = "Install the docs site dependencies (docs/ has its own lockfile)"
-dir = "docs"
-# `--frozen-lockfile`, where the upstream this was ported from uses a plain
-# `bun install`: cicd.yml asserts `git diff --exit-code -- docs/bun.lock` after
-# building, so an install that rewrites the lock fails the job. Add dependencies
-# with `bun add` from inside `docs/` instead.
-run = "bun install --frozen-lockfile"
+description = "Install the docs site dependencies from the workspace root"
+# NOT `dir = "docs"`. `docs/` is a workspace of the repository root and there is
+# one lockfile, at the root, so the install has to run there and be scoped with
+# `--filter docs`. Running it from inside `docs/` would resolve up to the same
+# root anyway and install BOTH workspaces.
+#
+# `--frozen-lockfile` because gh-pages.yml asserts `git diff --exit-code --
+# bun.lock` after building: an install that rewrites the lock fails the job.
+# Add dependencies with `bun add --filter docs` from the root instead.
+run = "bun install --frozen-lockfile --filter docs"
 
 [tasks."docs:build"]
 alias = ["docsb"]
