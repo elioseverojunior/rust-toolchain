@@ -17,7 +17,7 @@ not — a claim a reader disproves in five minutes is worth less than no claim.
 | [`taiki-e/install-action`](https://github.com/taiki-e/install-action)                                 | Install cargo tools quickly           | ✅ Replaced — `cargo-tools`, cached in the `bin` layer        |
 | [`baptiste0928/cargo-install`](https://github.com/baptiste0928/cargo-install)                         | Install and cache cargo tools         | ✅ Replaced — `cargo-tools` installs and caches them          |
 
-✅ replaced · ◐ partially replaced, remainder on the roadmap · ○ planned · ✗ deliberately out of scope
+✅ replaced · ◐ partially replaced, remainder on the roadmap · ○ planned
 
 ## Against Swatinem/rust-cache
 

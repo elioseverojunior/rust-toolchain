@@ -220,9 +220,11 @@ jobs:
 
       # `github.repository` is the STRING "owner/repo", not an object, so
       # `github.repository.name` resolves to empty. `github.event.repository.name`
-      # is the field that carries it, and using it keeps the Pages URL correct if
-      # the repository is ever renamed -- `docusaurus.config.ts` derives the
-      # site's `baseUrl` from the same name.
+      # is the field that carries it, and using it keeps the Marketplace/Release
+      # links below correct if the repository is ever renamed. This does NOT
+      # keep `docusaurus.config.ts` in sync: its `baseUrl` is the literal
+      # `process.env.DOCS_BASE ?? "/rust-toolchain/"`, not derived from the
+      # repository name, so a rename still needs that value updated by hand.
       # `steps.deploy.outputs.page_url` rather than a URL assembled from the
       # owner and repo. The Pages service is the authority on where the site
       # actually landed -- a custom domain, or a user/organisation site served

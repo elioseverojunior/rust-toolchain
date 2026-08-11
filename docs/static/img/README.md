@@ -33,7 +33,7 @@ for reference.
 ## Regenerating
 
 ```sh
-cd docusaurus/static/img
+cd docs/static/img
 ./build-icons.sh
 ```
 
