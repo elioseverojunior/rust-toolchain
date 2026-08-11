@@ -64,3 +64,6 @@ docs/.vitepress/dist/
 # Docusaurus build artifacts
 /**/build/
 /**/.docusaurus/
+
+# Stryker
+/**/.stryker-tmp/
