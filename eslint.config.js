@@ -35,6 +35,12 @@ export default [
       // Gitignored scratch directory written by local tooling, not project
       // source. Linting it fails `bun run fix:all` on files we do not own.
       ".remember/**",
+      // Stryker's mutation sandbox. It copies `src/` and prepends `@ts-nocheck`
+      // to every file, which `ban-ts-comment` then reports 200+ times — so any
+      // commit attempted while a sandbox exists fails hk's `eslint` step on
+      // code nobody wrote. `.gitignore` already lists it, but flat config does
+      // not read `.gitignore`, so it has to be repeated here.
+      "**/.stryker-tmp/**",
       // Self-managing subproject with its own eslint.config.mjs, the same way
       // `docs/` has its own. Its React/JSX and DOM globals are configured
       // there, not here, so linting it from the root reports hundreds of
