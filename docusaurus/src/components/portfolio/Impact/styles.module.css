@@ -1,0 +1,66 @@
+/*
+ * SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+ *
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ */
+
+.grid {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 1px;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  list-style: none;
+}
+
+/*
+ * Tiles share hairlines rather than each carrying a full border: the 1px grid
+ * gap over a lit background reads as a single ruled instrument panel.
+ */
+.tile {
+  display: flex;
+  flex-direction: column;
+  padding: 1.75rem;
+}
+
+.tile:hover {
+  border-color: var(--els-line-hot);
+  transform: translateY(-3px);
+}
+
+.employer {
+  margin: 0 0 1.5rem;
+  color: var(--els-paper-faint);
+}
+
+/*
+ * Block, not flex: the counter emits prefix, digits and suffix as separate
+ * inline nodes, and a flex gap would pull "~60%" apart into "~ 60 %".
+ */
+.value {
+  display: block;
+  margin: 0;
+  color: var(--els-amber);
+  font-family: var(--els-font-display);
+  font-size: clamp(3.25rem, 6.5vw, 4.5rem);
+  font-weight: 700;
+  line-height: 0.9;
+  font-variant-numeric: tabular-nums;
+}
+
+.label {
+  margin: 0.9rem 0 0;
+  color: var(--els-paper);
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.detail {
+  margin: 0.7rem 0 0;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--els-line);
+  color: var(--els-paper-dim);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}

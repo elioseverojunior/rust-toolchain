@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="6" fill="#0b0d10"/>
+  <rect x="0.5" y="0.5" width="63" height="63" rx="5.5" fill="none" stroke="#ffb000" stroke-opacity="0.35"/>
+  <!--
+    Serif E, standing in for the site's Fraunces display voice. A webfont
+    cannot be relied on inside a favicon, so this names locally available
+    serifs of similar moderate contrast; a didone stand-in would lose its
+    hairlines entirely at 16px.
+  -->
+  <text x="32" y="47" fill="#ffb000" font-family="Georgia, 'Times New Roman', serif"
+        font-size="44" font-weight="700" text-anchor="middle">E</text>
+  <!-- Signal dot: the live-node motif used on the timeline rail. -->
+  <circle cx="52" cy="13" r="4" fill="#ffb000"/>
+</svg>

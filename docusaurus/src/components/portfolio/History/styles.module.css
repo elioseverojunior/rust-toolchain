@@ -1,0 +1,327 @@
+/*
+ * SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+ *
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ */
+
+.rail {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The rail itself: a hairline that fades out at the foot of the timeline. */
+.rail::before {
+  position: absolute;
+  top: 0.5rem;
+  bottom: 0;
+  left: 5px;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    var(--els-line-strong),
+    var(--els-line) 70%,
+    transparent
+  );
+  content: "";
+}
+
+.entry {
+  position: relative;
+  padding-bottom: clamp(2.5rem, 5vw, 3.75rem);
+  padding-left: clamp(1.75rem, 4vw, 2.75rem);
+}
+
+.entry:last-child {
+  padding-bottom: 0;
+}
+
+.node {
+  position: absolute;
+  top: 0.5rem;
+  left: 0;
+  width: 11px;
+  height: 11px;
+  border: 1px solid var(--els-line-strong);
+  background: var(--els-ink-900);
+  transform: rotate(45deg);
+}
+
+/* The live role gets the signal colour and a slow halo. */
+.nodeLive {
+  animation: live 2.6s ease-in-out infinite;
+  border-color: var(--els-amber);
+  background: var(--els-amber);
+}
+
+@keyframes live {
+  50% {
+    box-shadow: 0 0 0 7px rgb(255 176 0 / 0%);
+  }
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(255 176 0 / 55%);
+  }
+}
+
+.period {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0 0 0.7rem;
+  gap: 0.5rem;
+}
+
+.sep {
+  opacity: 0.5;
+}
+
+.employer {
+  margin: 0;
+  color: var(--els-paper);
+  font-family: var(--els-font-display);
+  font-size: clamp(1.75rem, 3.6vw, 2.5rem);
+  font-weight: 600;
+  line-height: 1.05;
+}
+
+.titles {
+  margin: 0.35rem 0 0;
+  color: var(--els-amber);
+  font-family: var(--els-font-mono);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.industry {
+  margin: 0.4rem 0 0;
+  color: var(--els-paper-faint);
+  font-size: 0.875rem;
+  font-style: italic;
+}
+
+.progression {
+  color: var(--els-amber);
+}
+
+/* --- Several titles at one employer --- */
+
+.tenures {
+  margin: 1.4rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * A second, lighter rail nested inside the timeline. It marks the sub-blocks
+ * as belonging to the employer above rather than to the page-level sequence.
+ */
+.tenure {
+  position: relative;
+  padding-bottom: 1.75rem;
+  padding-left: 1.25rem;
+  border-left: 1px solid var(--els-line);
+}
+
+.tenure:last-child {
+  padding-bottom: 0;
+  border-left-color: transparent;
+}
+
+/* Tick on the sub-rail, echoing the diamond node of the main timeline. */
+.tenure::before {
+  position: absolute;
+  top: 0.55rem;
+  left: -4px;
+  width: 7px;
+  height: 7px;
+  background: var(--els-ink-900);
+  border: 1px solid var(--els-line-hot);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.tenureHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin-bottom: 0.6rem;
+  gap: 0.35rem 1rem;
+  justify-content: space-between;
+}
+
+.tenureTitle {
+  margin: 0;
+  color: var(--els-amber);
+  font-family: var(--els-font-mono);
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.tenureMeta {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.bullets {
+  display: grid;
+  margin: 1.3rem 0 0;
+  padding: 0;
+  gap: 0.7rem;
+  list-style: none;
+}
+
+.bullet {
+  position: relative;
+  padding-left: 1.4rem;
+  color: var(--els-paper-dim);
+  font-size: 0.9375rem;
+  line-height: 1.65;
+}
+
+/* Rotated square, matching the timeline node rather than a generic disc. */
+.bullet::before {
+  position: absolute;
+  top: 0.62em;
+  left: 0.15rem;
+  width: 5px;
+  height: 5px;
+  background: var(--els-amber);
+  content: "";
+  opacity: 0.85;
+  transform: rotate(45deg);
+}
+
+.outcomes {
+  display: grid;
+  margin: 1.4rem 0 0;
+  padding: 0;
+  gap: 0.85rem;
+  list-style: none;
+}
+
+.outcome {
+  display: grid;
+  align-items: baseline;
+  border-left: 1px solid var(--els-line-hot);
+  gap: 0.2rem 1rem;
+  grid-template-columns: minmax(5.5rem, auto) 1fr;
+  padding-left: 1rem;
+}
+
+.outcomeValue {
+  color: var(--els-amber);
+  font-family: var(--els-font-mono);
+  font-size: 1.375rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.outcomeUnit {
+  color: var(--els-paper-faint);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.outcomeClaim {
+  color: var(--els-paper-dim);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 1.4rem 0 0;
+  padding: 0;
+  gap: 0.4rem;
+  list-style: none;
+}
+
+.chip {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--els-line);
+  border-radius: var(--els-radius);
+  color: var(--els-paper-dim);
+  font-family: var(--els-font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  transition: all var(--els-fast) var(--els-ease);
+}
+
+.chip:hover {
+  border-color: var(--els-line-strong);
+  color: var(--els-paper);
+}
+
+/* Skills flagged prominence 1 in the record are the ones to be found for. */
+.chipCore {
+  border-color: var(--els-line-hot);
+  background: rgb(255 176 0 / 7%);
+  color: var(--els-amber-soft);
+}
+
+/* --- Condensed earlier roles --- */
+
+.earlier {
+  margin-top: clamp(2.5rem, 5vw, 3.5rem);
+  padding-top: 2rem;
+  border-top: 1px solid var(--els-line);
+}
+
+.earlierLabel {
+  margin: 0 0 1.25rem;
+  color: var(--els-paper-faint);
+}
+
+.earlierList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.earlierRow {
+  display: grid;
+  align-items: baseline;
+  padding-block: 0.7rem;
+  border-bottom: 1px solid var(--els-line);
+  gap: 0.15rem 1.5rem;
+  grid-template-columns: minmax(11rem, auto) minmax(10rem, auto) 1fr;
+}
+
+.earlierPeriod {
+  color: var(--els-paper-faint);
+  font-family: var(--els-font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.earlierEmployer {
+  color: var(--els-paper);
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
+.earlierTitle {
+  color: var(--els-paper-dim);
+  font-size: 0.875rem;
+}
+
+@media (max-width: 700px) {
+  .outcome {
+    grid-template-columns: 1fr;
+  }
+
+  .earlierRow {
+    grid-template-columns: 1fr;
+  }
+}
