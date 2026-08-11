@@ -21,6 +21,10 @@ concurrency:
 # not fail the action's gate. It compiles nothing, so it also skips the toolchain
 # setup every other job in cicd.yml pays for.
 #
+# Published through the Pages ARTIFACT source (`build_type: workflow`), not by
+# committing to a `gh-pages` branch. A repository serves Pages from exactly one
+# source, so the two are alternatives rather than a belt-and-braces pair.
+#
 # No `push` trigger: cicd.yml's `gh-pages` job calls this workflow after Release,
 # so a push to main would publish the site here AND again through that call --
 # and between the two the site could sit ahead of the released version.
@@ -38,7 +42,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Publish the built site to gh-pages, not just build it"
+        description: "Deploy the built site to GitHub Pages, not just build it"
         type: boolean
         default: false
       version:
@@ -58,7 +62,7 @@ on:
   workflow_call:
     inputs:
       publish:
-        description: "Publish the built site to gh-pages, not just build it"
+        description: "Deploy the built site to GitHub Pages, not just build it"
         type: boolean
         default: false
       version:
@@ -153,7 +157,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish to gh-pages
+    name: Deploy to Pages
     needs: build
     # `inputs.publish` is truthy rather than compared to 'true': a boolean
     # workflow_dispatch input arrives as a real boolean, and GitHub casts both
@@ -165,66 +169,74 @@ jobs:
     if: ${{ needs.build.result == 'success' && inputs.publish }}
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 10
+    # `pages: write` + `id-token: write` are what the Pages ARTIFACT deployment
+    # needs: `deploy-pages` mints an OIDC token to prove to the Pages service
+    # that this workflow run produced the artifact. `contents: write` is gone
+    # with the branch push -- nothing here commits to the repository any more,
+    # which is the security win of the switch as much as the ergonomic one.
     permissions:
-      contents: write
+      contents: read
+      pages: write
+      id-token: write
+    # The deployment shows on the repo's Environments page with this URL, and
+    # `deploy-pages` supplies the value through its `page_url` output.
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          submodules: "recursive"
-          fetch-depth: 0
-          fetch-tags: "true"
-          token: ${{ secrets.GITHUB_TOKEN || github.token }}
-
-      - name: GitHub Actions Bot Configuration
-        id: bot-config
-        uses: ./.github/actions/bot-setup
-
+      # No checkout, and no bot identity. Both existed only to commit the built
+      # site onto a branch; an artifact deployment publishes without a commit,
+      # so this job never needs the repository on disk.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: docs-site
           path: dist
 
-      # `peaceiris`, not `upload-pages-artifact`/`deploy-pages`. Pages serves this
-      # repo from the `gh-pages` BRANCH, and those two actions publish through the
-      # Pages ARTIFACT source instead -- a repo can serve from only one, so they
-      # deployed something the site never reads. They were also pointed at
-      # `target/doc` -- rustdoc's output in the crate this was copied from, which
-      # no step here creates. The artifact downloaded above is the Docusaurus
-      # site, in `dist`.
+      # The Pages ARTIFACT path, not a branch push. The repository's Pages
+      # source is "GitHub Actions" (`build_type: workflow`), and a repo can
+      # serve from exactly one source -- so this and a `gh-pages` branch push
+      # are mutually exclusive, not complementary.
       #
-      # `keep_files: true` is load-bearing rather than a convenience: the default
-      # clears the branch before copying. For the same reason never set
-      # `force_orphan` here -- it discards the branch history outright. The cost is
-      # that nothing is ever deleted, so a renamed page keeps serving its old URL
-      # until someone prunes it by hand.
-      - uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
+      # `upload-pages-artifact` is not `upload-artifact` with a different name:
+      # it tars the directory and publishes it under the reserved name
+      # `github-pages`, which is the only artifact `deploy-pages` will read.
+      # The plain `docs-site` artifact the build job uploads stays as it is --
+      # it is what a reviewer downloads from a pull request, where nothing
+      # deploys.
+      #
+      # Deployment REPLACES the site wholesale, which the branch push did not.
+      # `keep_files: true` there meant nothing was ever deleted, so a renamed
+      # page kept serving its old URL indefinitely. Now a removed page 404s on
+      # the next deploy. That is the intended behaviour -- the site matches the
+      # commit that produced it -- but it is a real change: any URL that only
+      # existed because of that accumulation will stop resolving.
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN || github.token }}
-          publish_dir: dist
-          publish_branch: gh-pages
-          keep_files: true
-          # From bot-setup's outputs rather than repeated literals, so the
-          # identity the site commits under is declared in exactly one place.
-          user_name: ${{ steps.bot-config.outputs.bot-user }}
-          user_email: ${{ steps.bot-config.outputs.bot-email }}
-          commit_message: "docs: publish v${{ inputs.version }} ${{ github.sha }}"
+          path: dist
+
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
 
       # `github.repository` is the STRING "owner/repo", not an object, so
       # `github.repository.name` resolves to empty. `github.event.repository.name`
       # is the field that carries it, and using it keeps the Pages URL correct if
       # the repository is ever renamed -- `docusaurus.config.ts` derives the
       # site's `baseUrl` from the same name.
+      # `steps.deploy.outputs.page_url` rather than a URL assembled from the
+      # owner and repo. The Pages service is the authority on where the site
+      # actually landed -- a custom domain, or a user/organisation site served
+      # from the root, both make the constructed form wrong -- and it now comes
+      # back from the deployment itself.
       - name: Summary
         env:
           VERSION: ${{ inputs.version }}
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.event.repository.name }}
           SHA: ${{ github.sha }}
-          BOT: ${{ steps.bot-config.outputs.bot-user }}
+          SITE: ${{ steps.deploy.outputs.page_url }}
         run: |
           set -eo pipefail
-
-          SITE="https://${OWNER}.github.io/${REPO}/"
 
           {
             echo "## Documentation published"
@@ -233,7 +245,7 @@ jobs:
             echo "| --- | --- |"
             echo "| **Site** | <${SITE}> |"
             echo "| **Commit** | \`${SHA}\` |"
-            echo "| **Branch** | \`gh-pages\` (pushed by ${BOT}) |"
+            echo "| **Source** | Pages artifact (\`github-pages\` environment) |"
             if [ -n "${VERSION}" ]; then
               echo "| **Version** | \`v${VERSION}\` |"
             fi
@@ -244,7 +256,7 @@ jobs:
             # it linked the API reference docs.rs builds automatically. This
             # repository publishes a GitHub Action; there is no crate and no
             # docs.rs page, so the equivalent surface is the Marketplace listing.
-            echo "- Marketplace: <https://github.com/marketplace/actions/rust-toolchain>"
+            echo "- Marketplace: <https://github.com/marketplace/actions/rust-toolchain-and-cache>"
             if [ -n "${VERSION}" ]; then
               echo "- Release: <https://github.com/${OWNER}/${REPO}/releases/tag/v${VERSION}>"
             fi
