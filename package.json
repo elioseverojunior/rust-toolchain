@@ -46,8 +46,8 @@
     "mermaid:lint": "bun scripts/lint-mermaid.ts",
     "eslint:lint:fix": "eslint --fix --max-warnings 0 .",
     "fix:all": "bun run eslint:lint:fix && bun run prettier:format:fix",
-    "typecheck": "tsc --noEmit",
-    "typecheck:watch": "tsc --noEmit --watch"
+    "typecheck": "tsc --build",
+    "typecheck:watch": "tsc --build --watch"
   },
   "trustedDependencies": [
     "unrs-resolver"
