@@ -94,6 +94,7 @@ env:
   # setup-bun, and installing the workspace's Rust tools would cost minutes in a
   # job that never touches a crate.
   MISE_TASK_RUN_AUTO_INSTALL: false
+  REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
 
 jobs:
   build:
@@ -115,7 +116,7 @@ jobs:
           submodules: "recursive"
           fetch-depth: 0
           fetch-tags: "true"
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+          ref: ${{ env.REF }}
           token: ${{ secrets.GITHUB_TOKEN || github.token }}
 
       - name: GitHub Actions Bot Configuration
@@ -260,10 +261,12 @@ jobs:
             echo ""
             echo "### Also published"
             echo ""
-            # No docs.rs entry. The upstream this came from published a crate, so
-            # it linked the API reference docs.rs builds automatically. This
-            # repository publishes a GitHub Action; there is no crate and no
-            # docs.rs page, so the equivalent surface is the Marketplace listing.
+            # The Marketplace listing is this project's published API surface:
+            # it ships a GitHub Action, so `action.yml`'s inputs and outputs are
+            # what a consumer reads. The listing slug is derived from
+            # `action.yml`'s `name:` ("Rust Toolchain and Cache"), NOT from the
+            # repository name -- renaming the repo leaves this URL correct, and
+            # renaming the action breaks it.
             echo "- Marketplace: <https://github.com/marketplace/actions/rust-toolchain-and-cache>"
             if [ -n "${VERSION}" ]; then
               echo "- Release: <https://github.com/${OWNER}/${REPO}/releases/tag/v${VERSION}>"
