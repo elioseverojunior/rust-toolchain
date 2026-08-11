@@ -1,0 +1,42 @@
+/*
+ * SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+ *
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ */
+
+.hero {
+  padding: 4rem 1rem;
+  text-align: center;
+}
+
+.text {
+  margin: 0 0 1rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.tagline {
+  max-width: 46rem;
+  margin: 0 auto 2rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.features {
+  display: grid;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0 1rem 4rem;
+  gap: 2rem;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+}
+
+.feature h2 {
+  font-size: 1.25rem;
+}
