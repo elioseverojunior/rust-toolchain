@@ -10,7 +10,11 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 - **Runtime/Package mgr**: Bun (managed by mise). `bun.lock` is lockfile.
 - **Config**: `mise.toml` manages tools/bun + env (`GITHUB_TOKEN` sourced via `gh auth token`, mise-only).
-- **TypeScript**: `tsc -p tsconfig.json --noEmit` for typechecking (strict mode).
+- **TypeScript**: `tsc --build` for typechecking (strict mode). The root
+  `tsconfig.json` is solution-style (`files: []` + `references`), so
+  `tsc --noEmit` alone would check zero files — `--build` is what traverses
+  the references and actually checks both the action (`tsconfig.src.json`)
+  and the site (`docusaurus/tsconfig.json`).
 
 ## Commands (run in this order before commit)
 

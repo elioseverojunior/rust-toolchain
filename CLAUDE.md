@@ -26,7 +26,7 @@ Run in this order before every commit:
 
 ```sh
 bun run fix:all      # eslint --fix, then prettier --write
-bun run typecheck    # tsc --noEmit (covers src/*.test.ts too)
+bun run typecheck    # tsc --build (covers src/*.test.ts and docusaurus/ too)
 bun run test         # 100% line/function/statement gate from bunfig.toml
 bun run build        # regenerate dist/index.js
 hk check --all       # exactly what the CI Lint job runs
