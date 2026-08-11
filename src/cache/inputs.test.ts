@@ -39,6 +39,67 @@ const enabled = (extra: Record<string, string> = {}): CacheInputSource =>
 const defaultEnvHash = hashBuildEnv({ RUNNER_OS: "Linux", RUNNER_ARCH: "X64" });
 
 describe("readCacheRequest", () => {
+  // Every one of these `.trim()` calls survived mutation testing: deleting any
+  // of them left the whole suite green. They are belt-and-braces in production
+  // — `@actions/core`'s getInput trims the ends already — but `CacheInputSource`
+  // is a port any caller may implement, and the consequence of losing one is
+  // silent rather than loud: whitespace reaching a key derives a DIFFERENT
+  // cache entry from the same configuration, with no error to notice.
+  describe("whitespace-only inputs are treated as unset", () => {
+    it("falls back to every layer for a blank cache-layers", () => {
+      expect(
+        readCacheRequest(enabled({ "cache-layers": "   " }))?.layers,
+      ).toEqual(["registry", "build", "bin"]);
+    });
+
+    it("treats a blank cache-key-hash as missing rather than as a hash", () => {
+      expect(() =>
+        readCacheRequest(source({ cache: "true", "cache-key-hash": "  \n " })),
+      ).toThrow("cache-key-hash");
+    });
+
+    it("carries no suffix for a blank cache-key-suffix", () => {
+      expect(
+        readCacheRequest(enabled({ "cache-key-suffix": "   " }))?.context
+          .suffix,
+      ).toBe("");
+    });
+
+    // Untrimmed, `"  "` is truthy, so the default never applies and
+    // `parseWorkspaces` rejects it as naming no mapping at all.
+    it("falls back to the default mapping for blank cache-workspaces", () => {
+      const request = readCacheRequest({
+        getInput: (name) =>
+          ({
+            cache: "true",
+            "cache-key-hash": "a1b2c3",
+            "cache-workspaces": "  ",
+          })[name] ?? "",
+        env: {
+          RUNNER_OS: "Linux",
+          RUNNER_ARCH: "X64",
+          GITHUB_WORKSPACE: "/workspace",
+        },
+      });
+      expect(request?.workspaces).toEqual([
+        { manifestDir: "/workspace", targetDir: "/workspace/target" },
+      ]);
+    });
+
+    // Resolved against the process's own directory, not against a directory
+    // literally named "  " beneath it.
+    it("falls back to the cwd for a blank GITHUB_WORKSPACE", () => {
+      const request = readCacheRequest({
+        getInput: (name) =>
+          ({ cache: "true", "cache-key-hash": "a1b2c3" })[name] ?? "",
+        env: { RUNNER_OS: "Linux", RUNNER_ARCH: "X64", GITHUB_WORKSPACE: "  " },
+      });
+      expect(request?.workspaces).toEqual([
+        { manifestDir: process.cwd(), targetDir: `${process.cwd()}/target` },
+      ]);
+    });
+  });
+
   // Nothing else is examined when caching is off: those inputs describe a key
   // nobody asked for, so validating them would fail runs that never cache.
   it("returns undefined when cache is unset, ignoring every other input", () => {
@@ -140,6 +201,24 @@ describe("readCacheRequest", () => {
     expect(() =>
       readCacheRequest(enabled({ "cache-key-suffix": "x".repeat(600) })),
     ).toThrow(/actions\/cache rejects any key over 512/);
+  });
+
+  // The boundary itself, not just a value well past it. 512 is the longest key
+  // actions/cache accepts, so a key of exactly 512 must be allowed through —
+  // `key.length <= MAX` rather than `<`. Mutation testing found that swapping
+  // those two left every other test here green, because none of them sat on
+  // the boundary; rejecting a legal key would look like a mysterious failure
+  // on a configuration the service would in fact have accepted.
+  //
+  // 458 is the suffix length that makes the longest (build) key exactly 512:
+  // one more reports "is 513 characters" in the rejection message above.
+  it("accepts a derived key of exactly the maximum length", () => {
+    expect(() =>
+      readCacheRequest(enabled({ "cache-key-suffix": "x".repeat(458) })),
+    ).not.toThrow();
+    expect(() =>
+      readCacheRequest(enabled({ "cache-key-suffix": "x".repeat(459) })),
+    ).toThrow("is 513 characters");
   });
 
   // The build key is the longer of the two, so the bound must be measured

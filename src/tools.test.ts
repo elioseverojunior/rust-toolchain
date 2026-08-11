@@ -459,7 +459,10 @@ describe("ensureTools", () => {
     expect(outcomes).toEqual([
       { name: "cargo-deny", version: "0.16.1", action: "kept" },
     ]);
-    expect(deps.calls.map((c) => c.file)).toEqual(["cargo-deny"]);
+    // The argv, not just the binary. `--version` is the whole probe, and the
+    // distinction between "absent" and "present but mute" that this module
+    // exists to draw is a statement about how that exact flag behaves.
+    expect(deps.calls).toEqual([{ file: "cargo-deny", args: ["--version"] }]);
   });
 
   // Exact comparison, not containment: 0.16.1 is a substring of 0.16.10, and
@@ -517,6 +520,45 @@ describe("ensureTools", () => {
     expect(deps.calls.map((c) => c.file)).toEqual(["cargo-binstall", "cargo"]);
   });
 
+  // The `version === undefined` conjunct, the other half nothing pinned. An
+  // exact bin hit is not a licence to keep whatever is on disk: a binary that
+  // reports a version and reports the WRONG one must still be replaced. Only
+  // a binary that will not name its version at all rides on the hit.
+  it("reinstalls a wrong-version tool even when the bin layer hit exactly", () => {
+    const deps = runner({
+      "cargo-deny": [{ status: 0, stdout: "cargo-deny 0.16.0" }],
+    });
+    deps.binRestoredExactly = true;
+
+    const outcomes = ensureTools(
+      resolution([{ name: "cargo-deny", version: "0.16.1" }]),
+      deps,
+    );
+
+    expect(outcomes[0]?.action).toBe("installed");
+  });
+
+  // The `probe.present` conjunct, which mutation testing showed nothing
+  // pinned: replacing `probe.present && version === undefined` with `true`
+  // survived. An ABSENT tool must still be installed even on an exact bin
+  // hit — the hit proves the archive matched this tool set, not that this
+  // particular binary made it onto disk.
+  it("installs an absent tool even when the bin layer hit exactly", () => {
+    const deps = runner({ "cargo-deny": [absent] });
+    deps.binRestoredExactly = true;
+
+    const outcomes = ensureTools(
+      resolution([{ name: "cargo-deny", version: "0.16.1" }]),
+      deps,
+    );
+
+    expect(outcomes[0]?.action).toBe("installed");
+    expect(deps.calls.map((call) => call.file)).toEqual([
+      "cargo-deny",
+      "cargo",
+    ]);
+  });
+
   it("installs an absent tool with a locked, forced, pinned argv", () => {
     const deps = runner({ "cargo-nextest": [absent] });
     ensureTools(
@@ -547,6 +589,43 @@ describe("ensureTools", () => {
     );
     expect(outcomes[0]?.action).toBe("installed");
     expect(deps.pauses).toEqual([1_000]);
+  });
+
+  // Two failures, not one, and that is the entire point. `2 ** 0` is 1, so a
+  // single pause is 1000 ms whether the backoff multiplies or DIVIDES by the
+  // power — the test above passes either way, which is how an inverted backoff
+  // survived mutation testing. The second pause is the first value that can
+  // tell them apart: 2000 when it grows, 500 when it shrinks.
+  it("doubles the pause on each successive attempt", () => {
+    const deps = runner({
+      "cargo-deny": [absent],
+      cargo: [{ status: 1 }, { status: 1 }, { status: 0 }],
+    });
+    ensureTools(resolution([{ name: "cargo-deny", version: "0.16.1" }]), deps);
+    expect(deps.pauses).toEqual([1_000, 2_000]);
+  });
+
+  // Pins the attempt COUNT, which nothing else did: `attempt <= attempts`
+  // mutated to `<` runs two installs instead of three and every other test
+  // here still passes, because none of them counts the calls.
+  //
+  // The pause list is the second half of the same assertion. Three attempts
+  // means two pauses — a job that has already failed is not made slower by
+  // waiting for a retry that will never happen.
+  it("makes exactly `attempts` install attempts, pausing between them only", () => {
+    const deps = runner({
+      "cargo-deny": [absent],
+      cargo: [{ status: 1 }, { status: 1 }, { status: 1 }],
+    });
+    expect(() =>
+      ensureTools(
+        resolution([{ name: "cargo-deny", version: "0.16.1" }]),
+        deps,
+      ),
+    ).toThrow();
+
+    expect(deps.calls.filter((call) => call.file === "cargo")).toHaveLength(3);
+    expect(deps.pauses).toEqual([1_000, 2_000]);
   });
 
   it("fails once the install attempts are exhausted", () => {

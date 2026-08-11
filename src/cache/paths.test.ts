@@ -44,14 +44,23 @@ describe("parseWorkspaces", () => {
 
   // Cache paths come from workflow input. A mapping escaping the checkout
   // would let a cache entry read or overwrite files outside it.
-  it.each(["../etc -> target", ". -> ../outside", "/etc -> target"])(
-    "rejects %s for escaping the workspace",
-    (line) => {
-      expect(() => parseWorkspaces(line, ROOT)).toThrow(
-        "outside the workspace",
-      );
-    },
-  );
+  //
+  // The bare `..` entries are not redundant with the `../x` ones, and mutation
+  // testing is what proved it: `resolveInside` tests
+  // `offset === ".." || offset.startsWith("..{sep}")`, and deleting the first
+  // clause left every case here passing. A parent directory reached exactly —
+  // with nothing after it — produces the offset `".."`, which no prefix test
+  // with a separator can match, so that clause is the whole guard for the most
+  // obvious traversal there is.
+  it.each([
+    "../etc -> target",
+    ". -> ../outside",
+    "/etc -> target",
+    ".. -> target",
+    ". -> ..",
+  ])("rejects %s for escaping the workspace", (line) => {
+    expect(() => parseWorkspaces(line, ROOT)).toThrow("outside the workspace");
+  });
 
   it("rejects an empty list", () => {
     expect(() => parseWorkspaces("   ", ROOT)).toThrow(
@@ -59,12 +68,20 @@ describe("parseWorkspaces", () => {
     );
   });
 
-  // The mirror of the sibling-prefix case below, on the other side: `..` is a
-  // path segment, not a string prefix, so a directory whose *name* starts
-  // with two dots is inside the checkout and must be accepted.
+  // The other half of that clause, and the reason it compares a whole segment
+  // rather than a string prefix: a directory whose NAME starts with two dots
+  // is inside the checkout and must be accepted. Pinning only the rejections
+  // above would be satisfied by a bare `startsWith("..")`, which refuses
+  // these. Both sides of the arrow, since each is resolved separately.
   it("accepts a directory whose name merely begins with two dots", () => {
     expect(parseWorkspaces(". -> ..cargo-target", ROOT)).toEqual([
       { manifestDir: "/workspace", targetDir: "/workspace/..cargo-target" },
+    ]);
+    expect(parseWorkspaces("..cargo-target -> target", ROOT)).toEqual([
+      {
+        manifestDir: "/workspace/..cargo-target",
+        targetDir: "/workspace/target",
+      },
     ]);
   });
 
@@ -96,8 +113,15 @@ describe("registryPaths", () => {
     ]);
   });
 
-  it("never includes registry/src", () => {
-    expect(registryPaths("/c").join("\n")).not.toContain("registry/src");
+  // Pinned rather than left implied: "it was already excluded" is exactly the
+  // kind of fact a later refactor re-adds by accident. Pruning no longer
+  // narrows this list either — the paths array is a cache entry's identity, so
+  // narrowing it here is what made every pruned entry unreadable, and the
+  // keep-set now selects what is linked into the stage instead.
+  it("never archives registry/src or git/checkouts", () => {
+    const paths = registryPaths("/home/runner/.cargo");
+    expect(paths.some((path) => path.includes("/registry/src"))).toBe(false);
+    expect(paths.some((path) => path.includes("/git/checkouts"))).toBe(false);
   });
 });
 
@@ -138,49 +162,6 @@ describe("buildPaths", () => {
     expect(paths).toContain("/w/ta/**");
     expect(paths).toContain("/w/tb/**");
     expect(paths.filter((p) => p.startsWith("!"))).toHaveLength(8);
-  });
-});
-
-describe("registryPaths", () => {
-  // registry/src is extracted from the .crate files beside it, so excluding it
-  // costs a decompression on restore and nothing else. It has never been
-  // archived — this pins that, because "it was already excluded" is exactly the
-  // kind of fact a later refactor re-adds by accident.
-  it("never archives registry/src or git/checkouts", () => {
-    const paths = registryPaths("/home/runner/.cargo");
-    expect(paths.some((p) => p.includes("/registry/src"))).toBe(false);
-    expect(paths.some((p) => p.includes("/git/checkouts"))).toBe(false);
-  });
-
-  // Bare directories, so tar's own recursion archives them — one manifest line
-  // per layer instead of one per file. Pruning no longer narrows this list:
-  // the paths array is a cache entry's identity, so narrowing it here is what
-  // made every pruned entry unreadable. The keep-set now selects what is
-  // linked into the stage instead — see `cache/stage.ts`.
-  it("names the three bare directories", () => {
-    expect(registryPaths("/c")).toEqual([
-      "/c/registry/index",
-      "/c/registry/cache",
-      "/c/git/db",
-    ]);
-  });
-});
-
-describe("buildPaths", () => {
-  const workspaces = [{ manifestDir: "/w", targetDir: "/w/target" }];
-
-  // The unpruned form, which `cache-prune: off` uses. Both directory negations
-  // are load-bearing: `@actions/cache` runs `tar --files-from` with no
-  // `--no-recursion`, so any directory left in the manifest re-expands and
-  // re-includes everything the exclusions above it removed.
-  it("emits the glob set with both directory negations", () => {
-    expect(buildPaths(workspaces)).toEqual([
-      "/w/target/**",
-      "!/w/target/**/incremental/**",
-      "!/w/target/**/examples/**",
-      "!/w/target/",
-      "!/w/target/**/",
-    ]);
   });
 });
 

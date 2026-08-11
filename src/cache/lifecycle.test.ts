@@ -183,6 +183,22 @@ describe("saveLayers", () => {
     expect(results.every((r) => r.saved)).toBe(true);
   });
 
+  // The boundary, which nothing pinned: `bytes > budget` mutated to `>=` left
+  // every other budget test green, because none of them sat exactly on the
+  // limit. `cache-budget` is documented as the largest entry that WILL be
+  // saved, so a layer measuring exactly the budget must still be saved —
+  // treating it as over would silently drop the entry a caller sized their
+  // budget to admit.
+  it("saves a layer measuring exactly the budget", async () => {
+    const results = await saveLayers(
+      saveArgs({
+        budget: 1000,
+        measure: () => ({ bytes: 1000, unmeasured: [] }),
+      }),
+    );
+    expect(results.every((result) => result.saved)).toBe(true);
+  });
+
   it("treats a save failure as a warning, not a build failure", async () => {
     const l = log();
     const results = await saveLayers(
