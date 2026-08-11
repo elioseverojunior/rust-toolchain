@@ -64,7 +64,7 @@ jobs:
           EOF
           cat rust-toolchain.toml
 
-      - name: Setup Rust Toolchain
+      - name: Setup Rust Toolchain And Cache
         id: rust-toolchain
         uses: ./
         with:

@@ -20,7 +20,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
   (action-docs emits unpadded tables; Prettier realigns them.)
 -->
 
-# Rust Toolchain Action
+# Rust Toolchain and Cache
 
 **Install a Rust toolchain that actually matches what your repository asked for — and get the cache keys for free.**
 

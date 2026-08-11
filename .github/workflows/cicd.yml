@@ -265,7 +265,7 @@ jobs:
       # at the repository root. This repository has no Rust crate, so the
       # default `. -> target` names a directory that never exists — which is
       # how an exclusion assertion here stayed vacuous through eight reviews.
-      - name: Run Rust Toolchain Action
+      - name: Run Rust Toolchain And Cache
         id: rust-toolchain
         uses: ./
         with:
@@ -459,7 +459,7 @@ jobs:
       # same key, one loses, and every CI run across three operating systems
       # emits a warning that means nothing — which is how a warning channel
       # stops being read.
-      - name: Run Rust Toolchain Action Again (Same Job, Different Suffix)
+      - name: Run Rust Toolchain And Cache Again (Same Job, Different Suffix)
         id: rust-toolchain-second
         uses: ./
         with:
@@ -1122,7 +1122,7 @@ jobs:
               `| **Actor** | [@${actor}](${actorUrl}) |`,
               `| **Author** | [@${sender}](${senderUrl}) |`,
               ``,
-              `> 📦 To test the Rust Toolchain action from this PR:`,
+              `> 📦 To test the Rust Toolchain and Cache action from this PR:`,
               `> \`\`\`yaml`,
               `> - uses: ${context.repo.owner}/${context.repo.repo}@${semVer}`,
               `> \`\`\``,
