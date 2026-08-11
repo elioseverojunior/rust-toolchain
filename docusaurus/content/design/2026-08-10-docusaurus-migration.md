@@ -1,9 +1,3 @@
-{/*
-SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
-
-SPDX-License-Identifier: MIT OR Apache-2.0
-*/}
-
 # Docusaurus Migration — Design
 
 Status: approved, not yet planned
@@ -218,8 +212,10 @@ emitting `modulepreload` links for katex, gantt, C4 and the rest; and it does no
 configured theme variables.
 
 Note that the copied site pins `mermaid` but never wires it — it has no `@docusaurus/theme-mermaid`, no
-`markdown.mermaid` and no `themes` entry. Adding the theme is new work, not a copy. Nine fences must keep rendering:
-eight in `ARCHITECTURE.md`, one in `RUNBOOKS.md`.
+`markdown.mermaid` and no `themes` entry. Adding the theme is new work, not a copy. Eight diagrams must keep
+rendering, all of them in `ARCHITECTURE.md`. An earlier draft of this document said nine, counting a ninth in
+`RUNBOOKS.md`; that one is an inline code span naming the ` ```mermaid ` fence type while describing hk's
+mermaid step, not a diagram. `grep` counts it and the parser does not, which is the more trustworthy of the two.
 
 `scripts/lint-mermaid.ts` is untouched. It globs `**/*.md` from the repository root and parses each fence with
 mermaid itself, so it never knew which framework consumed the output. The `hk` `mermaid` step keeps working
@@ -322,7 +318,7 @@ Two bullets survive and must be carried across verbatim in substance:
 
 - `mise run docs:build` produces `docs/build` and the published site renders all eleven pages plus the rewritten
   home page, each at the URL it had under VitePress.
-- All nine mermaid diagrams render, and `.vitepress/` no longer exists.
+- All eight mermaid diagrams render, and `.vitepress/` no longer exists.
 - Two lockfiles, deliberately: `bun.lock` at the root for the action, `docs/bun.lock` for the site. No `docusaurus/`
   directory — because it has
   become `docs/`, not because it was removed.
