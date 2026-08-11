@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+name: "CodeQL Analysis"
+
+concurrency:
+  group: codeql-analysis-${{ github.ref_name }}
+  cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch }}
+
+# No `push` or `pull_request` of its own: cicd.yml's `sast` job CALLS this
+# workflow, so declaring them here would analyse the same commit twice -- two
+# full database builds per push, for one result.
+#
+# `workflow_call` is what that job uses, and it is why the `REF` expression
+# below reads `github.event.pull_request.head.sha`: in a called workflow the
+# `github` context is the CALLER's, so on a pull request that resolves to the
+# head commit rather than the merge ref. Under the schedule it is never a pull
+# request and the expression falls through to `github.ref`.
+#
+# The cron is the one thing a caller cannot provide: a weekly scan re-runs the
+# CURRENT queries against unchanged code, which is how a newly published query
+# finds an old vulnerability. `workflow_dispatch` stays so the scan can be
+# triggered by hand without waiting for Sunday.
+on:
+  schedule:
+    - cron: "0 12 * * 0"
+  workflow_call:
+  workflow_dispatch:
+
+# Read-only at the top level. The `analyze` job below declares the exact same
+# set it always did, and a job's `permissions` block replaces the workflow
+# default rather than narrowing it -- so nothing loses access. A top-level
+# write is what scored Token-Permissions 0: OpenSSF Scorecard treats any
+# workflow-wide write as granting it to every job, whether or not they use it.
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: CodeQL Analysis
+    runs-on: ${{ vars.RUNS_ON_ARM64 || vars.RUNS_ON || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # `actions` alongside `javascript-typescript`: a CodeQL configuration for
+        # the actions language already exists on this repo, and with nothing
+        # analysing it the status page reports a configuration that never
+        # receives results. It also earns its place -- it scans the workflows
+        # themselves for script injection, which is the class of bug this repo
+        # has 8 workflows' worth of surface for.
+        #
+        # Both languages now run at REVIEW time too, because cicd.yml calls this
+        # workflow instead of repeating a copy that had drifted to
+        # `javascript-typescript` alone. The workflow-injection check that
+        # guards these very files was, until then, the one check no pull request
+        # ran.
+        language: [javascript-typescript, actions]
+    env:
+      REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: "recursive"
+          fetch-depth: 0
+          fetch-tags: "true"
+          ref: ${{ env.REF }}
+          token: ${{ secrets.GITHUB_TOKEN || github.token }}
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          languages: ${{ matrix.language }}
+          queries: +security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          category: "/language:${{ matrix.language }}"
