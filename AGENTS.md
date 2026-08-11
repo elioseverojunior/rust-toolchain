@@ -8,7 +8,11 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 ## Toolchain
 
-- **Runtime/Package mgr**: Bun (managed by mise). `bun.lock` is lockfile.
+- **Runtime/Package mgr**: Bun (managed by mise). ONE `bun.lock`, at the repository root — `docs/` is a Bun workspace, not a separate project.
+- **`docs/` is a Bun workspace of the root; there is ONE lockfile and the shared pins live in a `catalog`.** The root declares `workspaces: { packages: ["docs"], catalog: {...} }`, and CI installs with `bun install --frozen-lockfile --filter rust-toolchain`.
+- **The filter form is the whole thing.** `--filter '!docs'` — excluding a workspace — still resolves, downloads and extracts that workspace's entire graph; selecting the wanted package BY NAME does not. Measured on Bun 1.3.14 with a per-run `--cache-dir`, counting cache directories: action alone 1335, `--filter '!docs'` 4098 (3 docusaurus, 38 react), `--filter rust-toolchain` 1338 (0 docusaurus, 2 react). Testing the exclusion form is what produced the earlier "workspaces cost 2.8x here" conclusion, which was wrong. Do not re-derive this from timings: the same command varied 18.3s to 25.8s, so wall-clock cannot settle it — check what lands in the cache.
+- **Add dependencies from the root, never by `cd docs`.** Use `bun add --filter docs <pkg>` for the site. For a pin both sides share, add it to the root `catalog` and reference it as `"catalog:"` from both manifests — that is what makes drift impossible rather than merely detectable. It had already happened twice: `typescript` was `^6.0.3` at the root against `~6.0.3` under `docs/`, and the undeclared `@types/node` had resolved to 26.1.1 against 26.2.0.
+- **`@types/node` is declared, and must stay declared.** `tsconfig.base.json` asks for `types: ["bun", "node"]`. Neither manifest used to declare `@types/node`; it arrived as a transitive of `@types/bun` and was hoisted to the top level, where TypeScript happened to find it. Bun's workspace layout scopes transitives under `node_modules/.bun/` and nothing hoists, so both type-checks failed with `TS2688` the moment the workspace landed. The previous arrangement type-checked by luck; deleting either declaration restores the luck and breaks the workspace.
 - **Config**: `mise.toml` manages tools/bun + env (`GITHUB_TOKEN` sourced via `gh auth token`, mise-only).
 - **TypeScript**: `tsc --build` for typechecking (strict mode). The root
   `tsconfig.json` is solution-style (`files: []` + `references`), so

@@ -41,7 +41,16 @@ runs:
         set -Eeuo pipefail
 
         echo "::group::Installing Dependencies"
-        bun install --frozen-lockfile
+        # `--filter rust-toolchain`, not a bare install: `docs/` is a workspace
+        # of this root, and without the filter every job would resolve, download
+        # and extract the whole Docusaurus tree it never imports.
+        #
+        # The filter form matters. `--filter '!docs'` (exclusion) still fetches
+        # the excluded workspace's entire graph -- measured at 4098 cache
+        # entries against 1335 -- while selecting the package BY NAME does not.
+        # Testing the exclusion form is what produced the earlier conclusion
+        # that workspaces cost 2.8x here.
+        bun install --frozen-lockfile --filter rust-toolchain
         echo "::endgroup::"
 
     - name: Audit Untrusted Post-installs

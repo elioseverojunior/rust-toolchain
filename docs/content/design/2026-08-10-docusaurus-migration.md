@@ -59,29 +59,40 @@ this repository already documents for its own configs, fixed the same way, and p
 Three separate mechanisms were proposed to carry the "one project, many sub-projects" idea. Two of them ship. They
 are independent of each other, which is why losing the first costs the other two nothing.
 
-**Dependencies — two lockfiles, deliberately.** `docs/` keeps its own `package.json` and `bun.lock`. The root does
-**not** declare `"workspaces"`.
+**Dependencies — one workspace, one lockfile.** The root declares
+`workspaces: { packages: ["docs"], catalog: {...} }`; `docs/` has no lockfile of its own.
 
-This reverses what this document originally proposed, on measurement rather than taste. The workspace idea rested on
-one assumption: that `bun install --filter=<workspace>` would let the action's own CI jobs install without paying for
-React and Docusaurus. Task 1 tested it and the assumption is false. `--filter` scopes what gets **linked** into
-`node_modules` — the unfiltered workspace's `node_modules` is never even created — but Bun still resolves, downloads
-and fully extracts that workspace's entire dependency graph into its shared package cache. Confirmed twice, the
-second time with a provably cold `--cache-dir` to rule out a warm cache.
+This reverses the reversal, and the original rejection was wrong for a specific, checkable reason: it tested the
+wrong `--filter` form. `--filter '!docs'` — excluding a workspace — still resolves, downloads and extracts that
+workspace's entire graph. Selecting the wanted package **by name** does not. Re-measured 2026-08-11 on Bun 1.3.14
+with a per-run `--cache-dir`, counting cache directories rather than trusting the reported package total:
 
-The cost of being wrong about this is not theoretical. Measured on a cold cache:
+| Install                                  | cache dirs | `docusaurus` in cache | `react` in `node_modules` |
+| ---------------------------------------- | ---------- | --------------------- | ------------------------- |
+| Action dependencies alone (no workspace) | 1335       | 0                     | 2                         |
+| Workspace, `--filter '!docs'`            | 4098       | 3                     | 38                        |
+| Workspace, `--filter rust-toolchain`     | 1338       | 0                     | 2                         |
 
-| Install                               | Packages | Time  |
-| ------------------------------------- | -------- | ----- |
-| Action dependencies alone             | 320      | 21.9s |
-| Workspace, `--filter`ed to the action | 644      | 61.3s |
+The cache contents are the evidence, not the timings — those varied 18.3s to 25.8s for the _identical_ command, so
+wall-clock alone could not have settled it. CI installs with `bun install --frozen-lockfile --filter rust-toolchain`
+and gets no Docusaurus, no React, and no `docs/node_modules` at all.
 
-Every job that installs would pay 2.8x for a docs site it never imports. Two lockfiles is the cheaper mistake.
+What the workspace buys, beyond the single lockfile:
 
-What this forfeits is real and worth naming: Bun would have failed the install if the two manifests ever disagreed on
-one of their fourteen shared pins, and nothing enforces that now. The cheap replacement is a CI check that compares
-the shared pins directly — it buys the drift protection back for no install cost. That is a follow-up, not part of
-this migration.
+- **Catalogs.** The shared versions live once in the root `catalog` and both manifests reference them as
+  `catalog:`. This is a structural fix rather than a check that has to be remembered. It was needed: at the time of
+  writing the two manifests already disagreed on `typescript` (`^6.0.3` at the root, `~6.0.3` under `docs/`), and
+  the undeclared, transitively-hoisted `@types/node` had drifted to 26.1.1 against 26.2.0.
+- **The shared-pin drift check is no longer a follow-up.** It was proposed as "a CI check that compares the shared
+  pins directly", which would not have worked anyway: both manifests can read `^6.0.3` forever while the two
+  lockfiles resolve differently, so a manifest comparison sees nothing.
+
+One latent defect had to be fixed for any of this to work, and it is worth understanding because it was already
+there. `tsconfig.base.json` asks for `types: ["bun", "node"]`, and **neither** manifest declared `@types/node` —
+it arrived as a transitive of `@types/bun` and was hoisted to the top level, where TypeScript happened to find it.
+Bun's workspace layout scopes transitives under `node_modules/.bun/`, nothing hoists, and both type-checks failed
+with `TS2688`. The fix is to declare the dependency, which is correct with or without a workspace: the previous
+arrangement type-checked by luck.
 
 The other two mechanisms below are unaffected: neither depends on a workspace.
 
