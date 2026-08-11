@@ -1,7 +1,8 @@
 # Docusaurus Migration — Design
 
-Status: approved, not yet planned
+Status: implemented
 Date: 2026-08-10
+Implemented: 2026-08-11
 Supersedes: the VitePress site described in `CLAUDE.md` → "`docs/` is a VitePress site with its own toolchain"
 
 ## Summary

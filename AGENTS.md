@@ -14,7 +14,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
   `tsconfig.json` is solution-style (`files: []` + `references`), so
   `tsc --noEmit` alone would check zero files — `--build` is what traverses
   the references and actually checks both the action (`tsconfig.src.json`)
-  and the site (`docusaurus/tsconfig.json`).
+  and the site (`docs/tsconfig.json`).
 
 ## Commands (run in this order before commit)
 

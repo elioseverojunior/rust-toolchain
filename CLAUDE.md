@@ -299,45 +299,99 @@ regenerates as `- uses: @`.
 `mise run readme` emits unpadded tables, so always follow it with
 `bun run fix:all` (Prettier realigns them) or the diff stays dirty.
 
-## `docs/` is a VitePress site with its own toolchain
+## `docs/` is a Docusaurus site
 
-`docs/` holds both the repository's prose (`ARCHITECTURE.md`, `COMPARISON.md`,
-`RUNBOOKS.md`, `design/`, `plans/`) and a VitePress site that publishes it. It
-has its **own** `package.json`, `bun.lock`, `tsconfig.json`, ESLint and Prettier
-configs — `bun run <script>` from the repo root does not reach them. Build and
-lint it from inside `docs/`:
+`docs/` holds both the repository's prose — `ARCHITECTURE.md`,
+`COMPARISON.md`, `RUNBOOKS.md`, `design/`, `plans/`, all under
+`docs/content/` — and the Docusaurus site that publishes it. Formatting,
+linting and type-checking are unified into the root's own tooling:
+`bun run fix:all`, the root `eslint.config.js` and the root `tsc --build` all
+cover `docs/**/*.{ts,tsx}` alongside `src/`, and `hk check --all` covers
+`docs/**/*.md` through `rumdl` and `mermaid` exactly as it does everywhere
+else. Building or serving the site itself still goes through `docs/` —
+`mise run docs:build` / `mise run docs:dev` (aliases `docsb`/`docsd`), not
+`bun run build` from the repo root, which only rebuilds the action's
+`dist/index.js`.
 
-```sh
-cd docs && bun run build          # vitepress build — dead links FAIL it
-cd docs && bun run fix:all        # its own eslint + prettier
-```
-
-The repo-root `hk check --all` still covers `docs/**/*.md` through `rumdl` and
-`mermaid`, so both layers apply to the Markdown.
-
-- **`base` must keep its trailing slash.** VitePress asserts it, and
-  `.vitepress/config.mts` interpolates it directly into every `head` entry —
-  `"/rust-toolchain"` makes the favicon resolve to the single path segment
-  `/rust-toolchainfavicon.svg`. `DOCS_BASE=/ bun run build` targets root-domain
-  hosting.
-- **Dev and preview are pinned to port 5273 with `strictPort`**, overridable
-  via `DOCS_PORT`. Pinned because Vite's 5173 default is claimed by every other
-  checkout; strict because the silent fallback to 5174 prints a URL nobody
-  reads.
-- **`ignoreDeadLinks: false` only validates links in Markdown content, never in
-  `themeConfig.nav`/`sidebar`.** A nav entry written ahead of its page builds
-  clean and 404s in the browser, so that block is hand-maintained. Do not flip
-  the setting to `true` to silence a failure — it hides the class of breakage
-  that is caught while leaving the invisible class untouched.
-- **A page reaching a file outside `docs/` needs an absolute repository URL.**
-  `../README.md` resolves outside the srcDir and is exactly what the dead-link
-  check exists to catch.
-- **A referenced `public/` asset is never checked.** The `head` block pointed at
-  `favicon.svg`/`favicon.ico` through an empty `public/` for as long as the
-  scaffold existed, 404ing on every page, and the build stayed green throughout.
-
-`docs/.vitepress/cache/` and `dist/` are git-ignored; the dep cache alone is
-~2.8 MB and trips `hk`'s `check-added-large-files`.
+- **The site keeps its own `package.json` and `bun.lock`; the root declares
+  no `"workspaces"`.** This is a deliberate reversal, measured rather than
+  assumed: folding the two into a Bun workspace was the original plan, but
+  `bun install --filter=<workspace>` only scopes what gets **linked** into
+  `node_modules` — the unfiltered workspace's dependency graph is still
+  resolved, downloaded and fully extracted into Bun's shared cache. Cold-cache
+  measurement: the action's own dependencies alone install 320 packages in
+  21.9s; the identical install inside a workspace filtered to the action pulls
+  644 packages in 61.3s — 2.8x, paid by every CI job for a docs site it never
+  imports. Add a site dependency with `bun add --filter docs <pkg>` (or
+  `cd docs && bun add <pkg>`), never from the root `package.json`. The cost is
+  real: nothing now enforces that the two manifests agree on their fourteen
+  shared pins, and they have ALREADY drifted — root pins
+  `@typescript-eslint/*` at 8.67.0 against the site's 8.66.0. A CI check
+  comparing the shared pins is the cheap fix and is not yet written.
+- **`bun run typecheck` is `tsc --build`, and it must stay that way.** The
+  root `tsconfig.json` is solution-style — `"files": []` plus `references` to
+  `tsconfig.src.json` and `docs/tsconfig.json` — so a plain `tsc --noEmit`
+  against it type-checks ZERO files and exits 0, which is how the action's own
+  source could silently stop being type-checked at all. Only `tsc --build`
+  traverses project references. If you ever need to prove the typecheck
+  actually works, inject a deliberate type error and confirm the run FAILS; a
+  passing run on clean code is exactly what the broken invocation also
+  produces.
+- **`compilerOptions.paths` is duplicated between the root `tsconfig.json`
+  and `tsconfig.src.json`, on purpose.** Bun reads path aliases off the root
+  `tsconfig.json` directly and does not follow `references`, so removing the
+  copy breaks `bun test`'s `@rust-toolchain/*` and `@/*` imports. `extends` is
+  not a fix: it also inherits `include: ["**/*.ts"]`, which sweeps every
+  source file back into the root program and breaks `tsc --build` with
+  `TS6305`/`TS6306` against the referenced project.
+- **`*.ts` does not match `*.tsx`.** This bit three separate configs during
+  the migration, all now fixed: the site's old (now-retired) ESLint config was
+  scoped to `**/*.ts` and never linted a single React component; the root
+  `eslint.config.js` ignored `docs/**` entirely until it gained its own
+  `files: ["docs/**/*.{ts,tsx}"]` block; and `hk.pkl`'s `eslint`, `prettier`
+  and `typecheck` steps globbed `*.ts` and would silently skip a commit that
+  touched only `.tsx` files. `hk.pkl`'s `test` step still globs `*.ts` alone,
+  on purpose — the site has no tests.
+- **Content lives in `docs/content/`, served from the site root.** The docs
+  plugin in `docusaurus.config.ts` sets `path: "content"` and
+  `routeBasePath: "/"`. Moving it changes every published URL — and because
+  the `gh-pages` publish step runs `peaceiris/actions-gh-pages` with
+  `keep_files: true`, the OLD pages keep serving at their old URLs while the
+  new ones appear elsewhere. No 404, no CI failure — just two sites, with
+  every inbound link pointing at the stale one.
+- **Markdown files carry NO SPDX header; `.ts`/`.tsx` files do.**
+  `REUSE.toml` licenses everything, `docs/**` included, through its
+  `path = ["**"]` aggregate annotation, and its own comment records that
+  Markdown needs no inline header on top of that. This matters specifically
+  because MDX rejects HTML comments: an SPDX header written as `<!-- -->`
+  fails the build, and rewriting it as a JSX comment `{/* */}` only trades
+  that failure for a header that renders as literal visible text on GitHub.
+- **Mermaid is `@docusaurus/theme-mermaid`, six lines of configuration,
+  replacing the old `.vitepress/` directory** — 861 lines in total, of which
+  the bespoke Vue mermaid component and its theme wiring accounted for 652.
+  It renders client-side inside a `useEffect`, so grepping the built HTML for
+  mermaid markup returns ZERO even when every diagram renders correctly.
+  Verify with a browser, not a grep. There are eight diagrams, all in
+  `ARCHITECTURE.md`.
+- **Offline search is `@easyops-cn/docusaurus-search-local`.** Its
+  `docsRouteBasePath` must match the docs plugin's `routeBasePath` (both
+  `"/"` here), and its `docsDir` must match the docs plugin's `path`
+  (`"content"` — the plugin's own default, `"docs"`, does not exist in this
+  layout). A mismatch in either indexes nothing while the build still passes:
+  a search box that silently returns zero results, with no error at build
+  time.
+- **Dead-link checking validates links in Markdown content only.**
+  `onBrokenLinks`/`onBrokenMarkdownLinks: "throw"` never look inside
+  `navbar.items` or `sidebars.ts`. Do not disable it to silence a failure — it
+  hides the class of breakage that is caught while leaving the class it never
+  could catch exactly as invisible as before. One thing genuinely improved
+  crossing from VitePress: Docusaurus validates `sidebars.ts` against the
+  actual document tree, so a **wrong sidebar document ID now fails the
+  build**, where VitePress built clean and 404'd only in the browser — a real
+  reduction in a class of silent breakage.
+- **A page reaching a file outside the site root needs an absolute
+  repository URL.** `../README.md` resolves outside `docs/content` and is
+  exactly what the dead-link check exists to catch.
 
 ## TOML parsing
 
