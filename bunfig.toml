@@ -28,6 +28,11 @@ coverageThreshold = { lines = 1.0, functions = 1.0, statements = 1.0 }
 #                     mock-callback lines as hit.
 # 1.0 == 100% threshold above; the gate fails if any production file drops
 # below.
+#
+# No entry here for docs/ (the Docusaurus site): Bun's coverage report only
+# ever lists files it actually loaded, and no test under src/ imports
+# anything from the site, so its .tsx files never appear and need nothing
+# excluded — the same reason src/index.ts stays invisible without an entry.
 coveragePathIgnorePatterns = [
   "**/dist/**",
   "**/bin/**",

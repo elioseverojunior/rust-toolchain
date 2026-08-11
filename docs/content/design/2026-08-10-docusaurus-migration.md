@@ -84,12 +84,20 @@ this migration.
 
 The other two mechanisms below are unaffected: neither depends on a workspace.
 
-**Type-checking — TypeScript project references.** This layer cannot be merged into one file. The action needs
-`lib: ["ESNext"]` with `types: ["bun", "node"]`; the site needs `lib: ["ESNext", "DOM"]`, `jsx: "preserve"` and
-`paths: { "@site/*": ["./*"] }`. Worse, the root config's `include: ["**/*.ts"]` would otherwise sweep
-`docusaurus.config.ts` and the site's `src/types/*.ts` into the action's type-check and fail them on DOM and React
-types. The root `tsconfig.json` therefore becomes solution style — `"files": []` plus `references` to
-`./tsconfig.src.json` and `./docs/tsconfig.json` — so one invocation checks both, each under its own options.
+**Type-checking — TypeScript project references, briefly, then two separate invocations.** This layer cannot be
+merged into one file. The action needs `lib: ["ESNext"]` with `types: ["bun", "node"]`; the site needs
+`lib: ["ESNext", "DOM"]`, `jsx: "preserve"` and `paths: { "@site/*": ["./*"] }`. Worse, the root config's
+`include: ["**/*.ts"]` would otherwise sweep `docusaurus.config.ts` and the site's `src/types/*.ts` into the
+action's type-check and fail them on DOM and React types. The root `tsconfig.json` became solution style —
+`"files": []` plus `references` to `./tsconfig.src.json` and, briefly, `./docs/tsconfig.json` — so one `tsc --build`
+checked both.
+
+That lasted until the final whole-branch review reproduced a live CI failure it caused: `hk check --all`'s
+`typecheck` step runs in the Lint job, and `.github/actions/setup/action.yml` installs only the repository root, so
+the Lint job hit 40+ `TS2307` with `docs/node_modules` absent. The `./docs/tsconfig.json` reference was dropped, and
+the root `tsconfig.json` now references `./tsconfig.src.json` alone. The site keeps its own `tsc --build` via
+`mise run docs:typecheck`, run separately by `gh-pages.yml`, which already installs `docs/`. See CLAUDE.md → "`docs/`
+is a Docusaurus site" for the full writeup and the measured cost of the rejected alternative.
 
 **Linting — one flat config.** ESLint flat config already expresses this natively. The root `eslint.config.js` gains
 a `files: ["docs/**/*.{ts,tsx}"]` block carrying `globals.browser` and the React settings, alongside the existing
@@ -111,7 +119,7 @@ rust-toolchain/
     ├── tsconfig.json     the TS6-safe config, lifted from docusaurus/
     ├── docusaurus.config.ts
     ├── sidebars.ts
-    ├── src/{pages,components,css}/
+    ├── src/{css,hooks,pages}/
     ├── static/           favicon.svg, favicon.ico, .nojekyll
     └── content/          the eleven Markdown pages, git mv'd from docs/
 ```
@@ -129,8 +137,10 @@ from the root keeps every existing URL, and every external link to one, pointing
 
 ### What is lifted from `docusaurus/`, and what is discarded
 
-Lifted: `tsconfig.json` (the TypeScript 6 fix), `eslint.config.mjs` (folded into the root flat config), the
-`docusaurus.config.ts` skeleton, and the `Section`/`Hero` component pattern used to rebuild the home page.
+Lifted: `tsconfig.json` (the TypeScript 6 fix), `eslint.config.mjs` (folded into the root flat config), and the
+`docusaurus.config.ts` skeleton. The home page is not lifted from the portfolio: `docs/src/pages/index.tsx` is
+bespoke JSX over a local `FEATURES` array, built directly against `@theme/Layout`, not a ported `Section`/`Hero`
+component — `docs/src/components/` does not exist in this tree.
 
 Discarded: `data/` (a complete Python and `uv` toolchain for download statistics), `scripts/`, the eleven portfolio
 components under `src/components/portfolio/`, `src/pages/cv.tsx`, and `docusaurus/.github/`. That last one is inert
@@ -164,9 +174,12 @@ lands, and step 5 should be the commit that gets the closest reading.
 
 ### Content
 
-The eleven Markdown pages move to `content/` unchanged, by `git mv`. Note that eleven is the file count; the sidebar
-carries nine entries, because `index.md` becomes the home page and this design document was written after that
-sidebar.
+The eleven Markdown pages move to `content/` unchanged, by `git mv`. Note that eleven is also the sidebar's entry
+count, not a coincidence with the file count: `index.md` becomes the home page rather than a sidebar entry, but the
+migration's own design record and implementation plan were written after this document's first draft and both
+belong in the sidebar too — three Reference entries (Architecture, Comparison, Runbooks), three Design records
+(the two layered-cargo-cache documents plus this one) and five Implementation plans (Phases A through D plus this
+migration's own).
 
 Docusaurus 3 parses `.md` as MDX, so a bare angle bracket or brace in prose is a build error. This repository is
 unusually well placed for that, because its writing already puts every identifier in backticks — placeholders such
@@ -253,18 +266,18 @@ the sidebar — and that is a plan-time escape hatch, not a second design.
 
 ## Build and CI
 
-| Concern                       | From                                            | To                                              |
-| ----------------------------- | ----------------------------------------------- | ----------------------------------------------- |
-| Build output                  | `docs/.vitepress/dist`                          | `docs/build`                                    |
-| `gh-pages.yml` upload `path:` | `docs/.vitepress/dist`                          | `docs/build`                                    |
-| Lockfile assertion            | `git diff --exit-code -- docs/bun.lock`         | unchanged                                       |
-| `bun-version-file`            | `docs/.bun-version`                             | unchanged                                       |
-| `mise run docs:install`       | `dir = "docs"`, `bun install --frozen-lockfile` | unchanged                                       |
-| `mise run docs:dev`           | `vitepress dev` on 5273                         | `docusaurus start --port 5273`                  |
-| `mise run docs:build`         | `vitepress build`                               | `docusaurus build`                              |
-| `mise run docs:preview`       | `vitepress preview --port 5273`                 | `docusaurus serve --port 5273`                  |
-| `mise run docs:typecheck`     | `tsc --noEmit -p tsconfig.json`                 | unchanged in intent, now via project references |
-| Base URL                      | `DOCS_BASE ?? "/rust-toolchain/"`               | same variable, now Docusaurus `baseUrl`         |
+| Concern                       | From                                            | To                                               |
+| ----------------------------- | ----------------------------------------------- | ------------------------------------------------ |
+| Build output                  | `docs/.vitepress/dist`                          | `docs/build`                                     |
+| `gh-pages.yml` upload `path:` | `docs/.vitepress/dist`                          | `docs/build`                                     |
+| Lockfile assertion            | `git diff --exit-code -- docs/bun.lock`         | unchanged                                        |
+| `bun-version-file`            | `docs/.bun-version`                             | unchanged                                        |
+| `mise run docs:install`       | `dir = "docs"`, `bun install --frozen-lockfile` | unchanged                                        |
+| `mise run docs:dev`           | `vitepress dev` on 5273                         | `docusaurus start --port 5273`                   |
+| `mise run docs:build`         | `vitepress build`                               | `docusaurus build`                               |
+| `mise run docs:preview`       | `vitepress preview --port 5273`                 | `docusaurus serve --port 5273`                   |
+| `mise run docs:typecheck`     | `tsc --noEmit -p tsconfig.json`                 | unchanged — `dir = "docs"`, the site's own `tsc` |
+| Base URL                      | `DOCS_BASE ?? "/rust-toolchain/"`               | same variable, now Docusaurus `baseUrl`          |
 
 Unchanged: the `peaceiris` publish step, `publish_branch: gh-pages`, `keep_files: true`, the `permissions` blocks,
 the artifact hand-off between the `build` and `publish` jobs, and `gh-pages.yml`'s `paths:` filter on `docs/**`.
@@ -287,7 +300,9 @@ Two bullets survive and must be carried across verbatim in substance:
 - A page reaching a file outside `docs/` needs an absolute repository URL. A relative `../README.md` resolves
   outside the site root and is exactly what the check exists to catch.
 
-`AGENTS.md` needs no change; it does not describe the docs toolchain.
+`AGENTS.md` does need a change, contrary to what an earlier draft of this document assumed. Its `TypeScript`
+bullet named the pre-migration `tsc -p tsconfig.json --noEmit` invocation, which the solution-style root
+`tsconfig.json` (see **Type-checking** above) makes silently wrong — that invocation checks zero files and exits 0. It now names `tsc --build` and explains why `--noEmit` alone would not work.
 
 ## Risks
 
@@ -308,8 +323,11 @@ Two bullets survive and must be carried across verbatim in substance:
 - **`@docusaurus/faster` is the least-trodden path.** It is already in the copied project and swaps in Rspack and
   SWC. Keep it, but it is the first thing to drop if the build misbehaves.
 - **Stale URLs persist.** `keep_files: true` means the published VitePress output is not cleared when the new site
-  lands. VitePress used `cleanUrls` and Docusaurus uses `trailingSlash: false`, so most paths coincide, but a
-  deliberate prune commit against the `gh-pages` branch is part of the work rather than an afterthought.
+  lands. VitePress used `cleanUrls` and Docusaurus uses `trailingSlash: false`, so most paths coincide, but a prune
+  commit against the `gh-pages` branch is deliberately **not** part of this plan — it rewrites a published branch,
+  which cannot be scripted from this repository, so it stays a manual follow-up after the first successful
+  publish. `routeBasePath: "/"` above makes it cosmetic rather than urgent, because every URL that mattered is
+  reoccupied by the new build.
 - **The coverage gate is adjacent but should not fire.** `bunfig.toml` gates `src/` at 100% and its
   `coveragePathIgnorePatterns` do not mention a docs site. Bun reports only files it actually loads, and no test
   imports the site, so the site's `.tsx` should stay invisible exactly as `src/index.ts` does. This is asserted, not
