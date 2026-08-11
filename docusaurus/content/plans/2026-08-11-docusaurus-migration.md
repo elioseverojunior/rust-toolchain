@@ -1,9 +1,3 @@
-{/*
-SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
-
-SPDX-License-Identifier: MIT OR Apache-2.0
-*/}
-
 # Docusaurus Migration Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
@@ -280,7 +274,9 @@ The reason for the migration. Four files totalling 652 lines are replaced by a t
 **Interfaces:**
 
 - Consumes: the `Config` object from Tasks 2 and 3.
-- Produces: nine rendered diagrams — eight in `ARCHITECTURE.md`, one in `RUNBOOKS.md`.
+- Produces: eight rendered diagrams, all in `ARCHITECTURE.md`. Not nine: the apparent ninth in `RUNBOOKS.md` is an
+  inline code span naming the fence type, which `grep` counts and the mermaid parser correctly ignores. Confirmed by
+  `mise run mermaidlint`, which reports "8 diagrams in 16 files parsed".
 
 **Steps:**
 
