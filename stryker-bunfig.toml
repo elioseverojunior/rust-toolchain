@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# The bunfig mutation runs use, and the reason it has to exist.
+#
+# Stryker's command runner judges a mutant by the test command's EXIT CODE.
+# The repo's own bunfig.toml enables coverage with a 100% threshold on lines,
+# functions and statements -- and Stryker instruments every mutated file with
+# mutant-switch branches that are, by construction, not all reachable in a
+# single run. Coverage therefore drops below the threshold, `bun test` exits
+# non-zero with every test passing, and Stryker reads that as "mutant killed".
+#
+# That failure mode is silent and it inflates the score rather than deflating
+# it: every mutant looks dead, including the ones that survived. Disabling
+# coverage here is what makes the exit code mean "a test failed" and nothing
+# else.
+#
+# Note there is no flag for this. `bun test` has `--coverage` to switch
+# coverage ON and nothing to switch it off, and BUN_CONFIG_COVERAGE=false is
+# ignored -- a separate config file passed with `--config` is the only lever.
+[test]
+coverage = false

@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "PILOT ONLY - not wired into any task or CI yet. See the evaluation: the command runner is the official one and needs no third-party plugin, and this repo's sub-second suite makes its run-everything-per-mutant cost acceptable.",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "bun test --config=stryker-bunfig.toml"
+  },
+  "coverageAnalysis": "off",
+  "mutate": ["src/cache/**/*.ts", "src/tools.ts", "!src/**/*.test.ts"],
+  "reporters": ["clear-text", "html", "progress"],
+  "htmlReporter": {
+    "fileName": ".stryker-tmp/mutation-report.html"
+  },
+  "clearTextReporter": {
+    "maxTestsToLog": 0,
+    "reportTests": false
+  },
+  "concurrency": 8,
+  "timeoutMS": 60000,
+  "tempDirName": ".stryker-tmp"
+}
