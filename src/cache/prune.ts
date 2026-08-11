@@ -8,7 +8,7 @@ import type { PackageSet } from "@rust-toolchain/cache/metadata";
  * Decides which of a `target/` directory's files are worth archiving.
  *
  * Nothing here deletes. The keep-set is a save-time filter on the tar manifest,
- * for the reason `CLAUDE.md` gives about the negation globs it replaces: a post
+ * for the reason `AGENTS.md` gives about the negation globs it replaces: a post
  * step that deletes from `target/` is destructive at the worst possible moment,
  * a bad keep-set would surface as a build that succeeded and a checkout now
  * missing artifacts, and on a self-hosted runner that damage outlives the job.

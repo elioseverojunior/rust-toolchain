@@ -23,9 +23,10 @@
   },
   "include": ["**/*.ts"],
   // `docs/` is a self-managing subproject that needs `DOM` and React types
-  // this project's type-check must not carry. It ships its own tsconfig.json
-  // (referenced from the root's solution-style tsconfig.json) — see
-  // tsconfig.json for the reference wiring.
+  // this project's type-check must not carry. It ships its own tsconfig.json,
+  // which the root's solution-style tsconfig.json deliberately does NOT
+  // reference — see the comment there for why, and `mise run docs:typecheck`
+  // for what checks it instead.
   //
   // `dist` is belt-and-braces and changes the resolved file set not at all:
   // `include` matches only `.ts`, and TypeScript already excludes `outDir`

@@ -40,9 +40,11 @@ export interface StageOutcome {
 /**
  * Everything staging touches on disk, so the mapping logic stays testable.
  *
- * The real implementation is in `src/index.ts` alongside the other adapters,
- * for the reason given there: a module under test must not reach a real
- * filesystem, and `src/index.ts` is outside the coverage gate.
+ * The real implementation is `nodeStageFs` in `cache/fs.ts`, held to a real
+ * temp directory by `cache/fs.test.ts`. It does NOT live in `src/index.ts`
+ * with the exempt adapters: it vendors no SDK and touches no network, so it
+ * earns no coverage exemption — and a hand-written fake that disagreed with
+ * `node:fs` is exactly what cost every pruned layer its save once already.
  */
 export interface StageFs {
   /** Creates a directory and every missing parent. */

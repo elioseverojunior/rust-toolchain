@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
-  "_comment": "PILOT - not wired into any task or CI. Scope is the modules dense with threshold and equality decisions. src/index.ts stays out: it is never imported and has no tests, so every mutant there would survive vacuously.",
+  "_comment": "Run through `mise run mutate`; reports a score and is not a gate. Scope is the modules dense with threshold and equality decisions. src/index.ts stays out: it is never imported and has no tests, so every mutant there would survive vacuously.",
   "testRunner": "command",
   "commandRunner": {
     "command": "bun test --config=stryker-bunfig.toml"

@@ -95,7 +95,7 @@ function ladder(...prefixes: string[]): string[] {
  * deriver, where an `if` would have silently handed the new layer whichever
  * shape the fall-through branch happened to produce. It is not a `switch`
  * because Bun's coverage instrumenter never marks a final `case`'s closing
- * brace as covered — see `CLAUDE.md` → Coverage gate gotchas.
+ * brace as covered — see `AGENTS.md` → Coverage gate gotchas.
  *
  * The two entries differ in exactly one way, and it is the point of the split:
  * `registry` holds downloaded source archives, which any rustc can compile, so
