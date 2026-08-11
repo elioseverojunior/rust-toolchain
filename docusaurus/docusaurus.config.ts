@@ -137,6 +137,33 @@ const config: Config = {
     },
     navbar: {
       title: "rust-toolchain",
+      items: [
+        { to: "/ARCHITECTURE", label: "Architecture", position: "left" },
+        { to: "/COMPARISON", label: "Comparison", position: "left" },
+        { to: "/RUNBOOKS", label: "Runbooks", position: "left" },
+        {
+          label: "Repository",
+          position: "right",
+          items: [
+            {
+              href: "https://github.com/elioseverojunior/rust-toolchain#readme",
+              label: "README",
+            },
+            {
+              href: "https://github.com/elioseverojunior/rust-toolchain/releases",
+              label: "Releases",
+            },
+            {
+              href: "https://github.com/elioseverojunior/rust-toolchain/blob/main/LICENSE-MIT",
+              label: "MIT licence",
+            },
+            {
+              href: "https://github.com/elioseverojunior/rust-toolchain/blob/main/LICENSE-APACHE",
+              label: "Apache-2.0 licence",
+            },
+          ],
+        },
+      ],
     },
     footer: {
       style: "dark",
