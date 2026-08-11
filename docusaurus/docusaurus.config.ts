@@ -49,8 +49,26 @@ const config: Config = {
     mermaid: true,
   },
 
-  // A later task adds a search theme to this array.
-  themes: ["@docusaurus/theme-mermaid"],
+  themes: [
+    "@docusaurus/theme-mermaid",
+    [
+      "@easyops-cn/docusaurus-search-local",
+      // docsRouteBasePath must agree with the docs plugin's routeBasePath
+      // above ("/"), or the indexer walks the wrong tree and silently
+      // indexes nothing -- a search box that returns no results, with no
+      // error at build time. docsDir must likewise agree with the docs
+      // plugin's `path: "content"` (its default is "docs", which doesn't
+      // exist here) -- it's only used to content-hash the index for the
+      // `hashed: true` cache-busting query param, but a wrong/missing dir
+      // silently degrades that to a no-op hash instead of failing loudly.
+      {
+        hashed: true,
+        indexBlog: false,
+        docsDir: "content",
+        docsRouteBasePath: "/",
+      },
+    ],
+  ],
 
   i18n: {
     defaultLocale: "en",
