@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-name: "Rust Toolchain"
+name: "Rust Toolchain and Cache"
 description: >
   Install a Rust toolchain with rustup, driven by the rust-toolchain.toml you
   already committed, and cache cargo for you. Exports RUSTUP_TOOLCHAIN so the
