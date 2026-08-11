@@ -513,9 +513,12 @@ printf 'v%s\nv%s.%s\nv%s\n' "${BASE}" "${MAJOR}" "${MINOR}" "${MAJOR}" | awk '!s
 
 # === Documentation ===
 #
-# The site under `docs/` is a separate Bun project with its own `package.json`
-# and `bun.lock`. `dir = "docs"` rather than `cd docs &&` so mise resolves the
-# working directory itself and the tasks compose. None of these belong in a
+# The site under `docs/` is a Bun WORKSPACE of the repository root, not a
+# separate project: one lockfile at the root, shared pins in its `catalog`.
+# `docs:install` therefore runs from the root with `--filter docs`, which is
+# why it carries no `dir` -- see its own comment. The build and serve tasks
+# below still set `dir = "docs"`, because docusaurus resolves its config
+# relative to the working directory. None of these belong in a
 # lint or test gate: a broken docs build must not fail the action's gate.
 
 [tasks."docs:install"]

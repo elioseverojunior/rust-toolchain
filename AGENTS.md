@@ -30,7 +30,8 @@ says about `CLAUDE.md`.
   the references and actually checks the action (`tsconfig.src.json`). It
   does NOT check the site: `docs/tsconfig.json` is deliberately not
   referenced from the root, because CI's Lint job never installs
-  `docs/node_modules` (see CLAUDE.md → "`docs/` is a Docusaurus site"). The
+  `docs/node_modules` (see "`docs/` is a Docusaurus site with its own
+  toolchain" below). The
   site is type-checked separately by `mise run docs:typecheck`.
 
 ## Runtime
@@ -96,7 +97,7 @@ change.
 
 - **Framework**: Bun built-in test runner.
 - **Files**: `**/*.test.ts` alongside source (e.g. `src/foo.test.ts`).
-- **Coverage gate**: `bunfig.toml` enforces 100% lines/functions/statements for all files in `src/`, excluding `**/bin/**`, `**/__tests__/**`, `**/integration-*/**`.
+- **Coverage gate**: `bunfig.toml` enforces 100% lines/functions/statements for all files in `src/`, excluding `**/dist/**`, `**/bin/**`, `**/__tests__/**`, `**/integration-*/**`.
 - **Run single test**: `bun test src/path/to/file.test.ts`.
 - **Mutation testing**: `mise run mutate` (or `mise run mutate <file>` for one module) runs Stryker over the modules dense with boundary logic. Not a gate and not part of the pre-commit list — it reports a score and never fails on it. Coverage proves a line ran; this asks whether any assertion would notice it being wrong. Stryker runs under **Node**, not Bun, and `stryker-bunfig.toml` is required: the command runner judges a mutant by exit code, and the 100% coverage threshold would mark every mutant killed and inflate the score silently. See ARCHITECTURE.md → Testing Strategy → Mutation Testing.
 - **Fakes are claims about someone else's code**: a hand-written double that disagrees with the real API cannot be caught by coverage OR by mutation testing, and has caused a shipped bug here twice. Where a port wraps `node:fs`, test the real adapter against a real temp directory — see `src/cache/fs.test.ts`.
@@ -145,8 +146,8 @@ This is a **GitHub Action** for Rust toolchain installation, inspired by [dtolna
 - **`cargo-tools`** — installs cargo tools and caches their binaries in a `bin` layer keyed on the resolved tool set alone, with rustup's own shims excluded so a toolchain bump does not reinstall them
 - **Override by inputs** — action inputs (`toolchain`, `targets`, `target`, `components`, `profile`) override toml values. For the list inputs that means merged and deduped with inputs leading, so `targets[0]` — and therefore the `target` output — is one the caller named whenever they named one
 - **Fluent Builder pattern** — `ToolchainSpecBuilder` with chaining for programmatic construction
-- **Compatible outputs** — `cachekey` and `name` match dtolnay/rust-toolchain
-- **Resolved-configuration outputs** — `toolchain`, `targets`, `target`, `components`, `profile`, `set-rustup-toolchain` (lists as JSON arrays), plus `json`: all of them natively typed in one object, with `inputs`/`toml` provenance blocks saying where each value came from
+- **Compatible outputs** — `cachekey` and `name` match dtolnay/rust-toolchain; `cachekey-full` extends it with the full-precision digest the `build` restore ladder refuses to fall back past
+- **Resolved-configuration outputs** — `toolchain`, `targets`, `target`, `components`, `profile`, `set-rustup-toolchain`, `cargo-tools`, `cache` and `cache-hit` (lists as JSON arrays), plus `json`: all of them natively typed in one object, with `inputs`/`toml` provenance blocks saying where each value came from
 
 ## Rustup Concepts (Reference)
 
@@ -193,8 +194,8 @@ Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions.
 - **Path aliases**: see the Path aliases section below — the specifier is consumer-visible.
 - **Build**: `bun run build:action`
 - **Source layout**:
-  - `src/index.ts` — GitHub Action entry point; a side-effecting script (no exports) bundled to `dist/index.js`. Dependency wiring only, split by `STATE_isPost`: real `spawnSync`, `readFileSync`, `@actions/core` and a synchronous `sleep` handed to `run()` for the main phase; the real `@actions/cache`-backed `CacheClient` plus the `cache/fs.ts` adapters handed to `runPost()` for the post phase. What stays here earns the coverage exemption individually — the `@actions/cache` client for its ~1.4 MB Azure SDK and unmockable network code, `metadata` for shelling out to cargo, `registry` for calling crates.io. The `node:fs` adapters moved to `cache/fs.ts` precisely because they qualified for none of those reasons
-  - `src/action.ts` — `run(deps: ActionDeps)`, the main-phase orchestration: reads the toml, merges inputs, installs the toolchain, adds targets/components, exports `RUSTUP_TOOLCHAIN`, restores every enabled cache layer, sets outputs. Also `runPost(deps: PostDeps)`, the post-phase orchestration: replays the plans and restore results `run` saved through `saveState`, saves whatever is left to save, writes the job summary. Executes argv arrays with no shell, bounds each call with a timeout, and retries network-bound commands with backoff. A cache failure in either phase warns and never fails the build
+  - `src/index.ts` — GitHub Action entry point; a side-effecting script (no exports) bundled to `dist/index.js`. Dependency wiring only, split by `STATE_isPost`: real `spawnSync`, `readFileSync`, `@actions/core`, a synchronous `sleep` and a promise-based `delay` handed to `run()` for the main phase; `@actions/core`'s state/summary slice plus the `cache/fs.ts` walk and measure adapters handed to `runPost()` for the post phase. The `@actions/cache`-backed `CacheClient` and the `nodeStageFs` adapter go to **both** — `run` restores and unstages, `runPost` stages and saves — while the crates.io `registry` client is main-phase only and the `cargo metadata` reader post-phase only. What stays here earns the coverage exemption individually — the `@actions/cache` client for its ~1.4 MB Azure SDK and unmockable network code, `metadata` for shelling out to cargo, `registry` for calling crates.io. The `node:fs` adapters moved to `cache/fs.ts` precisely because they qualified for none of those reasons
+  - `src/action.ts` — `run(deps: ActionDeps)`, the main-phase orchestration: reads the toml, merges inputs, installs the toolchain, adds targets/components, exports `RUSTUP_TOOLCHAIN`, restores every enabled cache layer, moves a pruned layer's restored files out of the stage and back into place, sets outputs. Also `runPost(deps: PostDeps)`, the post-phase orchestration: replays the plans and restore results `run` saved through `saveState`, computes each pruned layer's keep-set and hard-links it into the stage, saves whatever is left to save, clears the stages, writes the job summary. Executes argv arrays with no shell, bounds each call with a timeout, and retries network-bound commands with backoff. A cache failure in either phase warns and never fails the build
   - `src/core.ts` — toolchain spec parsing, `rust-toolchain.toml` parsing via `smol-toml`, cachekey generation
   - `src/config.ts` — merge toml config with action inputs (scalars replaced by inputs; lists accumulate deduped, inputs leading), `ToolchainInputs` + `ResolvedToolchain` types; `resolveRustupEnv` resolves `RUSTUP_HOME`/`CARGO_HOME`, honouring caller-supplied values
   - `src/builder.ts` — fluent `ToolchainSpecBuilder` with `.withChannel()`, `.withTargets()`, `.withComponents()`, `.withProfile()`, `.build()`
@@ -206,7 +207,7 @@ Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions.
   - `src/cache/paths.ts` — `parseWorkspaces` reads `cache-workspaces` into resolved `<manifest-dir> -> <target-dir>` mappings, rejecting anything that resolves outside the checkout; `registryPaths` and `buildPaths` name each layer's **unpruned** paths, used when `cache-prune: off`. `registryPaths` lists bare directories and lets tar recurse; `buildPaths` cannot, because it has exclusions — it emits a files-only glob set (`<target>/**` plus `!<target>/**/incremental/**`, `!<target>/**/examples/**` and the `!<target>/` and `!<target>/**/` directory negations), since `@actions/cache` runs `tar --files-from` without `--no-recursion` and any directory left in the manifest re-includes the excluded subtrees. Neither takes a keep-set: narrowing the paths array changes the cache entry's identity, so a pruned layer archives a stage instead — see `cache/stage.ts`
   - `src/cache/budget.ts` — `parseSize` reads `cache-budget` into a byte count (binary suffixes, `0` disables it); `measurePaths` sums a layer's on-disk size through an injected `StatFs` port
   - `src/cache/client.ts` — `CacheClient`, the restore/save port. Its only real implementation wraps `@actions/cache` and lives in `src/index.ts`
-  - `src/cache/lifecycle.ts` — `restoreLayers` restores every enabled layer concurrently, downgrading any failure to a miss; `saveLayers`/`saveLayer` decide whether each layer is worth saving (skip on an exact hit, skip when its size can't be measured, skip over budget) and save the rest concurrently, each independently caught
+  - `src/cache/lifecycle.ts` — `restoreLayers` restores every enabled layer concurrently, downgrading any failure to a miss; `saveLayers` decides, per layer, whether it is worth saving (skip on an exact hit, skip when its size can't be measured, skip over budget) and save the rest concurrently, each independently caught
   - `src/cache/fs.ts` — the real `node:fs` implementations of the cache's filesystem ports: `walkFiles`, `nodeStatFs` and `nodeStageFs`. They lived in `src/index.ts` until a fake that disagreed with `readdirSync` about a missing directory cost every pruned layer its save; nothing here vendors an SDK or touches the network, so the coverage exemption they inherited by proximity was never earned. `cache/fs.test.ts` holds them to a real temp directory — the hard link's shared inode and mtime included, since `stageFiles` depends on both
   - `src/cache/stage.ts` — the staging layer that makes pruning possible at all. `@actions/cache` folds the paths array into a cache entry's version, so a content-derived array writes entries no restore can ever find; `buildStageRoots`/`registryStageRoot` name one fixed directory per tree and `stagePaths` hands that alone to the client, keeping the array constant across both phases. `stageFiles` hard-links the keep-set in before a save (links, not copies: they share the mtime cargo's freshness check reads), `unstageFiles` moves it back out after a restore, and nothing is ever removed from the working tree
   - `src/cache/summary.ts` — `renderSummary` renders the per-layer restore/save outcome as the job summary's Markdown table — the only place a per-layer result is visible, since `cache-hit` is a single all-layers boolean
@@ -216,7 +217,7 @@ Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions.
   - `src/tools.ts` — everything `cargo-tools` needs: `parseToolSpecs` reads the input into `<name>@<version>` specs, rejecting anything that is not a cargo identifier before a command runs; `resolveToolVersions` turns `latest` into a concrete version through the `RegistryClient` port, retrying with backoff and degrading a failure to `UNRESOLVED_VERSION` rather than throwing; `hashToolSet` digests the resolved set into the `bin` key's final segment; `ensureTools` probes `<name> --version` and installs only what the restore did not supply. A pinned version never reaches the client, which is what makes a registry outage unable to affect it
   - `src/inputs.ts` — `readBooleanInput` and the `InputReader` port it takes; shared by `action.ts` and `cache/inputs.ts`, so it belongs to neither
   - `src/lib.ts` — the library barrel. Re-exports every other library module and deliberately **not** `index.ts`, whose import executes the action
-  - `src/*.test.ts` — co-located tests; `tsconfig.json` includes `**/*.ts`, so `bun run typecheck` type-checks them too
+  - `src/*.test.ts` — co-located tests; `tsconfig.src.json` includes `**/*.ts` and the root config references it, so `bun run typecheck` (`tsc --build`) type-checks them too
 
 ## Path aliases — the specifier is consumer-visible
 
@@ -347,7 +348,9 @@ subsections.
   propagate a throw past its own boundary "to be safe"; that reintroduces the
   exact failure mode these guards exist to remove.
 - **Exclusions from a saved layer are negation globs, never deletion, and the
-  glob set must stay files-only.** `buildPaths` (`src/cache/paths.ts`) emits
+  glob set must stay files-only.** This is the `cache-prune: off` shape — the default
+  `safe` policy archives a stage instead, whose paths array is one fixed directory.
+  `buildPaths` (`src/cache/paths.ts`) emits
   `<target>/**`, `!<target>/**/incremental/**`, `!<target>/**/examples/**`,
   `!<target>/` and `!<target>/**/`. **`!<target>/**/` is load-bearing**:
   `@actions/cache` runs `tar --files-from <manifest>` with no
@@ -375,8 +378,10 @@ subsections.
 - Every push to `main` runs the CICD **Release** job: GitVersion computes the
   version, rewrites `owner/repo/...@vX.Y.Z` references under `.github/`, tags,
   and publishes a GitHub Release. Never bump `package.json` or create tags by
-  hand — the manual release steps in `docs/content/RUNBOOKS.md` are out of
-  date.
+  hand — the job does both, and a hand-made tag desynchronises GitVersion.
+  `docs/content/RUNBOOKS.md` → Release Process documents the same job and was
+  verified accurate against `cicd.yml`; the note that once called it out of
+  date was itself the stale claim.
 
 ## GitHub Actions
 
@@ -386,9 +391,11 @@ subsections.
 - **Use `gh` CLI to inspect runs**: `gh run view <run-id>`, `gh run view <run-id> --log-failed`, `gh run list`.
 - **Local testing with `act`**: `mise run act` runs the workflow from `.github/workflows/tests/act.yml` locally via Docker (catthehacker/ubuntu:full-latest). Ensure Docker is running and `gh auth login` is done first.
 
-GitHub picks up only top-level `.github/workflows/*.yml`. `tests/act.yml` and
-`tests/act-matrix.yml` run locally through `mise run act` /
-`mise run act:matrix` (Docker running and `gh auth login` done first).
+GitHub picks up only top-level `.github/workflows/*.yml`. `tests/act.yml`,
+`tests/act-matrix.yml` and `tests/act-cache.yml` run locally through
+`mise run act` / `mise run act:matrix` / `mise run act -t act-cache` (Docker
+running and `gh auth login` done first). The last is the local half of the
+marker proof for the `bin` layer's shim exclusion.
 
 ## README inputs/outputs are generated
 
@@ -489,13 +496,18 @@ docs:build`. Installing `docs/` in the shared setup action was rejected as
   (`upload-pages-artifact` + `deploy-pages`), which replaces the site wholesale,
   so that trap is gone. The rule survives it: the reason is inbound links, not
   stale files.
-- **Markdown files carry NO SPDX header; `.ts`/`.tsx` files do.**
-  `REUSE.toml` licenses everything, `docs/**` included, through its
-  `path = ["**"]` aggregate annotation, and its own comment records that
-  Markdown needs no inline header on top of that. This matters specifically
-  because MDX rejects HTML comments: an SPDX header written as `<!-- -->`
-  fails the build, and rewriting it as a JSX comment `{/* */}` only trades
-  that failure for a header that renders as literal visible text on GitHub.
+- **Every file carries an SPDX header, Markdown included, and that is not a
+  choice.** `REUSE.toml` licenses the whole tree through its `path = ["**"]`
+  aggregate annotation, so an inline header is redundant — but `comply
+annotate` has no ignore mechanism at all. Its `[tool.comply] ignore` list
+  governs `comply lint` only; `annotate` adds a header to every file with a
+  recognised comment style, every run. Verified by probing every glob form
+  against `docs/content/`, exact literal path included: none of them stopped
+  it. This is why those headers moved twice — 2cbf53f removed them by hand and
+  the next `annotate` put them straight back. Uniform headers are the stable
+  state; hand-removing them is not. Docusaurus parses `.md` in CommonMark
+  mode, so the `<!-- -->` form is inert there; only a genuine `.mdx` page would
+  need the JSX comment form.
 - **Mermaid is `@docusaurus/theme-mermaid`, six lines of configuration,
   replacing the old `.vitepress/` directory** — 861 lines in total, of which
   the bespoke Vue mermaid component and its theme wiring accounted for 652.
@@ -523,7 +535,7 @@ docs:build`. Installing `docs/` in the shared setup action was rejected as
   repository URL.** `../README.md` resolves outside `docs/content` and is
   exactly what the dead-link check exists to catch.
 - **A referenced `static/` asset is never checked.** `favicon`,
-  `themeConfig.image` and the `apple-touch-icon` `head` tag in
+  `themeConfig.image` and the `apple-touch-icon` entry in the `headTags` array of
   `docusaurus.config.ts` all reference files under `static/img/` by a bare
   path string, and none of those paths are validated at build time — the same
   gap VitePress had with its `public/` directory, carried across unchanged. A
@@ -531,7 +543,8 @@ docs:build`. Installing `docs/` in the shared setup action was rejected as
 
 ## Code Style
 
-- **ESLint**: Flat config v9+, strict TS rules. `explicit-function-return-type: error`, `no-explicit-any: error` (relaxed in test files).
+- **ESLint**: flat config, pinned at v10 (`eslint.config.js` documents
+  v10-specific behaviour), strict TS rules. `explicit-function-return-type: error`, `no-explicit-any: error` (relaxed in test files).
 - **Imports**: `import-x/order` enforced — builtin → external → internal → parent → sibling. `bun:` prefixed to external. Blank lines between groups.
 - **Format**: Prettier with `prettier-plugin-organize-imports`. Double quotes, trailing commas, 80-width.
 - **Fluent Builder pattern**: prefer chained builder methods with a terminal `.build()` call over large constructors.

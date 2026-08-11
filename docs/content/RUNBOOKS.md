@@ -59,7 +59,7 @@ Run before every commit — enforced by hk:
 
 ```sh
 bun run fix:all      # ESLint fix + Prettier format
-bun run typecheck    # tsc --noEmit (strict mode)
+bun run typecheck    # tsc --build (strict mode)
 bun run test:coverage # 100% line/function/statement gate
 ```
 
@@ -105,7 +105,7 @@ src/
     └── summary.test.ts   # the job-summary table
 ```
 
-Sixteen test files cover seventeen library modules. `src/cache/client.ts`
+Twenty-one test files cover twenty-two library modules. `src/cache/client.ts`
 declares the `CacheClient` interface and nothing else, so it compiles to no
 executable statements and never reaches the coverage report — the port exists
 precisely so the lifecycle can be driven without `@actions/cache`.
@@ -210,7 +210,7 @@ with these jobs:
 | `e2e`      | Runs the action against real rustup on ubuntu, macos and windows, builds a probe crate, and invokes the action twice to prove the derived keys do not move       |
 | `e2e-warm` | `needs: [e2e]`, so it starts only after that job's `post:` step — the only proof the save path works. Asserts a full `cache-hit` and that the exclusions applied |
 | `release`  | Push to `main` (or a dispatch): tags, rewrites `.github/` action refs, and publishes the GitHub Release                                                          |
-| `gh-pages` | Calls `gh-pages.yml` to build and publish the VitePress site, after `release`                                                                                    |
+| `gh-pages` | Calls `gh-pages.yml` to build the Docusaurus site and deploy it as a Pages artifact, after `release`                                                             |
 
 `yamllint` is deliberately absent from the `lint` row: `mise run yamllint` exists
 but is wired into neither `hk` nor CI.
@@ -226,7 +226,7 @@ Enforced before every commit:
 1. **commitlint** — validates conventional commit format
 2. **ESLint** — strict mode, zero warnings
 3. **Prettier** — formatting check
-4. **typecheck** — `tsc --noEmit`
+4. **typecheck** — `tsc --build`
 5. **markdownlint** — `rumdl`
 6. **mermaid** — parses every ` ```mermaid ` block with mermaid's own parser
 7. **actionlint**, **gitleaks**, and the whitespace/EOF fixers
@@ -311,7 +311,7 @@ act a genuine full hit comes back as `registry-linux-x64-…` against a derived
 `registry-Linux-X64-…`, is classified `partial`, and `cache-hit` reports false.
 
 Because `saveLayer` only skips on `exact`, this also means every local `act` run
-re-saves both layers. Locally that costs seconds; in CI the optimisation works.
+re-saves all three layers. Locally that costs seconds; in CI the optimisation works.
 
 **Do not "fix" this in the action.** A case-insensitive comparison would change
 shipped behaviour for a local tool's convenience, and lowercasing keys at
@@ -396,9 +396,14 @@ minor while the scaled value names a release that already exists. Write the full
 ### TypeScript Errors
 
 ```sh
-bun run typecheck           # Full check
-tsc --noEmit --pretty       # With colored output
+bun run typecheck           # tsc --build, across the project references
+bunx tsc --build --force    # Same, ignoring the .tsbuildinfo cache
 ```
+
+A bare `tsc --noEmit` is **not** the equivalent and will mislead you: the root
+`tsconfig.json` is solution-style (`files: []` with no `include`), so it selects
+zero inputs and exits 0 having checked nothing. `--build` is what follows the
+reference into `tsconfig.src.json`.
 
 Common issues:
 
