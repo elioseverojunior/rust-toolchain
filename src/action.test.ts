@@ -1192,6 +1192,79 @@ describe("cache lifecycle", () => {
     "cache-key-suffix": "ci",
   };
 
+  // THE paths-array invariant, at the only place it is decided. `@actions/cache`
+  // folds the paths array into a cache entry's version, so both phases must
+  // derive the identical array — which is why staging switches on the
+  // `cache-prune` INPUT and never on whether a keep-set turned out usable.
+  // Mutation testing found `prune !== "off"` replaced by `true` left every
+  // test green, meaning nothing pinned that `cache-prune: off` archives the
+  // tree itself rather than a stage.
+  it("archives the tree itself, not a stage, when pruning is off", async () => {
+    const h = harness({
+      inputs: { ...withCache, "cache-prune": "off" },
+      env: cacheEnv,
+    });
+    await run(h.deps);
+
+    const paths = h.restores.flatMap((restore) => restore.paths);
+    expect(paths).toContain("/workspace/target/**");
+    expect(paths).toContain("/home/runner/.cargo/registry/index");
+    expect(paths.some((path) => path.includes(".rust-toolchain-stage"))).toBe(
+      false,
+    );
+
+    // And no stage roots on the plans either. Roots with coarse paths would
+    // fill a stage the archive never reads, then save the tree anyway.
+    const plans = (
+      JSON.parse(h.state.cache ?? "{}") as { plans: { stageRoots?: unknown }[] }
+    ).plans;
+    expect(plans.every((plan) => plan.stageRoots === undefined)).toBe(true);
+  });
+
+  // `bin` has nothing to prune, so it must carry no stage roots at all —
+  // absent, not an empty array. An empty array is truthy, so `stageLayers`
+  // would run it through the staging loop, find zero files staged, and drop
+  // the layer as poisoned. The tools cache would silently stop being saved.
+  it("gives the bin layer no stage roots even when pruning is on", async () => {
+    const h = harness({ inputs: withCache, env: cacheEnv });
+    await run(h.deps);
+
+    const plans = (
+      JSON.parse(h.state.cache ?? "{}") as {
+        plans: { layer: string; stageRoots?: unknown }[];
+      }
+    ).plans;
+    const bin = plans.find((plan) => plan.layer === "bin");
+    expect(bin).toBeDefined();
+    expect(bin).not.toHaveProperty("stageRoots");
+    // The staged layers still have theirs, so this is not vacuous — and each
+    // is checked, since a layer falling through to "no roots" would have its
+    // paths point at a stage nothing ever fills.
+    expect(plans.find((plan) => plan.layer === "build")).toHaveProperty(
+      "stageRoots",
+    );
+    expect(plans.find((plan) => plan.layer === "registry")).toHaveProperty(
+      "stageRoots",
+    );
+  });
+
+  // A miss leaves no archive to unpack, so unstaging must not run for it.
+  // Without the guard the restore would walk a stage directory that a previous
+  // job left behind and move ITS contents into the tree — stale artifacts
+  // presented as a fresh restore.
+  it("does not unstage a layer that missed", async () => {
+    const h = harness({
+      inputs: withCache,
+      env: cacheEnv,
+      restoreResult: () => undefined,
+    });
+    h.stageFs.walk = (dir: string): string[] => [`${dir}/stale.rlib`];
+
+    await run(h.deps);
+
+    expect(h.stageFs.moved).toEqual([]);
+  });
+
   it("restores every enabled layer with its derived key and paths", async () => {
     const h = harness({ inputs: withCache, env: cacheEnv });
     await run(h.deps);
@@ -1351,6 +1424,7 @@ describe("runPost", () => {
       metadataFails?: boolean;
       walkFails?: boolean;
       walkMissing?: string;
+      walkUnreadable?: string;
       removeFails?: boolean;
       files?: string[];
       fingerprintDirs?: string[];
@@ -1429,13 +1503,31 @@ describe("runPost", () => {
           },
         },
         walk: (dir: string): string[] => {
-          if (options.walkFails) throw new Error("EACCES");
+          // `code`, not a message that merely mentions ENOENT. `isMissing`
+          // reads `error.code`, exactly as `readdirSync` sets it, so a fake
+          // throwing a bare Error exercises the RETHROW path while looking
+          // like it covers the swallow. That mismatch is the same class of
+          // bug the swallow exists to fix, and it hid here once already.
+          if (options.walkFails) {
+            throw Object.assign(new Error("EACCES: permission denied"), {
+              code: "EACCES",
+            });
+          }
+          if (
+            options.walkUnreadable !== undefined &&
+            dir === options.walkUnreadable
+          ) {
+            throw Object.assign(new Error("EACCES: permission denied"), {
+              code: "EACCES",
+            });
+          }
           if (
             options.walkMissing !== undefined &&
             dir === options.walkMissing
           ) {
-            throw new Error(
-              `ENOENT: no such file or directory, scandir '${dir}'`,
+            throw Object.assign(
+              new Error(`ENOENT: no such file or directory, scandir '${dir}'`),
+              { code: "ENOENT" },
             );
           }
           return (options.files ?? []).filter((file) =>
@@ -1786,6 +1878,43 @@ describe("runPost", () => {
       expect(saves.length).toBeGreaterThan(0);
     });
 
+    // The fallback stages the whole tree, but "whole" still excludes the
+    // regenerable subtrees the coarse glob set excluded. Dropping that filter
+    // survived mutation testing: nothing asserted that `incremental/` and
+    // `examples/` stay out of a fallback archive, which is where the archive
+    // is largest and the exclusion matters most.
+    it("excludes the regenerable subtrees even when staging everything", async () => {
+      const { deps, stageFs } = postDeps(cacheState("safe"), {
+        metadataFails: true,
+        files: [
+          "/w/target/debug/keep.rlib",
+          "/w/target/debug/incremental/skip.bin",
+          "/w/target/debug/examples/skip.bin",
+        ],
+      });
+
+      await runPost(deps);
+
+      expect(stageFs.linked).toEqual(["/w/target/debug/keep.rlib"]);
+    });
+
+    // `prunedBytes` describes what a keep-set dropped from the BUILD tree. The
+    // registry layer has its own selection and no such figure, so reporting one
+    // there would put a number in the job summary that means nothing.
+    it("reports pruned bytes for the build layer only", async () => {
+      const { deps, summaries } = postDeps(cacheState("safe"), {
+        metadata: METADATA,
+        files: FILES,
+        fingerprintDirs: ["serde-aaaaaaaaaaaaaaaa", "gone-bbbbbbbbbbbbbbbb"],
+        sizes,
+      });
+
+      await runPost(deps);
+
+      expect(summaries[0]).toMatch(/\| build \| miss \| \d+ \|/);
+      expect(summaries[0]).toMatch(/\| registry \| miss \| — \|/);
+    });
+
     // Regression, found by .github/workflows/tests/act-cache.yml rather than
     // by any unit test. A workspace with no git dependencies has no
     // $CARGO_HOME/git/db, the registry file list walked it anyway, and the raw
@@ -1793,7 +1922,7 @@ describe("runPost", () => {
     // so NOTHING was staged -- registry and build alike -- both stage
     // directories went uncreated, and saveCache refused a path that does not
     // exist. One absent directory cost every pruned layer its save.
-    it("stages the layers it can when one layer's walk fails", async () => {
+    it("stages a layer whose optional directory is simply absent", async () => {
       const { deps, saves, warnings } = postDeps(cacheState("safe"), {
         metadata: METADATA,
         files: FILES,
@@ -1802,10 +1931,34 @@ describe("runPost", () => {
 
       await runPost(deps);
 
-      // The build layer is untouched by the registry's failure.
-      expect(saves.map((s) => s.key)).toEqual(["build-k"]);
+      // $CARGO_HOME/git/db does not exist until a workspace takes a git
+      // dependency. Absent is nothing to archive, not a fault, so BOTH layers
+      // still save — the whole point of `walkOptional`.
+      expect(saves.map((save) => save.key).sort()).toEqual([
+        "build-k",
+        "reg-k",
+      ]);
+      expect(warnings).toEqual([]);
+    });
+
+    // The other side of the same guard, and the reason it swallows ENOENT
+    // ONLY. A directory that exists and cannot be read is an unknown, not a
+    // zero: archiving around it would ship a smaller entry than asked for, so
+    // the layer is dropped loudly instead. The build layer is untouched by it.
+    it("drops only the layer whose directory cannot be read", async () => {
+      const { deps, saves, warnings } = postDeps(cacheState("safe"), {
+        metadata: METADATA,
+        files: FILES,
+        walkUnreadable: "/c/git/db",
+      });
+
+      await runPost(deps);
+
+      expect(saves.map((save) => save.key)).toEqual(["build-k"]);
       expect(
-        warnings.some((w) => /registry: could not be staged/.test(w)),
+        warnings.some((warning) =>
+          /registry: could not be staged/.test(warning),
+        ),
       ).toBe(true);
     });
 
