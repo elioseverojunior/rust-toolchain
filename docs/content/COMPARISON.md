@@ -43,18 +43,18 @@ writes another full copy of `~/.cargo` plus `target` into a repository-wide 10 G
 evicts globally by least-recent-use. An oversized entry does not degrade its own hit rate — it evicts
 other workflows' caches, so the symptom surfaces somewhere else entirely.
 
-| Failure mode                                 | Root cause                                                 | Addressed by                                                                                                                                                                    |
-| -------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Everything re-saves when one input moves     | One entry, one key, mixed invalidation rates               | Per-layer keys (Phase A), restored and saved independently (Phase B)                                                                                                            |
-| 10 GB exhaustion and cross-workflow eviction | Full re-save per lockfile change, no size accounting       | Skip-save on an exact hit, plus a per-layer `cache-budget`                                                                                                                      |
-| Pruning is heuristic and silent              | Ownership inferred by string-munging filenames, `catch {}` | Files-only negation globs exclude `incremental` and `examples` at any depth today, and failures warn rather than vanish; deterministic pruning from `cargo metadata` is Phase D |
-| Cannot tell a cold run from a broken key     | A single `cache-hit` boolean                               | `cache-hit` reports every-layer-exact, plus a per-layer job summary table naming each layer's actual result                                                                     |
+| Failure mode                                 | Root cause                                                 | Addressed by                                                                                                                                                                                                                                                                                                   |
+| -------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Everything re-saves when one input moves     | One entry, one key, mixed invalidation rates               | Per-layer keys (Phase A), restored and saved independently (Phase B)                                                                                                                                                                                                                                           |
+| 10 GB exhaustion and cross-workflow eviction | Full re-save per lockfile change, no size accounting       | Skip-save on an exact hit, plus a per-layer `cache-budget`                                                                                                                                                                                                                                                     |
+| Pruning is heuristic and silent              | Ownership inferred by string-munging filenames, `catch {}` | Ownership recovered from cargo's own fingerprint records, so attribution is authoritative rather than a filename guess (Phase D); files-only negation globs still exclude `incremental` and `examples` at any depth, and every failure path warns and falls back to archiving everything rather than vanishing |
+| Cannot tell a cold run from a broken key     | A single `cache-hit` boolean                               | `cache-hit` reports every-layer-exact, plus a per-layer job summary table naming each layer's actual result                                                                                                                                                                                                    |
 
 The first two are one problem. Monolithic entries cause the eviction churn, so partitioning fixes both.
 
 Phase A shipped the partitioning as **keys**; Phase B acts on them — `cache: true` now restores every
 layer at job start and saves it again from a `post:` step, so `rust-cache` is no longer needed alongside
-it for the layers this action covers (`registry`, `build`). Nothing stops the two from coexisting —
+it for the layers this action covers (`registry`, `build`, and `bin`, which `rust-cache` has no equivalent of). Nothing stops the two from coexisting —
 `rust-cache`'s `key`/`shared-key` inputs still accept this action's outputs — but a workflow no longer
 needs both.
 
@@ -73,7 +73,7 @@ Compared against `dtolnay/rust-toolchain@master` (composite action, `action.yml`
 | Command execution                 | Shell interpolation    | argv arrays, no shell                                                              |
 | Toolchain pinning for later steps | `rustup default`       | `rustup default` **and** `RUSTUP_TOOLCHAIN`                                        |
 | Cache key                         | rustc version only     | rustc version, a spec-bound key, and per-layer cargo cache keys                    |
-| Tests                             | Workflow matrix        | 359 unit tests at 100% coverage, plus an `act` matrix                              |
+| Tests                             | Workflow matrix        | 560 unit tests at 100% coverage, plus an `act` matrix                              |
 
 ## Legacy parity
 
