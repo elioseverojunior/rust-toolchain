@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+
+SPDX-License-Identifier: MIT OR Apache-2.0
+-->
+
 # Layered Cargo Cache — Phase B Implementation Plan
 
 **Superseded in parts — do not copy code out of this document.** It is kept as the point-in-time plan Phase B was

@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+
+SPDX-License-Identifier: MIT OR Apache-2.0
+-->
+
 # Comparison with the Rust action ecosystem
 
 This action replaces the toolchain half of a typical Rust CI setup outright, and is taking over the
