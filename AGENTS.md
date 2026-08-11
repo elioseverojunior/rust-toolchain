@@ -505,9 +505,16 @@ annotate` has no ignore mechanism at all. Its `[tool.comply] ignore` list
   against `docs/content/`, exact literal path included: none of them stopped
   it. This is why those headers moved twice — 2cbf53f removed them by hand and
   the next `annotate` put them straight back. Uniform headers are the stable
-  state; hand-removing them is not. Docusaurus parses `.md` in CommonMark
-  mode, so the `<!-- -->` form is inert there; only a genuine `.mdx` page would
-  need the JSX comment form.
+  state; hand-removing them is not. **The site survives that only because
+  `docusaurus.config.ts` sets `markdown.format: "detect"`.** Docusaurus 3
+  defaults to MDX for `.md` as well as `.mdx`, and MDX reads the leading
+  `<!--` of an SPDX header as a JSX tag: every page in `docs/content/` failed
+  to compile with "Unexpected character `!` (U+0021) before name" at line 1
+  column 2, from the commit that applied the headers until the format was set.
+  Nothing here relies on MDX — no page imports a component and there are no
+  `.mdx` files — and Docusaurus still runs its own remark plugins in
+  CommonMark mode, so admonitions, heading anchors and ` ```mermaid ` fences
+  are unaffected.
 - **Mermaid is `@docusaurus/theme-mermaid`, six lines of configuration,
   replacing the old `.vitepress/` directory** — 861 lines in total, of which
   the bespoke Vue mermaid component and its theme wiring accounted for 652.

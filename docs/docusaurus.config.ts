@@ -43,6 +43,21 @@ const config: Config = {
   // warns on every build until moved. `mermaid: true` enables ```mermaid
   // fences through the official theme registered below.
   markdown: {
+    // `detect` -- .md parsed as CommonMark, .mdx as MDX -- rather than the
+    // Docusaurus 3 default, which is MDX for BOTH. Under the default, every
+    // page in `content/` fails to compile with "Unexpected character `!`
+    // (U+0021) before name" at line 1 column 2, because MDX reads the leading
+    // `<!--` of an SPDX header as a JSX tag. That header is not removable:
+    // `comply annotate` has no ignore mechanism (its `ignore` list governs
+    // `comply lint` only), so every run puts it straight back -- see
+    // REUSE.toml. Setting the format is the only end of this that we control.
+    //
+    // Nothing here relies on MDX: no page imports a component or embeds JSX,
+    // and there are no .mdx files. Docusaurus still applies its own remark
+    // plugins in CommonMark mode, so admonitions, heading anchors and the
+    // ```mermaid fences below are unaffected. `detect` rather than `md` so a
+    // future .mdx page still gets MDX without another config change.
+    format: "detect",
     hooks: {
       onBrokenMarkdownLinks: "throw",
     },
