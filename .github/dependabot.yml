@@ -1,0 +1,160 @@
+# SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# This repository is a TypeScript GitHub Action built and tested with Bun on the
+# node24 runner. There is no Rust source here -- the action *installs* a Rust
+# toolchain, it does not contain one -- so there is no `cargo` ecosystem to
+# track. The `cargo` block that used to sit at the top of this file scanned for
+# a `Cargo.toml` that has never existed in this tree, and tagged its
+# hypothetical pull requests with a `rust` label the repository does not have.
+version: 2
+
+updates:
+  # ──────────────────────────────────────────────
+  # JavaScript / TypeScript
+  # ──────────────────────────────────────────────
+  #
+  # `bun` is the ecosystem name. There is no `javascript-typescript` value --
+  # that one is CodeQL's language identifier (see `codeql.yml`), and Dependabot
+  # rejects the WHOLE file on an unrecognised `package-ecosystem`, so a wrong
+  # value here silently disables the GitHub Actions updates below as well.
+  #
+  # `bun` rather than `npm` because the only lockfile in this repository is
+  # `bun.lock`, which the npm ecosystem does not read: it would bump the ranges
+  # in `package.json` and leave the lockfile behind, which is exactly the drift
+  # `bun install --frozen-lockfile` fails CI on.
+  #
+  # The trade-off is real and worth knowing. Bun is supported for VERSION
+  # updates only -- security updates are not, so a Dependabot alert will not
+  # raise a fix pull request on its own the way it would under `npm`. The alert
+  # still appears; someone has to act on it. No configuration buys both, because
+  # the ecosystem has to match the lockfile that exists.
+  - package-ecosystem: bun
+    # One entry, at the root, because `docs/` is a Bun WORKSPACE of this
+    # manifest rather than a project of its own -- a single `bun.lock` here,
+    # shared pins in the root `catalog`. A second entry pointing at `/docs`
+    # would find no lockfile to resolve against.
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    # Only labels that exist in the repository. Dependabot does not create
+    # missing ones -- it drops them and logs. `javascript` and `dependencies`
+    # are both present; `bun`, `nodejs` and `javascript-typescript` are not.
+    labels:
+      - dependencies
+      - javascript
+
+    # Matches the convention already in this repository's history
+    # (`build(deps): bump the typescript-eslint packages to 8.67.0`) and stays
+    # inside commitlint's type and scope enums, so a Dependabot branch can be
+    # rebased or amended locally without the commit-msg hook rejecting it.
+    commit-message:
+      prefix: build(deps)
+
+    # ORDER IS LOAD-BEARING. "If a dependency matches more than one rule, it's
+    # included in the first group that it matches." The site's `@docusaurus/*`
+    # and `react` packages are `dependencies` of `docs/package.json`, so they
+    # are production-type too -- listing `docusaurus` after `bundled-runtime`
+    # would sweep the whole site into the group that exists to isolate the four
+    # packages that reach `dist/`.
+    groups:
+      # The Docusaurus site. Nothing here is imported by `src/`, so a bump
+      # cannot affect the published action at all -- it either builds the site
+      # or it does not, and `gh-pages.yml` answers that on the pull request.
+      # Grouped mostly for volume: this is the larger half of the tree by
+      # package count and much the more frequent to move.
+      docusaurus:
+        patterns:
+          - "@docusaurus/*"
+          - "@easyops-cn/*"
+          - "@mdx-js/*"
+          - "@types/react"
+          - "clsx"
+          - "prism-react-renderer"
+          - "react"
+          - "react-dom"
+
+      # Everything bundled into `dist/index.js`: the three `@actions/*` packages
+      # and `smol-toml`.
+      #
+      # Grouped because of a consequence that is easy to be surprised by. The CI
+      # Build job runs `bun run build` and then `git diff --exit-code dist/`,
+      # and Dependabot only ever edits `package.json` and `bun.lock` -- it
+      # cannot regenerate the committed bundle. So EVERY pull request in this
+      # group arrives red and stays red until someone checks the branch out,
+      # runs `bun run build` and commits `dist/`. One grouped pull request is
+      # one rebuild; four ungrouped ones are four.
+      bundled-runtime:
+        dependency-type: production
+        patterns:
+          - "*"
+
+      # Linters, formatters, the type-checker, the test and mutation tooling.
+      # None of it is bundled, so these land green or they land with a real
+      # failure to read.
+      dev-tooling:
+        dependency-type: development
+        patterns:
+          - "*"
+
+  # ──────────────────────────────────────────────
+  # GitHub Actions
+  # ──────────────────────────────────────────────
+  #
+  # `directories`, not `directory`, and the difference is not cosmetic. For this
+  # ecosystem `directory: /` scans `.github/workflows` plus the `action.yml` at
+  # the repository ROOT -- and this repository's root `action.yml` declares
+  # `runs: node24` with no `uses:` at all, so that half finds nothing. The three
+  # pinned references that DO need updating live in the composite actions under
+  # `.github/actions/`, which the root scan never reaches. Only `directories`
+  # supports the `*` wildcard needed to name them.
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - github-actions
+      - ci
+    commit-message:
+      prefix: ci(deps)
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
+      # Every remaining action in one pull request. These are SHA pins with a
+      # trailing `# vX.Y.Z` comment -- a deliberate override of the "prefer the
+      # loosest tag" rule -- so each is a distinct commit's worth of review
+      # whether or not they arrive together, and arriving together at least
+      # makes the CI cost one run rather than eight. `mise run uapw` refreshes
+      # the same pins by hand.
+      actions:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "github/codeql-action*"
+
+  # ──────────────────────────────────────────────
+  # Docker
+  # ──────────────────────────────────────────────
+  #
+  # One `Dockerfile` at the root, pinning `docker.io/library/rust:trixie` for
+  # the `scripts/rustup-toolchain.sh` harness. Monthly rather than weekly and
+  # capped low on purpose: the tag is a Debian codename, so it moves when Debian
+  # does and not otherwise. This is the one entry that goes beyond "typescript,
+  # nodejs and bun" -- delete the block if the image is meant to stay put.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - build
+    commit-message:
+      prefix: build(docker)
