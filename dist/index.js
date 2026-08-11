@@ -61796,23 +61796,14 @@ function parseWorkspaces(value, root) {
   }
   return workspaces;
 }
-function registryPaths(cargoHome, packages) {
-  if (packages === undefined || packages.size === 0) {
-    return [
-      `${cargoHome}/registry/index`,
-      `${cargoHome}/registry/cache`,
-      `${cargoHome}/git/db`
-    ];
-  }
-  const crates = [...packages].map((id) => {
-    const at = id.lastIndexOf("@");
-    return `${cargoHome}/registry/cache/**/${id.slice(0, at)}-${id.slice(at + 1)}.crate`;
-  });
-  return [`${cargoHome}/registry/index`, ...crates, `${cargoHome}/git/db`];
+function registryPaths(cargoHome) {
+  return [
+    `${cargoHome}/registry/index`,
+    `${cargoHome}/registry/cache`,
+    `${cargoHome}/git/db`
+  ];
 }
-function buildPaths(workspaces, keepSet) {
-  if (keepSet !== undefined && keepSet.length > 0)
-    return [...keepSet];
+function buildPaths(workspaces) {
   return workspaces.flatMap(({ targetDir }) => [
     `${targetDir}/**`,
     `!${targetDir}/**/incremental/**`,
