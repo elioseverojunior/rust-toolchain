@@ -40,13 +40,17 @@ const config: Config = {
 
   // `onBrokenMarkdownLinks` lives here rather than as a top-level key: the
   // top-level form is deprecated in 3.10 and removed in Docusaurus v4, and it
-  // warns on every build until moved. Task 4 adds `mermaid: true` to this same
-  // block.
+  // warns on every build until moved. `mermaid: true` enables ```mermaid
+  // fences through the official theme registered below.
   markdown: {
     hooks: {
       onBrokenMarkdownLinks: "throw",
     },
+    mermaid: true,
   },
+
+  // A later task adds a search theme to this array.
+  themes: ["@docusaurus/theme-mermaid"],
 
   i18n: {
     defaultLocale: "en",
@@ -137,6 +141,9 @@ const config: Config = {
     footer: {
       style: "dark",
       copyright: `Copyright © ${new Date().getFullYear()} elioseverojunior. Built with Docusaurus.`,
+    },
+    mermaid: {
+      theme: { light: "neutral", dark: "dark" },
     },
   } satisfies Preset.ThemeConfig,
 };
