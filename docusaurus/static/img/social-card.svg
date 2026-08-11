@@ -65,7 +65,5 @@ see apple-touch-icon.svg for why the mark stays a pair.
     <text x="440" y="400" font-size="25" fill="#9ec8e0">Reads your rust-toolchain.toml. Keys the cache</text>
     <text x="440" y="434" font-size="25" fill="#9ec8e0">in layers, so a compiler bump does not</text>
     <text x="440" y="468" font-size="25" fill="#9ec8e0">re-download the crates it never touched.</text>
-
-    <text x="96" y="562" font-size="23" fill="#7fa8c0">A superset of dtolnay/rust-toolchain — and it replaces Swatinem/rust-cache</text>
   </g>
 </svg>
