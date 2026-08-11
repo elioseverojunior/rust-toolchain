@@ -119,7 +119,7 @@ rust-toolchain/
     ├── tsconfig.json     the TS6-safe config, lifted from docusaurus/
     ├── docusaurus.config.ts
     ├── sidebars.ts
-    ├── src/{css,hooks,pages}/
+    ├── src/{css,pages}/
     ├── static/           favicon.svg, favicon.ico, .nojekyll
     └── content/          the eleven Markdown pages, git mv'd from docs/
 ```

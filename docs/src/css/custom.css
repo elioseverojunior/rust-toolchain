@@ -7,13 +7,13 @@
 /**
  * Design system: "Control Room".
  *
- * The career of an SRE rendered as an operations console — graphite ground,
+ * The stylesheet for a GitHub Action's documentation site — graphite ground,
  * sodium-amber signal light, precision hairlines, monospace instrumentation.
  * The one deliberate dissonance is Fraunces: an editorial serif against a
- * technical dark UI. That tension is the point — a portfolio built entirely
- * from monospace reads like every other engineer's site. Fraunces is chosen
- * over a didone because its optical-size axis keeps it sturdy across the whole
- * range it has to cover, from a 7rem hero name down to a 1.75rem employer.
+ * technical dark UI. That tension is the point — a site built entirely from
+ * monospace reads like every other tool's docs. Fraunces is chosen over a
+ * didone because its optical-size axis keeps it sturdy across the whole range
+ * it has to cover, from the hero title down to a feature card heading.
  *
  * Corners are square (2px at most) throughout. Rounded cards are the single
  * strongest tell of a generic template, and precision instruments are not
@@ -193,92 +193,6 @@ a {
 }
 
 /* ==========================================================================
-   Shared console primitives
-   ========================================================================== */
-
-/* Small tracked-out monospace caption. The instrumentation voice. */
-.els-label {
-  color: var(--els-paper-faint);
-  font-family: var(--els-font-mono);
-  font-size: 0.6875rem;
-  font-weight: 500;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-
-/* A surface with hairline borders and machined corner ticks. */
-.els-panel {
-  position: relative;
-  border: 1px solid var(--els-line);
-  background: linear-gradient(
-    160deg,
-    rgb(236 232 225 / 3.5%),
-    rgb(236 232 225 / 0.8%)
-  );
-  transition:
-    border-color var(--els-fast) var(--els-ease),
-    transform var(--els-fast) var(--els-ease);
-}
-
-/*
- * Corner ticks are drawn with two pseudo-elements carrying two borders each,
- * giving four L-shaped marks from two elements instead of four.
- */
-.els-panel::before,
-.els-panel::after {
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  content: "";
-  transition: border-color var(--els-fast) var(--els-ease);
-  pointer-events: none;
-}
-
-.els-panel::before {
-  border-top: 1px solid var(--els-line-strong);
-  border-left: 1px solid var(--els-line-strong);
-  inset: -1px auto auto -1px;
-}
-
-.els-panel::after {
-  border-right: 1px solid var(--els-line-strong);
-  border-bottom: 1px solid var(--els-line-strong);
-  inset: auto -1px -1px auto;
-}
-
-.els-panel:hover::before,
-.els-panel:hover::after {
-  border-color: var(--els-amber);
-}
-
-/* Page-width container. */
-.els-shell {
-  width: 100%;
-  max-width: var(--els-measure);
-  margin-inline: auto;
-  padding-inline: var(--els-gutter);
-}
-
-/* ==========================================================================
-   Scroll-reveal
-   Elements opt in with [data-reveal]; the observer flips [data-revealed].
-   The initial state lives here rather than inline so nothing flashes.
-   ========================================================================== */
-
-[data-reveal] {
-  opacity: 0;
-  transform: translateY(18px);
-  transition:
-    opacity var(--els-slow) var(--els-ease),
-    transform var(--els-slow) var(--els-ease);
-}
-
-[data-reveal][data-revealed="true"] {
-  opacity: 1;
-  transform: none;
-}
-
-/* ==========================================================================
    Docusaurus chrome
    ========================================================================== */
 
@@ -360,11 +274,5 @@ a {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-  }
-
-  /* Revealed content must still be visible when motion is suppressed. */
-  [data-reveal] {
-    opacity: 1;
-    transform: none;
   }
 }

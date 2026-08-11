@@ -60,12 +60,6 @@ Playwright MCP scratch output (page snapshots, screenshots). Written to the
 working directory by the browser tooling, never part of the project."""
 
 [[gitignore.section.rule]]
-ignore = ["docs/.vitepress/cache/", "docs/.vitepress/dist/"]
-note = """
-VitePress build artifacts — the dep cache alone is ~2.8 MB of prebundled
-JS and source maps, which trips hk's check-added-large-files."""
-
-[[gitignore.section.rule]]
 add = ["CLAUDE.md", "AGENTS.md", "opencode.json"]
 note = "Add"
 
