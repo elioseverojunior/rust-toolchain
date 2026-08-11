@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # Layered Cargo Cache — Design
 
-Status: approved, not yet planned
+Status: approved
 Date: 2026-07-31
 
 ## Summary
