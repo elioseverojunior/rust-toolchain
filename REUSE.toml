@@ -13,10 +13,25 @@ precedence = "aggregate"
 
 [tool.comply]
 # Custom comply settings
-# Markdown is licensed by the `**` aggregate above, so it needs no inline
-# header; these entries are that policy, not a workaround. `comply annotate`
-# now inserts below YAML frontmatter rather than above it, so removing an entry
-# here is safe -- it would gain a header, not lose its frontmatter.
+#
+# `ignore` governs `comply lint` ONLY. `comply annotate` has no ignore
+# mechanism -- no flag, and this list is not consulted -- so it adds an SPDX
+# header to every file with a recognised comment style, every time it runs.
+# Verified by probing every glob form against `docs/content/`, exact path
+# included: none of them stopped it.
+#
+# That is why the headers under `docs/content/` moved twice. 2cbf53f removed
+# them by hand and a later `comply annotate` put them straight back, because
+# nothing in this file could have prevented it. The previous comment here
+# claimed Markdown "needs no inline header ... these entries are that policy",
+# which was never true of `annotate` and is now stated correctly: every file
+# is licensed by the `**` aggregate above, so a header is redundant, and
+# `annotate` adds one anyway. Uniform headers are the stable state; hand-
+# removing them is not.
+#
+# The stale `**/docs/index.md` entry is gone with this: that file was deleted
+# in f669496 when the prose moved into the Docusaurus tree, so it had been
+# ignoring nothing.
 ignore = [
   "**/*.ico",
   "**/*.lock",
@@ -30,7 +45,7 @@ ignore = [
   "**/.remember/",
   "**/.rumdl_cache/",
   "**/dist/",
-  "**/docs/index.md",
+  "**/ARCHITECTURE.md",
   "**/opencode*.json",
   "**/package*.json",
   "**/tsconfig*.json",
