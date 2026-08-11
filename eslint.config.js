@@ -35,6 +35,11 @@ export default [
       // Gitignored scratch directory written by local tooling, not project
       // source. Linting it fails `bun run fix:all` on files we do not own.
       ".remember/**",
+      // Self-managing subproject with its own eslint.config.mjs, the same way
+      // `docs/` has its own. Its React/JSX and DOM globals are configured
+      // there, not here, so linting it from the root reports hundreds of
+      // errors about rules it was never meant to be held to.
+      "docusaurus/**",
     ],
   },
   js.configs.recommended,

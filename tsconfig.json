@@ -22,5 +22,11 @@
     }
   },
   "include": ["**/*.ts"],
-  "exclude": ["node_modules"]
+  // `docusaurus/` is a self-managing subproject: it ships its own
+  // tsconfig.json declaring the DOM lib and its `@site/*` paths, and this
+  // config declares neither. `docs/` needs no entry here only because its
+  // config is `.mts`, which `**/*.ts` does not match — a distinction that is
+  // accidental, so a second subproject with plain `.ts` files is what exposed
+  // it.
+  "exclude": ["node_modules", "docusaurus"]
 }
