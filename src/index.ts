@@ -60,6 +60,14 @@ const client = {
  * to the coverage gate. `computeKeepSet` takes the resulting list as data.
  */
 const walk = (dir: string): string[] => {
+  // An absent directory is empty, not an error. `readdirSync` throws ENOENT
+  // instead, and that throw is what once cost every pruned layer its save: a
+  // workspace with no git dependencies has no $CARGO_HOME/git/db, the registry
+  // file list walked it anyway, and the exception escaped the whole staging
+  // loop. The library guards this too -- see `walkOptional` -- but the port
+  // documents "empty when it is absent", so the adapter has to honour it.
+  if (!existsSync(dir)) return [];
+
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
     const full = `${dir}/${entry}`;
