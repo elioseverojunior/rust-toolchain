@@ -24,8 +24,8 @@ SPDX-License-Identifier: MIT OR Apache-2.0
   <img
     src="docs/static/img/logos/rust-toolchain-and-cache.svg"
     alt="Rust Toolchain and Cache"
-    width="180"
-    height="183"
+    width="280"
+    height="284"
   />
 </p>
 
