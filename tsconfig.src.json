@@ -26,5 +26,14 @@
   // this project's type-check must not carry. It ships its own tsconfig.json
   // (referenced from the root's solution-style tsconfig.json) — see
   // tsconfig.json for the reference wiring.
-  "exclude": ["node_modules", "docs"]
+  //
+  // `dist` is belt-and-braces and changes the resolved file set not at all:
+  // `include` matches only `.ts`, and TypeScript already excludes `outDir`
+  // implicitly. Verified with `tsc --listFilesOnly`, identical either way.
+  //
+  // Keep it anyway. `tsconfig.base.json` sets `allowJs: true`, so the day
+  // `include` grows a `.js` pattern, `dist/index.js` — 63k lines carrying a
+  // vendored Azure SDK — lands in the action's type-check. This is the cheap
+  // guard against that, not a statement that dist is being checked today.
+  "exclude": ["node_modules", "docs", "dist"]
 }
