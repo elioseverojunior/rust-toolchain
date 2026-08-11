@@ -25,11 +25,15 @@ on:
         # -- a manual dispatch is for previewing what one would do.
         default: true
 
-permissions: read-all
+permissions:
+  contents: read
 
 concurrency:
   group: cicd-${{ github.ref_name }}
   cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch }}
+
+env:
+  REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
 
 jobs:
   # ──────────────────────────────────────────────
@@ -54,7 +58,7 @@ jobs:
           submodules: "recursive"
           fetch-depth: 0
           fetch-tags: "true"
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+          ref: ${{ env.REF }}
 
       - name: Setup Environment
         uses: ./.github/actions/setup
@@ -113,7 +117,7 @@ jobs:
           submodules: "recursive"
           fetch-depth: 0
           fetch-tags: "true"
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+          ref: ${{ env.REF }}
 
       - name: Setup Environment
         uses: ./.github/actions/setup
@@ -136,7 +140,7 @@ jobs:
           submodules: "recursive"
           fetch-depth: 0
           fetch-tags: "true"
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+          ref: ${{ env.REF }}
 
       - name: Setup Environment
         uses: ./.github/actions/setup
@@ -150,31 +154,35 @@ jobs:
   sast:
     name: SAST
     needs: [lint]
-    runs-on: ubuntu-latest
+    # A called workflow cannot request more than the calling job grants, and
+    # `codeql.yml`'s `analyze` job asks for exactly these three.
     permissions:
+      contents: read
       security-events: write
       actions: read
-      contents: read
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          submodules: "recursive"
-          fetch-depth: 0
-          fetch-tags: "true"
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
-
-      - name: Setup Environment
-        uses: ./.github/actions/setup
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
-        with:
-          languages: javascript-typescript
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+    # Calls `codeql.yml` rather than repeating its steps, which is what its
+    # otherwise-unreferenced `workflow_call` trigger has always been for -- as
+    # is its `REF` expression, which reads `github.event.pull_request.head.sha`
+    # and could never have been true under a schedule-only trigger.
+    #
+    # This job used to be a copy of those steps, and the copy had drifted in two
+    # ways that both cost coverage at exactly the moment coverage matters:
+    #
+    #  - It analysed `javascript-typescript` alone. `codeql.yml` also analyses
+    #    the `actions` language, which is what scans the workflows themselves
+    #    for script injection -- so the check that guards this file was the one
+    #    check no pull request ran. It fired weekly, against code already
+    #    merged.
+    #  - It ran the default query suite where `codeql.yml` adds
+    #    `+security-and-quality`, so the cron could surface a finding the pull
+    #    request that introduced it had already been told was clean.
+    #
+    # The concurrency groups do not collide: `cicd.yml` holds `cicd-<ref>` and
+    # `codeql.yml` holds `codeql-analysis-<ref>`. That literal prefix is
+    # deliberate -- a called workflow interpolating `github.workflow` would
+    # resolve to the CALLER's name and deadlock against it, which is the trap
+    # documented at the head of `gh-pages.yml`.
+    uses: ./.github/workflows/codeql.yml
 
   # ──────────────────────────────────────────────
   #  4.  Build
@@ -191,7 +199,7 @@ jobs:
           submodules: "recursive"
           fetch-depth: 0
           fetch-tags: "true"
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+          ref: ${{ env.REF }}
 
       - name: Setup Environment
         uses: ./.github/actions/setup
@@ -243,7 +251,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+          ref: ${{ env.REF }}
 
       - name: Write rust-toolchain.toml
         shell: bash
@@ -594,7 +602,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+          ref: ${{ env.REF }}
 
       # Byte-identical to the E2E job's, because the toolchain it resolves
       # feeds `cachekey-full`, which is a segment of the build key. A different
@@ -806,7 +814,7 @@ jobs:
           submodules: "recursive"
           fetch-depth: 0
           fetch-tags: "true"
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+          ref: ${{ env.REF }}
 
       - name: Setup Environment
         uses: ./.github/actions/setup
