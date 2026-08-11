@@ -283,7 +283,10 @@ Two bullets survive and must be carried across verbatim in substance:
   Releases and the two licence links.
 - **`bun install --filter` is load-bearing.** If it does not scope installs as documented on Bun 1.3.14, every CI
   job that installs at the root pays for React and Docusaurus. Proved in the first task; the fallback is to leave
-  `docs/` outside the workspace and accept two lockfiles, which loses the deduplication but nothing else.
+  `docs/` outside the workspace and accept two lockfiles, which loses the deduplication but nothing else. Observed
+  2026-08-11 on Bun 1.3.14: `--filter=<workspace>` keeps the unfiltered workspace's dependency out of
+  `node_modules` but still downloads and extracts it into Bun's shared package cache, so it scopes what gets
+  linked, not the network/CPU cost the CI-jobs-must-not-pay claim above actually depends on.
 - **`@docusaurus/faster` is the least-trodden path.** It is already in the copied project and swaps in Rspack and
   SWC. Keep it, but it is the first thing to drop if the build misbehaves.
 - **Stale URLs persist.** `keep_files: true` means the published VitePress output is not cleared when the new site
