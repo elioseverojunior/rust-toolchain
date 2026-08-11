@@ -1,8 +1,8 @@
-<!--
+{/*
 SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
 
 SPDX-License-Identifier: MIT OR Apache-2.0
--->
+*/}
 
 # Comparison with the Rust action ecosystem
 
@@ -22,8 +22,6 @@ not — a claim a reader disproves in five minutes is worth less than no claim.
 | [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache)                                       | Restore and save the cargo cache      | ✅ Replaced — restores and saves without a separate action    |
 | [`taiki-e/install-action`](https://github.com/taiki-e/install-action)                                 | Install cargo tools quickly           | ✅ Replaced — `cargo-tools`, cached in the `bin` layer        |
 | [`baptiste0928/cargo-install`](https://github.com/baptiste0928/cargo-install)                         | Install and cache cargo tools         | ✅ Replaced — `cargo-tools` installs and caches them          |
-| [`actions-rs/cargo`](https://github.com/actions-rs/cargo)                                             | Run cargo commands                    | ✗ Out of scope — use `run: cargo …`                           |
-| [`clechasseur/rs-clippy-check`](https://github.com/clechasseur/rs-clippy-check)                       | Clippy annotations on pull requests   | ✗ Out of scope — a different concern                          |
 
 ✅ replaced · ◐ partially replaced, remainder on the roadmap · ○ planned · ✗ deliberately out of scope
 

@@ -95,11 +95,21 @@ const config: Config = {
     [
       "classic",
       {
-        // No docs/ content exists yet - enabling the docs plugin against an
-        // empty content directory fails the build. A later task in this
-        // migration supplies docs/ and flips this on. Blog stays off; this
-        // site has no blog.
-        docs: false,
+        docs: {
+          // `content/`, not the plugin default `docs/`: the site root is
+          // itself named docs/, and docs/docs/ARCHITECTURE.md explains
+          // itself to nobody.
+          path: "content",
+          // Load-bearing. VitePress served these at /rust-toolchain/ARCHITECTURE.
+          // The default would move them to /rust-toolchain/docs/ARCHITECTURE, and
+          // because peaceiris publishes with keep_files: true the old VitePress
+          // HTML would keep serving at the original URL -- no 404, no CI failure,
+          // just two sites with every inbound link pointing at the stale one.
+          routeBasePath: "/",
+          sidebarPath: "./sidebars.ts",
+          editUrl:
+            "https://github.com/elioseverojunior/rust-toolchain/edit/main/docs/",
+        },
         blog: false,
         theme: {
           customCss: "./src/css/custom.css",
