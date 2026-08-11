@@ -749,6 +749,10 @@ export async function run(deps: ActionDeps): Promise<void> {
       sleep: deps.sleep,
       timeoutMs: CARGO_INSTALL_TIMEOUT_MS,
       log: { info: deps.core.info, warning: deps.core.warning },
+      // An exact `bin` restore is a digest match on the resolved tool set, so
+      // a tool that will not report its own version is provably the right one
+      // and must not be rebuilt from source.
+      binRestoredExactly: cache.layers.bin?.result === "exact",
     });
 
     const outputs = buildActionOutputs({

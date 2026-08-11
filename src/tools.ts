@@ -280,6 +280,17 @@ export interface EnsureDeps {
   /** `cargo install` compiles from source, so this is generous by design. */
   timeoutMs: number;
   log: { info: (message: string) => void; warning: (message: string) => void };
+  /**
+   * Whether the `bin` layer restored on an *exact* key match.
+   *
+   * The `bin` key is a digest of the resolved tool set, so an exact match
+   * means the archive was written by a job that resolved to these same names
+   * at these same versions — proof enough to keep a binary that will not
+   * report its own version. A prefix match carries no such guarantee: the
+   * ladder deliberately falls back, so a partial restore may hold an older
+   * tool set entirely, and a pinned version would then be silently wrong.
+   */
+  binRestoredExactly: boolean;
 }
 
 /** What happened to one requested tool. */
@@ -300,15 +311,34 @@ export function parseToolVersion(output: string): string | undefined {
   return /(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)/.exec(output)?.[1];
 }
 
-/** Asks an installed tool its version, or `undefined` when it cannot answer. */
-function installedVersion(name: string, deps: EnsureDeps): string | undefined {
+/**
+ * What probing an installed tool established.
+ *
+ * `present` and `version` are deliberately separate. Collapsing them into one
+ * `string | undefined` conflates "the binary is not there" with "the binary is
+ * there and will not tell me", and the two demand opposite responses: the
+ * first has to install, the second usually must not. `cargo-binstall` is the
+ * case that forces the distinction — its clap parser defines
+ * `--version <VERSION>` as the crate version to install, shadowing the
+ * conventional flag entirely, so `cargo-binstall --version` exits non-zero
+ * with `a value is required for '--version <VERSION>'`. Read as "absent", that
+ * rebuilds it from source on every job, discarding the `bin` layer that had
+ * just restored it.
+ */
+type ToolProbe = { present: false } | { present: true; version?: string };
+
+/** Asks an installed tool its version, distinguishing absent from mute. */
+function probeTool(name: string, deps: EnsureDeps): ToolProbe {
   const result = deps.exec(name, ["--version"], {
     env: deps.env,
     timeoutMs: deps.timeoutMs,
     capture: true,
   });
-  if (result.error || result.status !== 0) return undefined;
-  return parseToolVersion(result.stdout ?? "");
+  // A spawn error is the only evidence that the binary is not there at all.
+  // Anything that ran — whatever it exited with — is installed.
+  if (result.error) return { present: false };
+  if (result.status !== 0) return { present: true };
+  return { present: true, version: parseToolVersion(result.stdout ?? "") };
 }
 
 /**
@@ -370,10 +400,13 @@ export function ensureTools(
   const unresolved = new Set(resolution.unresolved.map((tool) => tool.name));
 
   return resolution.tools.map((tool) => {
-    const present = installedVersion(tool.name, deps);
+    const probe = probeTool(tool.name, deps);
+    // Narrowed once: `version` is only meaningful when the binary is present,
+    // and reading it through the union at each use would not type-check.
+    const version = probe.present ? probe.version : undefined;
 
     if (unresolved.has(tool.name)) {
-      if (present === undefined) {
+      if (!probe.present) {
         throw new Error(
           `${tool.name} could not be resolved against the registry and is not ` +
             "installed, so there is nothing to fall back to. Pin a version " +
@@ -382,20 +415,33 @@ export function ensureTools(
       }
       deps.log.warning(
         `${tool.name}: the registry could not be reached, so the installed ` +
-          `binary (reporting ${present}) is used as-is and its version is ` +
-          `published as ${UNRESOLVED_VERSION}. Pin a version to avoid this.`,
+          `binary (reporting ${version ?? "no version"}) is used as-is ` +
+          `and its version is published as ${UNRESOLVED_VERSION}. Pin a ` +
+          "version to avoid this.",
       );
       return { name: tool.name, version: tool.version, action: "unverified" };
     }
 
-    if (present === tool.version) {
+    if (version === tool.version) {
       deps.log.info(`${tool.name}: already at ${tool.version}`);
+      return { name: tool.name, version: tool.version, action: "kept" };
+    }
+
+    // Present, ran, and reported nothing a version could be read from. An
+    // exact `bin` restore already proves it is the binary this tool set
+    // resolved to, so reinstalling would spend minutes rebuilding what the
+    // cache just supplied — which is exactly what `cargo-binstall` did.
+    if (probe.present && version === undefined && deps.binRestoredExactly) {
+      deps.log.info(
+        `${tool.name}: restored from an exact bin cache hit and does not ` +
+          "report a version, so it is kept as-is",
+      );
       return { name: tool.name, version: tool.version, action: "kept" };
     }
 
     deps.log.info(
       `${tool.name}: installing ${tool.version}` +
-        (present === undefined ? "" : `, replacing ${present}`),
+        (version === undefined ? "" : `, replacing ${version}`),
     );
     installTool(tool, deps);
     return { name: tool.name, version: tool.version, action: "installed" };

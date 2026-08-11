@@ -426,6 +426,7 @@ const runner = (
       pauses.push(ms);
     },
     log: { info: (): void => {}, warning: (): void => {} },
+    binRestoredExactly: false,
     exec: (file, args): ToolExecResult => {
       calls.push({ file, args });
       return answers[file]?.shift() ?? { status: 0, stdout: "" };
@@ -472,6 +473,48 @@ describe("ensureTools", () => {
       deps,
     );
     expect(outcomes[0]?.action).toBe("installed");
+  });
+
+  // The real case this distinction exists for. `cargo-binstall`'s clap parser
+  // defines `--version <VERSION>` as the crate version to install, shadowing
+  // the conventional flag, so the probe exits non-zero with
+  // "a value is required for '--version <VERSION>'". Read as "absent", that
+  // rebuilds it from source on every job and discards the `bin` layer that had
+  // just restored it — three minutes of `cargo install` per run.
+  it("keeps a mute binary when the bin layer hit exactly", () => {
+    const deps = runner({
+      "cargo-binstall": [
+        { status: 2, stdout: "" },
+        { status: 0, stdout: "" },
+      ],
+    });
+    deps.binRestoredExactly = true;
+
+    const outcomes = ensureTools(
+      resolution([{ name: "cargo-binstall", version: "1.21.1" }]),
+      deps,
+    );
+
+    expect(outcomes).toEqual([
+      { name: "cargo-binstall", version: "1.21.1", action: "kept" },
+    ]);
+    // Nothing but the probe ran: no `cargo install` at all.
+    expect(deps.calls.map((c) => c.file)).toEqual(["cargo-binstall"]);
+  });
+
+  // Without an exact hit the ladder may have restored an older tool set, so a
+  // binary that will not name its version proves nothing and a pinned version
+  // would be silently wrong.
+  it("installs a mute binary when the bin layer did not hit exactly", () => {
+    const deps = runner({ "cargo-binstall": [{ status: 2, stdout: "" }] });
+
+    const outcomes = ensureTools(
+      resolution([{ name: "cargo-binstall", version: "1.21.1" }]),
+      deps,
+    );
+
+    expect(outcomes[0]?.action).toBe("installed");
+    expect(deps.calls.map((c) => c.file)).toEqual(["cargo-binstall", "cargo"]);
   });
 
   it("installs an absent tool with a locked, forced, pinned argv", () => {
