@@ -919,7 +919,13 @@ in a nested crate ends up resolving.
 
 ## Development
 
-See [docs/content/ARCHITECTURE.md](docs/content/ARCHITECTURE.md),
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) — setup, the test-first loop, the
+pre-commit sequence, and the two things that surprise people (`dist/` is
+committed, and the coverage gate is 100% and fails the build).
+
+For the codebase itself: [AGENTS.md](AGENTS.md) is the canonical description of
+the architecture and the invariants that must not be "simplified", with the
+longer prose in [docs/content/ARCHITECTURE.md](docs/content/ARCHITECTURE.md),
 [docs/content/COMPARISON.md](docs/content/COMPARISON.md) and
 [docs/content/RUNBOOKS.md](docs/content/RUNBOOKS.md).
 
