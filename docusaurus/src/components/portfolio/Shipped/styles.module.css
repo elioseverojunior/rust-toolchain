@@ -1,0 +1,219 @@
+/*
+ * SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+ *
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ */
+
+/* --- Headline total --- */
+
+.total {
+  margin-bottom: 2.5rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.totalValue {
+  display: block;
+  color: var(--els-amber);
+  font-family: var(--els-font-display);
+  font-size: clamp(3.5rem, 11vw, 6.5rem);
+  font-weight: 700;
+  line-height: 0.92;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.totalLabel {
+  margin: 0.75rem 0 0;
+  color: var(--els-paper-dim);
+  font-family: var(--els-font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* --- Downloads table --- */
+
+.table {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--els-line-strong);
+  list-style: none;
+}
+
+.head,
+.rowLink {
+  display: grid;
+  align-items: center;
+  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 13rem) minmax(0, 9rem);
+}
+
+.head {
+  padding-block: 0.75rem;
+  border-bottom: 1px solid var(--els-line);
+  color: var(--els-paper-faint);
+}
+
+.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.row {
+  border-bottom: 1px solid var(--els-line);
+}
+
+.rowLink {
+  padding-block: 1.1rem;
+  color: inherit;
+  transition: background var(--els-fast) var(--els-ease);
+}
+
+.row:hover {
+  background: rgb(255 176 0 / 4%);
+}
+
+.cellName {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.name {
+  color: var(--els-paper);
+  font-family: var(--els-font-mono);
+  font-size: 1rem;
+  font-weight: 600;
+  transition: color var(--els-fast) var(--els-ease);
+}
+
+.row:hover .name {
+  color: var(--els-amber);
+}
+
+.summary {
+  color: var(--els-paper-dim);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.cellKind {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.kind {
+  color: var(--els-paper-dim);
+  font-size: 0.8125rem;
+}
+
+.host {
+  color: var(--els-cyan);
+  font-family: var(--els-font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+}
+
+.cellCount {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  color: var(--els-amber);
+  font-family: var(--els-font-mono);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  gap: 0.6rem;
+}
+
+.noCount {
+  color: var(--els-paper-faint);
+}
+
+.arrow {
+  color: var(--els-paper-faint);
+  font-size: 0.75rem;
+}
+
+.row:hover .arrow {
+  color: var(--els-amber);
+}
+
+/* --- Recently shipped --- */
+
+.recent {
+  margin-top: 2.5rem;
+  padding-top: 1.75rem;
+  border-top: 1px dashed var(--els-line-strong);
+}
+
+.recentLabel {
+  margin: 0 0 1rem;
+  color: var(--els-paper-faint);
+}
+
+.recentList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recentItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--els-line);
+  color: var(--els-paper);
+  gap: 0.35rem 1rem;
+  transition: all var(--els-fast) var(--els-ease);
+}
+
+.recentItem:hover {
+  border-color: var(--els-amber);
+  background: rgb(255 176 0 / 5%);
+  color: var(--els-amber);
+}
+
+.recentName {
+  font-family: var(--els-font-mono);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.recentSummary {
+  flex: 1;
+  color: var(--els-paper-dim);
+  font-size: 0.875rem;
+}
+
+.recentShipped {
+  color: var(--els-paper-faint);
+  font-family: var(--els-font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 760px) {
+  /* The Kind column is the first to go: registry and package type are both
+     recoverable from the destination, the figure is not. */
+  .head {
+    display: none;
+  }
+
+  .rowLink {
+    gap: 0.5rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .cellKind {
+    display: none;
+  }
+
+  .cellCount {
+    align-self: start;
+  }
+}

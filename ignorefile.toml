@@ -5,9 +5,10 @@
 version = 1
 
 [[gitignore.section]]
-level = 1
-name = "SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors"
+
+[[gitignore.section.rule]]
 note = """
+SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
 
 SPDX-License-Identifier: MIT OR Apache-2.0"""
 
@@ -58,14 +59,20 @@ note = "Rumdl"
 
 [[gitignore.section.rule]]
 ignore = [".playwright-mcp/"]
-note = """Playwright MCP scratch output (page snapshots, screenshots). Written to the
+note = """
+Playwright MCP scratch output (page snapshots, screenshots). Written to the
 working directory by the browser tooling, never part of the project."""
 
 [[gitignore.section.rule]]
 ignore = ["docs/.vitepress/cache/", "docs/.vitepress/dist/"]
-note = """VitePress build artifacts — the dep cache alone is ~2.8 MB of prebundled
+note = """
+VitePress build artifacts — the dep cache alone is ~2.8 MB of prebundled
 JS and source maps, which trips hk's check-added-large-files."""
 
 [[gitignore.section.rule]]
 add = ["CLAUDE.md", "AGENTS.md", "opencode.json"]
 note = "Add"
+
+[[gitignore.section.rule]]
+ignore = ["/**/build/", "/**/.docusaurus/"]
+note = "Docusaurus build artifacts"

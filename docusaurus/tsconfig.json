@@ -1,0 +1,57 @@
+// This file is not used by "docusaurus start/build" commands.
+// It is here to improve your IDE experience (type-checking, autocompletion...),
+// and can also run the package.json "typecheck" script manually.
+//
+// NOTE: this deliberately does NOT `extend "@docusaurus/tsconfig"`.
+// That base config (3.10.2) sets `baseUrl`, which TypeScript 6.0 removed
+// outright. `extends` can override an inherited key but cannot delete one, so
+// any config inheriting it fails to load under the `typescript@~6.0.2` pinned
+// in package.json. The base's options are therefore reproduced below verbatim,
+// minus `baseUrl`, with `paths` made relative — which resolves against this
+// file's own directory and needs no `baseUrl`.
+// Revisit once Docusaurus ships a TypeScript 6 compatible @docusaurus/tsconfig.
+{
+  "extends": ["../tsconfig.base.json"],
+  "compilerOptions": {
+    // Environment setup & latest features
+    "lib": ["ESNext", "DOM"],
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleDetection": "force",
+    "jsx": "preserve",
+    "allowJs": true,
+
+    // Bundler mode
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    // --- Mirrors @docusaurus/tsconfig 3.10.2 ---
+    "esModuleInterop": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+
+    // Best practices
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+
+    // Some stricter flags (disabled by default)
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noPropertyAccessFromIndexSignature": false,
+
+    // `paths` lives in tsconfig.json, not here. An empty map at this level
+    // would be dead weight: the extending config replaces `paths` wholesale
+    // rather than merging into it.
+    // DOM is required: this is a React site rendering to a browser.
+    "paths": {
+      "@site/*": ["./*"]
+    },
+
+    "types": ["bun", "node"]
+  },
+  "exclude": [".docusaurus", "build"],
+  "outDir": "../github-pages",
+  "rootDir": "."
+}

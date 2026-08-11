@@ -1,0 +1,83 @@
+{
+  "name": "docusaurus",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "docusaurus build",
+    "clear": "docusaurus clear",
+    "deploy": "docusaurus deploy",
+    "deps": "bunx --bun npm-check-updates -u --target minor && bun install",
+    "deps:check": "bunx --bun npm-check-updates --target minor",
+    "deps:latest": "bunx --bun npm-check-updates -u --target latest && bun install",
+    "docusaurus": "docusaurus",
+    "eslint:lint": "eslint --max-warnings 0 .",
+    "eslint:lint:fix": "eslint --fix --max-warnings 0 .",
+    "fetch:downloads": "bun run scripts/fetch-downloads.ts",
+    "fix:all": "bun run eslint:lint:fix && bun run prettier:format:fix",
+    "lint": "bun run eslint:lint && bun run prettier:format",
+    "prettier:format": "prettier --check .",
+    "prettier:format:fix": "prettier --write .",
+    "serve": "docusaurus serve",
+    "start": "docusaurus start",
+    "swizzle": "docusaurus swizzle",
+    "typecheck": "tsc --noEmit",
+    "typecheck:watch": "tsc --noEmit --watch",
+    "write-heading-ids": "docusaurus write-heading-ids",
+    "write-translations": "docusaurus write-translations"
+  },
+  "dependencies": {
+    "@docusaurus/core": "3.10.2",
+    "@docusaurus/faster": "3.10.2",
+    "@docusaurus/preset-classic": "3.10.2",
+    "@mdx-js/react": "^3.1.1",
+    "clsx": "^2.1.1",
+    "prism-react-renderer": "^2.4.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@docusaurus/module-type-aliases": "3.10.2",
+    "@docusaurus/tsconfig": "3.10.2",
+    "@docusaurus/types": "3.10.2",
+    "@eslint/js": "10.0.1",
+    "@happy-dom/global-registrator": "20.11.2",
+    "@types/bun": "1.3.14",
+    "@types/react": "^19.2.18",
+    "@typescript-eslint/eslint-plugin": "8.66.0",
+    "@typescript-eslint/parser": "8.66.0",
+    "eslint": "10.8.1",
+    "eslint-import-resolver-typescript": "4.4.5",
+    "eslint-plugin-import-x": "4.17.1",
+    "globals": "17.9.0",
+    "mermaid": "11.16.1",
+    "prettier": "3.9.6",
+    "prettier-plugin-organize-imports": "4.3.0",
+    "typescript": "~6.0.3"
+  },
+  "peerDependencies": {
+    "typescript": "^6.0.3"
+  },
+  "trustedDependencies": [
+    "@swc/core",
+    "core-js",
+    "unrs-resolver"
+  ],
+  "browserslist": {
+    "production": [
+      ">0.5%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 3 chrome version",
+      "last 3 firefox version",
+      "last 5 safari version"
+    ]
+  },
+  "engines": {
+    "node": ">=24.0.0,<25.0.0",
+    "bun": "^1.3.14",
+    "typescript": "^6.0.3"
+  }
+}

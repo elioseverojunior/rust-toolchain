@@ -60,3 +60,7 @@ docs/.vitepress/dist/
 !CLAUDE.md
 !AGENTS.md
 !opencode.json
+
+# Docusaurus build artifacts
+/**/build/
+/**/.docusaurus/

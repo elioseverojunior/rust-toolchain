@@ -1,0 +1,81 @@
+/*
+ * SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+ *
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ */
+
+.section {
+  position: relative;
+  /* Padding-block, so the gap between two sections is the sum of both — the
+     rendered space is twice this figure. Tightened from 4.5–8rem: at the old
+     value two adjacent sections put up to 16rem of empty ground between them,
+     which on a laptop viewport meant scrolling past a screen of nothing
+     between numbered blocks that are meant to read as one continuous run. */
+  padding-block: clamp(2.75rem, 6vh, 4.5rem);
+}
+
+.header {
+  margin-bottom: clamp(1.75rem, 3.5vw, 2.75rem);
+}
+
+.marker {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-bottom: 1.5rem;
+}
+
+.index {
+  color: var(--els-amber);
+  font-family: var(--els-font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+.label {
+  white-space: nowrap;
+}
+
+/* Runs to the container edge so the eye is carried across the full measure. */
+.rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    var(--els-line-strong),
+    var(--els-line) 45%,
+    transparent
+  );
+}
+
+.title {
+  max-width: 22ch;
+  margin: 0;
+  color: var(--els-paper);
+  font-family: var(--els-font-display);
+  font-size: clamp(2.25rem, 6vw, 4rem);
+  font-weight: 600;
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+}
+
+/* The display face carries the accent through an italic clause. */
+.title em {
+  color: var(--els-amber);
+  font-style: italic;
+}
+
+.intro {
+  max-width: 56ch;
+  margin: 1.5rem 0 0;
+  color: var(--els-paper-dim);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+}
+
+@media (max-width: 640px) {
+  .title {
+    max-width: none;
+  }
+}
