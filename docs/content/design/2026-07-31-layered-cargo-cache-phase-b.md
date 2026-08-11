@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # Layered Cargo Cache — Phase B Design
 
-Status: approved, not yet planned
+Status: approved
 Date: 2026-07-31
 Parent: [Phase A design](2026-07-31-layered-cargo-cache.md)
 
