@@ -212,10 +212,18 @@ argv array with no shell, consistent with the existing rustup invariants.
                   build/<pruned-pkg>/out, and registry/src/
 ```
 
-_(Amended in Phase D. Steps 4 and 5 originally read "prune" and "always drop", the language of deletion. What ships
-filters the tar manifest and never touches the working tree — see the pruning invariants in `CLAUDE.md`. A post step
-that deleted from `target/` would run after the job's real work, so a bad keep-set would surface as a build that
-succeeded and a checkout now missing artifacts.)_
+_(Amended in Phase D. Steps 4 and 5 originally read "prune" and "always drop", the language of deletion. Nothing
+under `src/` touches the working tree — see the pruning invariants in `AGENTS.md`. A post step that deleted from
+`target/` would run after the job's real work, so a bad keep-set would surface as a build that succeeded and a
+checkout now missing artifacts.)_
+
+_(Amended again after Phase D shipped. Step 4 was first implemented as a tar manifest listing the keep-set's files
+explicitly, and that could not work: `@actions/cache` matches an entry on `(key, version)` where the version is
+`sha256(paths.join("|") | compressionMethod | salt)`, so a content-derived paths array writes entries no restore can
+ever find — the restoring job does not yet know the content. The keep-set is now hard-linked into one fixed staging
+directory per tree, and that directory alone is what the client is given, so the paths array is identical in every
+job. Links rather than copies: they share the mtime cargo's freshness check reads. See ARCHITECTURE.md → **Pruning
+Filters the Manifest, and Staging Is What Makes It Possible**.)_
 
 Step 2 is the difference from `rust-cache`, which infers ownership by stripping a trailing `-$hash` from a filename and
 string-comparing the remainder. The fingerprint directories already record the mapping authoritatively.
@@ -337,7 +345,8 @@ no `tsconfig.json` change is required.
 ```text
 src/cache/layers.ts      layer definitions: id, paths, shim exclusions
 src/cache/keys.ts        key and restore-ladder derivation (pure)
-src/cache/client.ts      CacheClient port plus the @actions/cache adapter
+src/cache/client.ts      CacheClient port ONLY; the @actions/cache adapter
+                         is built in src/index.ts, outside the coverage gate
 src/cache/prune.ts       keep-set from cargo metadata and .fingerprint
 src/cache/budget.ts      size measurement and budget enforcement
 src/cache/lifecycle.ts   restore (main) and save (post)
