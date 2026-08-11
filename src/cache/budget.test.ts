@@ -74,6 +74,17 @@ const fakeFs = (
 });
 
 describe("measurePaths", () => {
+  // A negation ending in `/` excludes DIRECTORY ENTRIES from the tar manifest,
+  // not the files beneath them, so it must not become a file exclusion. The
+  // conjunction that draws that line survived mutation testing as `||`, which
+  // is far worse than it looks: with `||`, an ordinary include like `/t/**`
+  // satisfies `!endsWith("/")` and is itself turned into an exclusion, so the
+  // layer measures zero and `cache-budget` is silently disabled altogether.
+  it("keeps a directory negation from excluding the files beneath it", () => {
+    const fs = fakeFs({ "/t": ["a"], "/t/a": 100 });
+    expect(measurePaths(["/t/**", "!/t/**/"], fs).bytes).toBe(100);
+  });
+
   it("sums a flat directory", () => {
     const fs = fakeFs({ "/t": ["a", "b"], "/t/a": 100, "/t/b": 200 });
     expect(measurePaths(["/t"], fs)).toEqual({ bytes: 300, unmeasured: [] });
@@ -120,6 +131,42 @@ describe("measurePaths", () => {
       bytes: 100,
       unmeasured: ["/t/b"],
     });
+  });
+
+  // The other side of that guard, and the one nothing pinned: a path that is
+  // simply ABSENT contributes a true zero and is NOT reported. Mutation
+  // testing caught this — `if (!isMissing(error))` mutated to `if (true)`
+  // left every test green, because none of them measured a path that was not
+  // there. Reporting a missing path would make `unmeasured` fire on the
+  // ordinary case of a layer whose directory has not been created yet.
+  it("treats an absent path as zero rather than as unmeasurable", () => {
+    const fs = fakeFs({ "/t": ["a"], "/t/a": 100 });
+    expect(measurePaths(["/t", "/absent"], fs)).toEqual({
+      bytes: 100,
+      unmeasured: [],
+    });
+  });
+
+  // The SECOND `isMissing` call site, in the readdir catch rather than the stat
+  // one. The first run of mutation testing killed only the stat guard, because
+  // the test above measures a path that fails at `stat`; a directory that
+  // stats cleanly and then vanishes before `readdir` takes the other branch
+  // entirely. Two identical-looking guards, and only one of them was pinned.
+  it("treats a directory that vanishes mid-walk as zero, not unmeasurable", () => {
+    const gone = (path: string): NodeJS.ErrnoException =>
+      Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+    const fs: StatFs = {
+      readdir: (dir): string[] => {
+        if (dir === "/t/sub") throw gone(dir);
+        return dir === "/t" ? ["sub", "a"] : [];
+      },
+      stat: (path): { size: number; isDirectory: () => boolean } => ({
+        size: path === "/t/a" ? 100 : 0,
+        isDirectory: () => path === "/t" || path === "/t/sub",
+      }),
+    };
+
+    expect(measurePaths(["/t"], fs)).toEqual({ bytes: 100, unmeasured: [] });
   });
 
   it("reports a directory it could not list", () => {

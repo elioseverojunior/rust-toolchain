@@ -211,11 +211,32 @@ describe("unstageFiles", () => {
   // is an assumption about someone else's code rather than something this
   // module can prove. Counting the stray entry keeps a wrong adapter visible
   // instead of silently moving a file out of the tree it belongs to.
-  it("counts a walk entry that is not under the stage", () => {
+  //
+  // The `mkdirp`/`move` assertions pin intent rather than close a hole.
+  // Deleting the guard entirely is an EQUIVALENT mutation today: without it
+  // `parentDir(undefined)` throws inside the try below, the catch increments
+  // `failed`, and the count comes out identical. So `failed: 1` alone cannot
+  // tell the two apart, and no test can. What these assertions do buy is a
+  // guarantee against a future refactor — make `parentDir` total, or move the
+  // `mkdirp` call above the try, and a stray path would suddenly be acted on
+  // with nothing else to notice.
+  it("counts a walk entry that is not under the stage, without touching it", () => {
+    const touched: string[] = [];
+    const inner = fakeFs();
     const fs: StageFs = {
-      ...fakeFs(),
+      ...inner,
       walk: () => ["/somewhere/else/x"],
+      mkdirp: (dir) => {
+        touched.push(`mkdirp:${dir}`);
+        inner.mkdirp(dir);
+      },
+      move: (from, to) => {
+        touched.push(`move:${from}`);
+        inner.move(from, to);
+      },
     };
+
     expect(unstageFiles(BUILD_ROOT, fs)).toEqual({ staged: 0, failed: 1 });
+    expect(touched).toEqual([]);
   });
 });
