@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
+
 # SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
+
 #
 # Regenerates every derived site image from logos/rust-toolchain-and-cache.svg.
 #

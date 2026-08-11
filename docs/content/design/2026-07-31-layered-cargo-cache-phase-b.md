@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+
+SPDX-License-Identifier: MIT OR Apache-2.0
+-->
+
 # Layered Cargo Cache — Phase B Design
 
 Status: approved, not yet planned

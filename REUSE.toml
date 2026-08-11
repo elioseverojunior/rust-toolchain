@@ -34,6 +34,7 @@ ignore = [
   "**/opencode*.json",
   "**/package*.json",
   "**/tsconfig*.json",
+  "**/stryker.config.json",
   ".actrc",
 ]
 
