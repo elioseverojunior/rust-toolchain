@@ -20,6 +20,15 @@ SPDX-License-Identifier: MIT OR Apache-2.0
   (action-docs emits unpadded tables; Prettier realigns them.)
 -->
 
+<p align="center">
+  <img
+    src="docs/static/img/logos/rust-toolchain-and-cache.svg"
+    alt="Rust Toolchain and Cache"
+    width="180"
+    height="183"
+  />
+</p>
+
 # Rust Toolchain and Cache
 
 **Install a Rust toolchain that actually matches what your repository asked for — and get the cache keys for free.**
