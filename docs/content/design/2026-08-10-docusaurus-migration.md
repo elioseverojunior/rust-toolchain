@@ -15,9 +15,10 @@ Supersedes: the VitePress site described in `CLAUDE.md` → "`docs/` is a VitePr
 
 Replace the VitePress site under `docs/` with Docusaurus 3.10.2, outright rather than side by side.
 
-The site keeps its own `package.json` and `bun.lock`. That was not the original intent — this document proposed
-folding both into the root through Bun workspaces so there would be one lockfile — but Task 1 of the plan measured
-the idea and it does not pay. See **Dependencies** below for the numbers and what they cost.
+The site is a Bun workspace of the repository root: one `bun.lock`, shared pins in a root `catalog`. That was this
+document's original intent; Task 1 of the plan measured it, concluded it cost 2.8x, and the workspace was dropped —
+and that measurement was later found to have tested the wrong `--filter` form. The workspace now ships. See
+**Dependencies** below for both sets of numbers and what separates them.
 
 The migration is worth doing for one measurable reason: it deletes 652 lines of bespoke Vue and TypeScript that exist
 only to work around gaps in VitePress's mermaid story, replacing them with roughly six lines of configuration against
@@ -125,8 +126,8 @@ a `files: ["docs/**/*.{ts,tsx}"]` block carrying `globals.browser` and the React
 
 ```text
 rust-toolchain/
-├── package.json          action deps + action-docs; NO "workspaces" key
-├── bun.lock              the action's lockfile; docs/ keeps its own
+├── package.json          action deps + action-docs; "workspaces" + "catalog"
+├── bun.lock              the ONLY lockfile; docs/ has none of its own
 ├── tsconfig.json         solution style: "files": [], "references": [...]
 ├── tsconfig.src.json     the action: lib ESNext, types bun+node
 ├── eslint.config.js      + a files:["docs/**/*.{ts,tsx}"] block
@@ -313,7 +314,8 @@ without type-checking, so an error in the config only ever surfaced in an editor
 
 ## Documentation to update
 
-`CLAUDE.md`'s "`docs/` is a VitePress site with its own toolchain" section is rewritten. Four of its bullets are
+`AGENTS.md`'s "`docs/` is a VitePress site with its own toolchain" section is rewritten (it lived in `CLAUDE.md`
+when this was written). Four of its bullets are
 retired: the separate-`package.json`-and-lockfile premise (workspaces), the `base` trailing-slash warning and the
 hand-prefixed `head` entries (`useBaseUrl`), and the `.vitepress/cache` size note.
 

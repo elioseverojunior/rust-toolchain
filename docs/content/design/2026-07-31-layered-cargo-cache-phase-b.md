@@ -229,7 +229,8 @@ Both also fold into the existing `json` output.
 ## Module layout
 
 ```text
-src/cache/client.ts      CacheClient port and the @actions/cache adapter
+src/cache/client.ts      CacheClient port ONLY; the @actions/cache adapter
+                         is built in src/index.ts, outside the coverage gate
 src/cache/env.ts         envHash: prefix set, deny-list, digest
 src/cache/paths.ts       cache-workspaces parsing, layer paths, exclusion globs
 src/cache/budget.ts      size parsing, measurement, enforcement

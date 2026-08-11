@@ -667,16 +667,22 @@ git commit -S -m "docs(site): restore offline search"
 ### Task 8: Unify type-checking and linting, keep the lockfiles apart
 
 > **REVISED after Task 1.** This task originally declared a Bun workspace so the repository would have one lockfile.
-> Task 1 disproved the assumption that made that affordable, so the workspace is **not** created and the site keeps
-> its own `package.json` and `bun.lock`. What remains — project references and one ESLint config — never depended on
-> a workspace and is unchanged.
+> Task 1 disproved the assumption that made that affordable, so the workspace was **not** created here and the site
+> kept its own `package.json` and `bun.lock`. What remains — project references and one ESLint config — never
+> depended on a workspace and is unchanged.
 >
 > The evidence, measured on a cold cache: `bun install --filter` scopes what is **linked** into `node_modules` but
 > still downloads and extracts the unfiltered workspace's whole graph. Action dependencies alone install 320 packages
 > in 21.9s; the same install inside a workspace, filtered to the action, pulls 644 packages in 61.3s. Every job that
 > installs would pay 2.8x for a docs site it never imports.
 >
-> **Do not add a `"workspaces"` key to the root `package.json` in this task or any later one.**
+> **Superseded — the workspace ships.** That measurement tested the wrong `--filter` form. Excluding a workspace,
+> `--filter '!docs'`, does resolve and extract its whole graph; selecting the wanted package BY NAME,
+> `--filter rust-toolchain`, does not. Counting cache directories on Bun 1.3.14 with a per-run `--cache-dir`: action
+> alone 1335, `--filter '!docs'` 4098 (3 docusaurus, 38 react), `--filter rust-toolchain` 1338 (0 docusaurus, 2
+> react). Do not re-derive this from timings — the same command varied 18.3s to 25.8s. The root now declares
+> `workspaces: { packages: ["docs"], catalog: {...} }`, there is one `bun.lock`, and CI installs with
+> `--filter rust-toolchain`. Read the two paragraphs above as the historical record, not as instructions.
 
 **Files:**
 
@@ -800,16 +806,19 @@ git mv docusaurus docs
 - [ ] **Step 2: Update the workspace and reference paths**
 
 In `tsconfig.json` change the reference to `./docs/tsconfig.json`; in `tsconfig.src.json` the `exclude` already lists
-`docs`. Do **not** add a `"workspaces"` key to `package.json` — see the note at the head of Task 8.
+`docs`. As shipped there is no reference at all — the site is type-checked by `mise run docs:typecheck` instead,
+because CI's Lint job never installs `docs/node_modules`. On the `"workspaces"` key, see the superseding note at the
+head of Task 8: it ships.
 
 - [ ] **Step 3: Rewrite the mise tasks**
 
 ```toml
 [tasks."docs:install"]
 alias = ["docsi"]
-description = "Install the docs site dependencies (docs/ has its own lockfile)"
-dir = "docs"
-run = "bun install --frozen-lockfile"
+description = "Install the docs site dependencies from the workspace root"
+# As shipped this carries no `dir`: there is one lockfile, at the root, so the
+# install runs there and is scoped with `--filter docs`.
+run = "bun install --frozen-lockfile --filter docs"
 
 [tasks."docs:build"]
 alias = ["docsb"]

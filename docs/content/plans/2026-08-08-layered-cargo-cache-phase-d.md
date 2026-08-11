@@ -170,6 +170,49 @@ than only by a rare failure.
 
 ---
 
+## Amendment: Task 3's manifest became a stage
+
+Tasks 1 through 8 all landed and their boxes below are honest. Task 3's mechanism did not survive contact with the
+cache service, and everything downstream of it changed shape after this plan was written. What ships is described in
+ARCHITECTURE.md → **Pruning Filters the Manifest, and Staging Is What Makes It Possible**; this section says only what
+moved and why, so the plan is not read as a description of the code.
+
+**What was missed.** `@actions/cache` matches an entry on `(key, version)`, and `getCacheVersion` computes that
+version as `sha256(paths.join("|") | compressionMethod | salt)` — **the paths array is part of the entry's identity.**
+Task 3 made that array content-derived: a keep-set of explicit files. So the saving job wrote its entry under a
+version computed from its own keep-set, and the restoring job asked for a version computed from an array whose
+content it had not yet learned. The two never matched. Nothing errored; the save succeeded, the entry existed, and
+every restore missed. Observed in CI as a `registry` and `build` layer that saved cleanly on one run and restored
+nothing on the next.
+
+This is the failure mode the invariant above is about, arrived at from a direction the invariant did not cover: the
+keep-set was not empty, and the archive was not poisoned. The paths array simply must not depend on content.
+
+**What replaced it.** `src/cache/stage.ts`. Each tree gets one fixed staging directory, and `stagePaths` hands that
+alone to the client, so the array is byte-identical in every job whatever the keep-set holds. `stageFiles` hard-links
+the keep-set into the stage before a save; `unstageFiles` moves it back out after a restore. Hard links rather than
+copies because they share an inode and therefore an mtime, which is what cargo's freshness check reads — a copy would
+look newer than the source it was built from and invalidate everything it was meant to preserve.
+
+**What this changes in the tasks below.**
+
+- Task 3's `buildPaths` keep-set parameter is gone. `buildPaths`/`registryPaths` are now the `cache-prune: off` shape
+  only, and the "emits those files explicitly and no globstar" behaviour lives nowhere — a pruned layer names a
+  directory, and tar's recursion over the stage is what archives the keep-set.
+- The empty-keep-set fallback moved with it. It is no longer `buildPaths` treating an empty set as absent; it is
+  `filesToStage` walking the whole tree when the keep-set is unusable, plus `stageLayers` dropping any layer that
+  staged zero files rather than saving an empty archive. The invariant above is intact; its enforcement points are
+  not where this plan put them.
+- The barrel is twenty-one modules, not the nineteen the file table predicts: `cache/stage.ts` and `cache/fs.ts` were
+  both added after this plan. `cache/fs.ts` exists because the `node:fs` adapters had been left in `src/index.ts`,
+  outside the coverage gate, and a hand-written fake that disagreed with `readdirSync` about a missing directory cost
+  every pruned layer its save without a single test noticing.
+
+**What did not change.** D1 holds exactly as written, and staging strengthens it: hard-linking into a stage is even
+further from deletion than filtering a manifest was. Nothing under `src/` removes a file from the working tree.
+
+---
+
 ## Task 1: Read the package set from `cargo metadata`
 
 **Files:** create `src/cache/metadata.ts`, `src/cache/metadata.test.ts`; modify `src/lib.ts`, `src/lib.test.ts`.
