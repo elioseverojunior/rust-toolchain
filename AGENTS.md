@@ -6,6 +6,16 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # AGENTS.md
 
+The canonical instruction file for every AI agent in this repository. Codebase
+knowledge belongs here — architecture, invariants, commands, conventions, and
+the reasoning behind them — because it is true whichever agent or harness is
+reading.
+
+`CLAUDE.md` includes this file with `@AGENTS.md` and carries only what is
+specific to Claude Code as a harness. A tool that offers to record what it
+learned about this codebase updates THIS file, whatever its own documentation
+says about `CLAUDE.md`.
+
 ## Toolchain
 
 - **Runtime/Package mgr**: Bun (managed by mise). ONE `bun.lock`, at the repository root — `docs/` is a Bun workspace, not a separate project.
