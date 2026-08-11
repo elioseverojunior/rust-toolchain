@@ -63778,23 +63778,35 @@ async function resolveKeepSet(state3, deps) {
   }
   return { usable: true, build: keep, packages, droppedBytes: dropped };
 }
+function isMissing2(error2) {
+  return typeof error2 === "object" && error2 !== null && error2.code === "ENOENT";
+}
+function walkOptional(dir, deps) {
+  try {
+    return deps.walk(dir);
+  } catch (error2) {
+    if (isMissing2(error2))
+      return [];
+    throw error2;
+  }
+}
 function registryAllFiles(cargoHome, deps) {
   return [
     `${cargoHome}/registry/index`,
     `${cargoHome}/registry/cache`,
     `${cargoHome}/git/db`
-  ].flatMap((dir) => deps.walk(dir));
+  ].flatMap((dir) => walkOptional(dir, deps));
 }
 function registryKeepFiles(cargoHome, packages, deps) {
   const wanted = new Set([...packages].map((id) => {
     const at = id.lastIndexOf("@");
     return `${id.slice(0, at)}-${id.slice(at + 1)}.crate`;
   }));
-  const crates = deps.walk(`${cargoHome}/registry/cache`).filter((file) => wanted.has(file.slice(file.lastIndexOf("/") + 1)));
+  const crates = walkOptional(`${cargoHome}/registry/cache`, deps).filter((file) => wanted.has(file.slice(file.lastIndexOf("/") + 1)));
   return [
-    ...deps.walk(`${cargoHome}/registry/index`),
+    ...walkOptional(`${cargoHome}/registry/index`, deps),
     ...crates,
-    ...deps.walk(`${cargoHome}/git/db`)
+    ...walkOptional(`${cargoHome}/git/db`, deps)
   ];
 }
 function filesToStage(layer, root, keep, deps) {
@@ -63822,10 +63834,15 @@ async function stageLayers(plans, state3, deps) {
       continue;
     }
     let staged = 0;
-    for (const root of plan.stageRoots) {
-      const outcome = stageFiles(root, filesToStage(plan.layer, root, keep, deps), deps.stageFs);
-      staged += outcome.staged;
-      deps.core.info(`${plan.layer}: staged ${outcome.staged} file(s) from ` + `${root.sourceDir}` + (outcome.failed > 0 ? `, ${outcome.failed} could not be linked` : ""));
+    try {
+      for (const root of plan.stageRoots) {
+        const outcome = stageFiles(root, filesToStage(plan.layer, root, keep, deps), deps.stageFs);
+        staged += outcome.staged;
+        deps.core.info(`${plan.layer}: staged ${outcome.staged} file(s) from ` + `${root.sourceDir}` + (outcome.failed > 0 ? `, ${outcome.failed} could not be linked` : ""));
+      }
+    } catch (error2) {
+      deps.core.warning(`${plan.layer}: could not be staged, so it is not saved — ` + describeError(error2));
+      continue;
     }
     if (staged === 0) {
       deps.core.warning(`${plan.layer}: nothing was staged, so the layer is not saved — ` + `an empty entry would hit its key and restore nothing`);
@@ -63842,6 +63859,17 @@ async function writeSummarySafely(core, restored, saved) {
     core.warning(`could not write the job summary, continuing: ${describeError(error2)}`);
   }
 }
+function clearStages(plans, deps) {
+  for (const plan of plans) {
+    for (const root of plan.stageRoots ?? []) {
+      try {
+        deps.stageFs.remove(root.stageDir);
+      } catch (error2) {
+        deps.core.warning(`${plan.layer}: could not clear ${root.stageDir} — ` + describeError(error2));
+      }
+    }
+  }
+}
 async function runPost(deps) {
   try {
     const raw = deps.core.getState("cache");
@@ -63849,13 +63877,8 @@ async function runPost(deps) {
       return;
     const state3 = JSON.parse(raw);
     const { restored, budget } = state3;
-    let plans = state3.plans;
-    try {
-      plans = await stageLayers(plans, state3, deps);
-    } catch (error2) {
-      deps.core.warning(`prune: could not narrow the cache to the resolved package set, ` + `saving everything instead — ${describeError(error2)}`);
-    }
-    const saved = await saveLayers({
+    const plans = await stageLayers(state3.plans, state3, deps);
+    const savedLayers = await saveLayers({
       client: deps.cache,
       plans,
       restored,
@@ -63863,7 +63886,8 @@ async function runPost(deps) {
       measure: deps.measure,
       log: { info: deps.core.info, warning: deps.core.warning }
     });
-    await writeSummarySafely(deps.core, restored, saved);
+    clearStages(state3.plans, deps);
+    await writeSummarySafely(deps.core, restored, savedLayers);
   } catch (error2) {
     deps.core.warning(`cache post-processing failed, continuing: ${describeError(error2)}`);
   }
@@ -63877,6 +63901,8 @@ var client = {
   }
 };
 var walk = (dir) => {
+  if (!existsSync4(dir))
+    return [];
   const out = [];
   for (const entry of readdirSync(dir)) {
     const full = `${dir}/${entry}`;

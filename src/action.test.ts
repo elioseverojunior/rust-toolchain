@@ -63,7 +63,7 @@ interface Harness {
   restores: RestoreCall[];
   saves: SaveCall[];
   registryCalls: string[];
-  stageFs: StageFs & { linked: string[]; moved: string[] };
+  stageFs: StageFs & { linked: string[]; moved: string[]; removed: string[] };
 }
 
 /**
@@ -72,12 +72,17 @@ interface Harness {
  * Staging is filesystem work in the middle of both phases, so every harness
  * needs one; the recorded sets are what a test asserts the keep-set against.
  */
-function fakeStageFs(): StageFs & { linked: string[]; moved: string[] } {
+function fakeStageFs(
+  removeFails = false,
+  events: string[] = [],
+): StageFs & { linked: string[]; moved: string[]; removed: string[] } {
   const linked: string[] = [];
   const moved: string[] = [];
+  const removed: string[] = [];
   return {
     linked,
     moved,
+    removed,
     mkdirp: (): void => {},
     link: (from): void => {
       linked.push(from);
@@ -86,7 +91,17 @@ function fakeStageFs(): StageFs & { linked: string[]; moved: string[] } {
     move: (from): void => {
       moved.push(from);
     },
-    remove: (): void => {},
+    remove: (dir): void => {
+      // Only the post-save cleanup fails. `stageFiles` also removes a stale
+      // stage BEFORE filling it, and failing that one would break staging
+      // itself — a different scenario, and one that would make this test pass
+      // for the wrong reason.
+      if (removeFails && events.some((event) => event.startsWith("save:"))) {
+        throw new Error("EACCES");
+      }
+      removed.push(dir);
+      events.push(`remove:${dir}`);
+    },
   };
 }
 
@@ -1335,6 +1350,8 @@ describe("runPost", () => {
       metadata?: string;
       metadataFails?: boolean;
       walkFails?: boolean;
+      walkMissing?: string;
+      removeFails?: boolean;
       files?: string[];
       fingerprintDirs?: string[];
       sizes?: (paths: string[]) => number;
@@ -1346,15 +1363,22 @@ describe("runPost", () => {
     summaries: string[];
     warnings: string[];
     logs: string[];
-    stageFs: StageFs & { linked: string[]; moved: string[] };
+    stageFs: StageFs & {
+      linked: string[];
+      moved: string[];
+      removed: string[];
+    };
+    events: string[];
   } => {
     const restores: { key: string }[] = [];
     const saves: { key: string }[] = [];
     const summaries: string[] = [];
     const warnings: string[] = [];
     const logs: string[] = [];
-    const stageFs = fakeStageFs();
+    const events: string[] = [];
+    const stageFs = fakeStageFs(options.removeFails, events);
     return {
+      events,
       restores,
       saves,
       summaries,
@@ -1372,6 +1396,7 @@ describe("runPost", () => {
           },
           save: async (_paths: string[], key: string): Promise<void> => {
             saves.push({ key });
+            events.push(`save:${key}`);
           },
         },
         core: {
@@ -1405,6 +1430,14 @@ describe("runPost", () => {
         },
         walk: (dir: string): string[] => {
           if (options.walkFails) throw new Error("EACCES");
+          if (
+            options.walkMissing !== undefined &&
+            dir === options.walkMissing
+          ) {
+            throw new Error(
+              `ENOENT: no such file or directory, scandir '${dir}'`,
+            );
+          }
           return (options.files ?? []).filter((file) =>
             file.startsWith(`${dir}/`),
           );
@@ -1711,6 +1744,85 @@ describe("runPost", () => {
 
       expect(saves).toEqual([]);
       expect(warnings.some((w) => /nothing was staged/.test(w))).toBe(true);
+    });
+
+    // A stage is a hard-linked mirror of the tree it came from, so leaving it
+    // costs no disk blocks but does leave target/ and $CARGO_HOME carrying a
+    // duplicate of themselves. Removing links never touches the files they
+    // point at, so this cannot lose work.
+    it("clears every stage once its archive is written", async () => {
+      const { deps, events } = postDeps(cacheState("safe"), {
+        metadata: METADATA,
+        files: FILES,
+      });
+
+      await runPost(deps);
+
+      // Ordering is the assertion, not the mere fact of a removal:
+      // `stageFiles` already clears a stale stage BEFORE filling it, so
+      // "was removed at some point" is true even with no cleanup at all and
+      // would pass with the cleanup in entirely the wrong place.
+      for (const dir of [
+        "/w/target/.rust-toolchain-stage",
+        "/c/.rust-toolchain-stage",
+      ]) {
+        expect(events.lastIndexOf(`remove:${dir}`)).toBeGreaterThan(
+          events.findIndex((event) => event.startsWith("save:")),
+        );
+      }
+    });
+
+    it("warns rather than failing when a stage cannot be cleared", async () => {
+      const { deps, warnings, saves } = postDeps(cacheState("safe"), {
+        metadata: METADATA,
+        files: FILES,
+        removeFails: true,
+      });
+
+      await runPost(deps);
+
+      expect(warnings.some((w) => /could not clear/.test(w))).toBe(true);
+      // The archives were already written, so a cleanup failure costs nothing.
+      expect(saves.length).toBeGreaterThan(0);
+    });
+
+    // Regression, found by .github/workflows/tests/act-cache.yml rather than
+    // by any unit test. A workspace with no git dependencies has no
+    // $CARGO_HOME/git/db, the registry file list walked it anyway, and the raw
+    // readdirSync adapter threw ENOENT. That escaped the whole staging loop,
+    // so NOTHING was staged -- registry and build alike -- both stage
+    // directories went uncreated, and saveCache refused a path that does not
+    // exist. One absent directory cost every pruned layer its save.
+    it("stages the layers it can when one layer's walk fails", async () => {
+      const { deps, saves, warnings } = postDeps(cacheState("safe"), {
+        metadata: METADATA,
+        files: FILES,
+        walkMissing: "/c/git/db",
+      });
+
+      await runPost(deps);
+
+      // The build layer is untouched by the registry's failure.
+      expect(saves.map((s) => s.key)).toEqual(["build-k"]);
+      expect(
+        warnings.some((w) => /registry: could not be staged/.test(w)),
+      ).toBe(true);
+    });
+
+    // A layer whose staging threw has no stage directory at all, so saving it
+    // asks @actions/cache to archive a path that does not exist. Dropping the
+    // plan is what turns that into a skipped layer rather than a warning from
+    // deep inside the client.
+    it("never saves a layer whose staging threw", async () => {
+      const { deps, saves } = postDeps(cacheState("safe"), {
+        metadata: METADATA,
+        files: FILES,
+        walkFails: true,
+      });
+
+      await runPost(deps);
+
+      expect(saves).toEqual([]);
     });
 
     // The outer backstop: `stageLayers` handles a keep-set it cannot resolve
