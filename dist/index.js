@@ -62965,15 +62965,17 @@ function hashToolSet(tools) {
 function parseToolVersion(output) {
   return /(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)/.exec(output)?.[1];
 }
-function installedVersion(name, deps) {
+function probeTool(name, deps) {
   const result = deps.exec(name, ["--version"], {
     env: deps.env,
     timeoutMs: deps.timeoutMs,
     capture: true
   });
-  if (result.error || result.status !== 0)
-    return;
-  return parseToolVersion(result.stdout ?? "");
+  if (result.error)
+    return { present: false };
+  if (result.status !== 0)
+    return { present: true };
+  return { present: true, version: parseToolVersion(result.stdout ?? "") };
 }
 function installTool(tool, deps) {
   const args = [
@@ -63002,19 +63004,24 @@ function installTool(tool, deps) {
 function ensureTools(resolution, deps) {
   const unresolved = new Set(resolution.unresolved.map((tool) => tool.name));
   return resolution.tools.map((tool) => {
-    const present = installedVersion(tool.name, deps);
+    const probe = probeTool(tool.name, deps);
+    const version3 = probe.present ? probe.version : undefined;
     if (unresolved.has(tool.name)) {
-      if (present === undefined) {
+      if (!probe.present) {
         throw new Error(`${tool.name} could not be resolved against the registry and is not ` + "installed, so there is nothing to fall back to. Pin a version " + `(\`${tool.name}@<version>\`) to skip the registry entirely.`);
       }
-      deps.log.warning(`${tool.name}: the registry could not be reached, so the installed ` + `binary (reporting ${present}) is used as-is and its version is ` + `published as ${UNRESOLVED_VERSION}. Pin a version to avoid this.`);
+      deps.log.warning(`${tool.name}: the registry could not be reached, so the installed ` + `binary (reporting ${version3 ?? "no version"}) is used as-is ` + `and its version is published as ${UNRESOLVED_VERSION}. Pin a ` + "version to avoid this.");
       return { name: tool.name, version: tool.version, action: "unverified" };
     }
-    if (present === tool.version) {
+    if (version3 === tool.version) {
       deps.log.info(`${tool.name}: already at ${tool.version}`);
       return { name: tool.name, version: tool.version, action: "kept" };
     }
-    deps.log.info(`${tool.name}: installing ${tool.version}` + (present === undefined ? "" : `, replacing ${present}`));
+    if (probe.present && version3 === undefined && deps.binRestoredExactly) {
+      deps.log.info(`${tool.name}: restored from an exact bin cache hit and does not ` + "report a version, so it is kept as-is");
+      return { name: tool.name, version: tool.version, action: "kept" };
+    }
+    deps.log.info(`${tool.name}: installing ${tool.version}` + (version3 === undefined ? "" : `, replacing ${version3}`));
     installTool(tool, deps);
     return { name: tool.name, version: tool.version, action: "installed" };
   });
@@ -63706,7 +63713,8 @@ async function run(deps) {
       backoffMs: BACKOFF_BASE_MS,
       sleep: deps.sleep,
       timeoutMs: CARGO_INSTALL_TIMEOUT_MS,
-      log: { info: deps.core.info, warning: deps.core.warning }
+      log: { info: deps.core.info, warning: deps.core.warning },
+      binRestoredExactly: cache.layers.bin?.result === "exact"
     });
     const outputs = buildActionOutputs({
       spec,
