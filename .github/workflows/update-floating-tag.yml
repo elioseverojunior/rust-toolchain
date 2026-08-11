@@ -29,7 +29,7 @@ jobs:
     runs-on: ${{ vars.RUNS_ON_ARM64 || vars.RUNS_ON || 'ubuntu-latest' }}
     steps:
       - name: Checkout as bot
-        uses: elioetibr/composite-actions/checkout-as-bot@1b37959d2bdceb933e2b1f8206cbc8b7220a70e0 # v0.0.1-1
+        uses: elioseverojunior/composite-actions/checkout-as-bot@1b37959d2bdceb933e2b1f8206cbc8b7220a70e0 # v0.0.1-1
         with:
           client-id: ${{ vars.CLIENT_ID }}
           private-key: ${{ secrets.PRIVATE_KEY }}
