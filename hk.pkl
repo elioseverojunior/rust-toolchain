@@ -80,19 +80,21 @@ local linters = new Mapping<String, Step> {
     }
 
     ["eslint"] = new Step {
-        glob = "*.ts"
+        // `*.ts` does NOT match `*.tsx` — the site's React components would skip
+        // this step entirely on a commit that touches only them.
+        glob = "*.{ts,tsx}"
         check = "bun run eslint:lint"
         fix = "bun run eslint:lint:fix"
     }
 
     ["prettier"] = new Step {
-        glob = "*.{ts,yml,yaml,json,md,toml}"
+        glob = "*.{ts,tsx,yml,yaml,json,md,toml}"
         check = "bun run prettier:format"
         fix = "bun run prettier:format:fix"
     }
 
     ["typecheck"] = new Step {
-        glob = "*.ts"
+        glob = "*.{ts,tsx}"
         check = "bun run typecheck"
     }
 
