@@ -1,14 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <rect width="64" height="64" rx="6" fill="#0b0d10"/>
-  <rect x="0.5" y="0.5" width="63" height="63" rx="5.5" fill="none" stroke="#ffb000" stroke-opacity="0.35"/>
-  <!--
-    Serif E, standing in for the site's Fraunces display voice. A webfont
-    cannot be relied on inside a favicon, so this names locally available
-    serifs of similar moderate contrast; a didone stand-in would lose its
-    hairlines entirely at 16px.
-  -->
-  <text x="32" y="47" fill="#ffb000" font-family="Georgia, 'Times New Roman', serif"
-        font-size="44" font-weight="700" text-anchor="middle">E</text>
-  <!-- Signal dot: the live-node motif used on the timeline rail. -->
-  <circle cx="52" cy="13" r="4" fill="#ffb000"/>
+<!--
+SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+An original mark, deliberately NOT the Rust gear-and-R: that logo is a Rust
+Foundation trademark carrying usage terms, and this is a third-party action
+rather than an official Rust project.
+
+Two layers, not three, for two reasons that happen to agree. It is accurate —
+`CACHE_LAYER_IDS` is exactly `registry` and `build`, and `bin` is Phase C. And
+it survives 16x16, which a three-layer version does not: at a tab's working
+size each of three bands gets under three pixels, the lower two merge into one
+blue mass, and the stack reading is lost. Verified by rendering, not assumed.
+
+Three flat bars would be crisper still at 16px, and were rejected: three
+stacked horizontal bars is the hamburger-menu glyph, and a favicon that reads
+as a menu button is worse than one that reads slightly soft.
+
+The orange is `action.yml`'s `branding.color`; the field is the `theme-color`
+already declared in `.vitepress/config.mts`. Each layer is stroked in the
+background colour rather than separated by a gap, so the division is cut from
+the shape itself and survives downsampling instead of closing up.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="rust-toolchain">
+  <title>rust-toolchain</title>
+  <rect width="64" height="64" rx="13" fill="#1f5572"/>
+  <g stroke="#1f5572" stroke-width="3.5" stroke-linejoin="round">
+    <path d="M32 30 L55 42 L32 54 L9 42 Z" fill="#7cc0e8"/>
+    <path d="M32 10 L55 22 L32 34 L9 22 Z" fill="#f0883e"/>
+  </g>
 </svg>

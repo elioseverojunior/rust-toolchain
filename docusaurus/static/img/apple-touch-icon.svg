@@ -1,0 +1,46 @@
+<!--
+SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
+
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+Source for apple-touch-icon.png. Rendered at 180x180 with
+`rsvg-convert -w 180 -h 180`; see docusaurus/static/img/README.md.
+
+Same two-layer mark as favicon.svg, with two deliberate differences.
+
+No rounded corners. iOS applies its own mask to a touch icon and will round
+whatever it is given, so a shape that rounds itself gets rounded twice and
+shows a pale seam of background along each corner. The field is therefore
+full-bleed square.
+
+The layers sit larger in the frame than in the favicon, and closer together.
+Both changes follow from the size. The favicon is drawn to survive 16px, where
+the mark must stay small enough that the stroke dividing the layers reads; at
+favicon proportions the mark would look lost inside a 180px tile.
+
+The spacing had to be retuned rather than scaled. The favicon overlaps its two
+diamonds by about 17% of their height, which at 16px merges them into a stack.
+Scaled to 180px that same 17% renders as a visible gap with the lower apex
+poking out as a notch, and the mark reads as two unrelated diamonds. This uses
+roughly 35%, which is what makes it read as stacked at this size. Verified by
+rendering at 180px, the same way the original was verified at 16px — the
+lesson being that the ratio is a function of the render size, not a constant
+of the mark.
+
+Two layers rather than three, still. The original rationale had two halves —
+that `CACHE_LAYER_IDS` was exactly `registry` and `build`, and that three bands
+merge into one blue mass at 16px. The first half has since expired: `bin`
+shipped in Phase C, so the layer set is three. The second half is unaffected
+and is the reason this stays a pair, together with the point that three
+stacked bars reads as the hamburger-menu glyph. Consistency with favicon.svg
+now carries the rest — two marks that disagree are worse than one that
+under-counts.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180" role="img" aria-label="rust-toolchain">
+  <title>rust-toolchain</title>
+  <rect width="180" height="180" fill="#1f5572"/>
+  <g stroke="#1f5572" stroke-width="9" stroke-linejoin="round">
+    <path d="M90 78 L156 112 L90 146 L24 112 Z" fill="#7cc0e8"/>
+    <path d="M90 34 L156 68 L90 102 L24 68 Z" fill="#f0883e"/>
+  </g>
+</svg>
