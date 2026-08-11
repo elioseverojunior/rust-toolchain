@@ -165,6 +165,60 @@ alias = ["coverage"]
 description = "Run the test suite under the 100% line/function/statement gate"
 run = "bun run test:coverage"
 
+[tasks."test:mutation"]
+alias = ["mutate", "mut"]
+description = "Run mutation testing over the modules dense with boundary logic"
+shell = "bash -c"
+run = '''
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+# Stryker runs under NODE, not Bun. Its Babel instrumenter breaks on Bun's
+# CJS default-export interop with "generator is not a function", so `bunx --bun`
+# fails before the first mutant. Only the command it shells out to is `bun test`
+# -- and that command needs its own bunfig, for the reason stryker-bunfig.toml
+# explains at length: the command runner judges a mutant by EXIT CODE, and this
+# repo's coverage threshold would turn instrumented code into a false "killed".
+#
+# The config file is a POSITIONAL argument. There is no --configFile flag, and
+# passing one errors with "unknown option".
+#
+# This never fails the build: `thresholds.break` is unset, so a score is
+# reported and nothing exits non-zero on it. Gating on a score before knowing
+# which survivors are equivalent is how a suite starts serving the tool.
+if [ ! -x node_modules/.bin/stryker ]; then
+  echo "stryker is not installed - run 'bun install' first" >&2
+  exit 1
+fi
+
+args=()
+if [ "${usage_verbose:-false}" = "true" ]; then
+  args+=(--logLevel debug)
+fi
+
+# Variadic args arrive shell-escaped, so eval into an array to survive paths
+# with spaces. Stryker takes --mutate as one comma-separated value.
+#
+# Tested with "${paths[*]:-}" rather than an array length, for the tera reason
+# the scorecard task documents: mise renders run blocks as templates first, and
+# bash's array-length syntax opens a tera comment.
+eval "paths=(${usage_mutate:-})"
+if [ -n "${paths[*]:-}" ]; then
+  args+=(--mutate "$(IFS=,; echo "${paths[*]}")")
+fi
+
+# `${args[@]+...}` rather than a bare "${args[@]}": under `set -u` an empty
+# array is an unbound variable on the bash 3.2 that macOS still ships.
+node_modules/.bin/stryker run stryker.config.json ${args[@]+"${args[@]}"}
+
+echo "report: .stryker-tmp/mutation-report.html"
+'''
+usage = '''
+flag "-v --verbose" help="Raise Stryker's log level to debug"
+arg "[mutate]" var=#true help="Limit the run to these files; defaults to the scope in stryker.config.json"
+'''
+
 [tasks."test:watch"]
 description = "Run the test suite in watch mode"
 shell = "bash -c"
