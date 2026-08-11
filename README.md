@@ -85,7 +85,7 @@ toolchain action, your cache action and your key-computation step in one move. S
 
 ## Built to be trusted
 
-- **501 tests, 100% line/function/statement coverage**, enforced in CI — the gate fails the build, it is
+- **560 tests, 100% line/function/statement coverage**, enforced in CI — the gate fails the build, it is
   not a badge
 - **No shell, ever** — every command is an argv array. Channel, targets, components and profile can come
   from an untrusted workspace `rust-toolchain.toml`, so none of them is ever interpolated into a string
@@ -606,11 +606,14 @@ literal newline inside `join(..., '<newline>')` is the separator, so indenting
 the closing `') }}` any further makes the separator a newline **plus** those
 spaces, quietly prefixing whitespace to every restore key after the first.
 
-The two layers are keyed differently on purpose. `registry` holds downloaded
+The three layers are keyed differently on purpose. `registry` holds downloaded
 source archives that any compiler can build, so its key omits the toolchain —
 bumping stable does not re-download crates. `build` holds compiled artifacts,
 so its key carries the resolved toolchain and its ladder never falls back past
-one.
+one. `bin` holds the binaries `cargo-tools` installed and is keyed on their
+resolved versions alone, with rustup's own shims excluded from the archive —
+which is what lets that key leave the toolchain out and a compiler bump not
+reinstall tools that did not change.
 
 `RUSTFLAGS` and the rest of the `CARGO_*`/`CC`/`CFLAGS`/`CXX`/`CMAKE`/`RUST*`
 environment **are** part of the `build` key, hashed together into one segment.
@@ -818,8 +821,11 @@ TypeScript 7.0`. Since TypeScript 5.0 a relative `paths` entry is resolved
 against the `tsconfig.json` that declares it, so `baseUrl` is redundant as well
 as deprecated.
 
-Both `tsc --noEmit` and `bun run` resolve the mapping above, so the same config
-covers type-checking and execution.
+Both `tsc` and `bun run` resolve the mapping above, so the same config covers
+type-checking and execution. In a consumer's project that is `tsc --noEmit`; in
+this repository it is `bun run typecheck`, which runs `tsc --build`, because the
+root `tsconfig.json` here is solution-style and a bare `--noEmit` would select
+no inputs at all.
 
 ### `run()` Is Async, `ActionDeps` Grew, and Three Required Fields Landed
 
