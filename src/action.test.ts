@@ -11,6 +11,7 @@ import {
   type ExecResult,
   type PostDeps,
 } from "@/action";
+import type { StageFs } from "@/cache/stage";
 import { generateSpecCacheKey } from "@/core";
 import type { ActionOutputs } from "@/outputs";
 import { hashToolSet, UNRESOLVED_VERSION } from "@/tools";
@@ -62,6 +63,31 @@ interface Harness {
   restores: RestoreCall[];
   saves: SaveCall[];
   registryCalls: string[];
+  stageFs: StageFs & { linked: string[]; moved: string[] };
+}
+
+/**
+ * A `StageFs` over a map, recording what staging linked and moved.
+ *
+ * Staging is filesystem work in the middle of both phases, so every harness
+ * needs one; the recorded sets are what a test asserts the keep-set against.
+ */
+function fakeStageFs(): StageFs & { linked: string[]; moved: string[] } {
+  const linked: string[] = [];
+  const moved: string[] = [];
+  return {
+    linked,
+    moved,
+    mkdirp: (): void => {},
+    link: (from): void => {
+      linked.push(from);
+    },
+    walk: (): string[] => [],
+    move: (from): void => {
+      moved.push(from);
+    },
+    remove: (): void => {},
+  };
 }
 
 /**
@@ -98,7 +124,9 @@ function harness(
   const registryCalls: string[] = [];
   const queues = options.execResults ?? {};
 
+  const stageFs = fakeStageFs();
   const deps: ActionDeps = {
+    stageFs,
     exec: (file, args, opts) => {
       calls.push({ file, args, timeoutMs: opts.timeoutMs, env: opts.env });
       const key = args.slice(0, 2).join(" ");
@@ -191,6 +219,7 @@ function harness(
     restores,
     saves,
     registryCalls,
+    stageFs,
   };
 }
 
@@ -1160,8 +1189,11 @@ describe("cache lifecycle", () => {
       // binaries whoever asked for them.
       expect.stringContaining("bin-Linux-X64-"),
     ]);
-    // The registry layer never carries the toolchain digest.
-    expect(h.restores[0]?.paths.join("\n")).toContain("registry/index");
+    // Staged by default (`cache-prune: safe`), so the layer is archived from
+    // its stage directory rather than from the registry tree itself.
+    expect(h.restores[0]?.paths).toEqual([
+      "/home/runner/.cargo/.rust-toolchain-stage",
+    ]);
     expect(h.restores[1]?.paths.join("\n")).toContain("target");
     expect(h.restores[2]?.paths.join("\n")).toContain("/bin/**");
   });
@@ -1196,6 +1228,43 @@ describe("cache lifecycle", () => {
     });
     await run(partial.deps);
     expect(partial.outputs["cache-hit"]).toBe("false");
+  });
+
+  // A staged archive unpacks into `<tree>/.rust-toolchain-stage/…`, which
+  // nothing reads from, so the restore is only half done until the files have
+  // been moved back. This is the other half.
+  it("moves a staged layer back into the tree it belongs to", async () => {
+    const h = harness({
+      inputs: withCache,
+      env: cacheEnv,
+      restoreResult: (key) => key,
+    });
+    h.stageFs.walk = (dir: string): string[] => [`${dir}/debug/libfoo.rlib`];
+
+    await run(h.deps);
+
+    expect(h.stageFs.moved).toContain(
+      "/workspace/target/.rust-toolchain-stage/debug/libfoo.rlib",
+    );
+  });
+
+  // A cache failure never fails the build. A stage that cannot be unpacked
+  // leaves the tree exactly as the job found it, which is a cold build and not
+  // a broken one.
+  it("warns rather than failing when a stage cannot be unpacked", async () => {
+    const h = harness({
+      inputs: withCache,
+      env: cacheEnv,
+      restoreResult: (key) => key,
+    });
+    h.stageFs.walk = (): string[] => {
+      throw new Error("EACCES");
+    };
+
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(h.warnings.some((w) => /could not unpack/.test(w))).toBe(true);
   });
 
   // action.yml's post-if runs on every successful job, so isPost must be set
@@ -1265,6 +1334,7 @@ describe("runPost", () => {
       summaryFails?: boolean;
       metadata?: string;
       metadataFails?: boolean;
+      walkFails?: boolean;
       files?: string[];
       fingerprintDirs?: string[];
       sizes?: (paths: string[]) => number;
@@ -1276,18 +1346,21 @@ describe("runPost", () => {
     summaries: string[];
     warnings: string[];
     logs: string[];
+    stageFs: StageFs & { linked: string[]; moved: string[] };
   } => {
     const restores: { key: string }[] = [];
     const saves: { key: string }[] = [];
     const summaries: string[] = [];
     const warnings: string[] = [];
     const logs: string[] = [];
+    const stageFs = fakeStageFs();
     return {
       restores,
       saves,
       summaries,
       warnings,
       logs,
+      stageFs,
       deps: {
         cache: {
           restore: async (
@@ -1330,8 +1403,14 @@ describe("runPost", () => {
             return options.metadata ?? JSON.stringify({ packages: [] });
           },
         },
-        walk: () => options.files ?? [],
+        walk: (dir: string): string[] => {
+          if (options.walkFails) throw new Error("EACCES");
+          return (options.files ?? []).filter((file) =>
+            file.startsWith(`${dir}/`),
+          );
+        },
         readdir: () => options.fingerprintDirs ?? [],
+        stageFs,
       },
     };
   };
@@ -1430,6 +1509,9 @@ describe("runPost", () => {
     const FILES = [
       "/w/target/debug/deps/libserde-aaaaaaaaaaaaaaaa.rlib",
       "/w/target/debug/deps/libgone-bbbbbbbbbbbbbbbb.rlib",
+      "/c/registry/cache/serde-1.0.0.crate",
+      "/c/registry/cache/gone-9.9.9.crate",
+      "/c/registry/index/serde",
     ];
     const METADATA = JSON.stringify({
       packages: [
@@ -1447,12 +1529,26 @@ describe("runPost", () => {
         workspaces: prune === undefined ? undefined : WS,
         cargoHome: "/c",
         plans: [
-          { layer: "registry", key: "reg-k", restoreKeys: [], paths: ["/c"] },
+          {
+            layer: "registry",
+            key: "reg-k",
+            restoreKeys: [],
+            paths: ["/c/.rust-toolchain-stage"],
+            stageRoots: [
+              { stageDir: "/c/.rust-toolchain-stage", sourceDir: "/c" },
+            ],
+          },
           {
             layer: "build",
             key: "build-k",
             restoreKeys: [],
-            paths: ["/w/target/**"],
+            paths: ["/w/target/.rust-toolchain-stage"],
+            stageRoots: [
+              {
+                stageDir: "/w/target/.rust-toolchain-stage",
+                sourceDir: "/w/target",
+              },
+            ],
           },
         ],
         restored: [
@@ -1469,7 +1565,7 @@ describe("runPost", () => {
 
     it("narrows the build layer to the keep-set and the registry to resolved crates", async () => {
       const saved: string[][] = [];
-      const { deps } = postDeps(cacheState("safe"), {
+      const { deps, stageFs } = postDeps(cacheState("safe"), {
         metadata: METADATA,
         files: FILES,
         fingerprintDirs: ["serde-aaaaaaaaaaaaaaaa", "gone-bbbbbbbbbbbbbbbb"],
@@ -1483,17 +1579,22 @@ describe("runPost", () => {
 
       await runPost(deps);
 
-      const build = saved.find((p) => p.some((x) => x.includes("/w/target/")));
-      expect(build).toContain(
+      // The keep-set decides what is *linked into* the stage...
+      expect(stageFs.linked).toContain(
         "/w/target/debug/deps/libserde-aaaaaaaaaaaaaaaa.rlib",
       );
-      expect(build).not.toContain(
+      expect(stageFs.linked).not.toContain(
         "/w/target/debug/deps/libgone-bbbbbbbbbbbbbbbb.rlib",
       );
-      const registry = saved.find((p) =>
-        p.some((x) => x.includes("/c/registry")),
-      );
-      expect(registry).toContain("/c/registry/cache/**/serde-1.0.0.crate");
+
+      // ...and never what is archived. This is the regression guard for the
+      // bug that made every pruned entry unreadable: `@actions/cache` derives
+      // an entry's version from its paths array, so a paths array that varies
+      // with the keep-set writes entries no restore can ever find.
+      expect(saved).toEqual([
+        ["/c/.rust-toolchain-stage"],
+        ["/w/target/.rust-toolchain-stage"],
+      ]);
     });
 
     it("reports what pruning removed in the summary", async () => {
@@ -1527,7 +1628,7 @@ describe("runPost", () => {
     // every later job rebuilding while believing it was warm.
     it("falls back to the unpruned paths when cargo metadata fails", async () => {
       const saved: string[][] = [];
-      const { deps, warnings } = postDeps(cacheState("safe"), {
+      const { deps, warnings, stageFs } = postDeps(cacheState("safe"), {
         metadataFails: true,
         files: FILES,
       });
@@ -1537,7 +1638,13 @@ describe("runPost", () => {
         await original(paths, key);
       };
       await runPost(deps);
-      expect(saved).toContainEqual(["/w/target/**"]);
+      // A fallback changes what the stage holds — everything, including the
+      // artifact a usable keep-set would have dropped — and never the paths
+      // array. Falling back therefore costs archive size, never readability.
+      expect(saved).toContainEqual(["/w/target/.rust-toolchain-stage"]);
+      expect(stageFs.linked).toContain(
+        "/w/target/debug/deps/libgone-bbbbbbbbbbbbbbbb.rlib",
+      );
       expect(warnings.some((w) => /saving everything instead/.test(w))).toBe(
         true,
       );
@@ -1545,7 +1652,7 @@ describe("runPost", () => {
 
     it("falls back when the package set resolves to nothing", async () => {
       const saved: string[][] = [];
-      const { deps } = postDeps(cacheState("safe"), {
+      const { deps, stageFs } = postDeps(cacheState("safe"), {
         metadata: JSON.stringify({ packages: [] }),
         files: FILES,
       });
@@ -1555,7 +1662,13 @@ describe("runPost", () => {
         await original(paths, key);
       };
       await runPost(deps);
-      expect(saved).toContainEqual(["/w/target/**"]);
+      // A fallback changes what the stage holds — everything, including the
+      // artifact a usable keep-set would have dropped — and never the paths
+      // array. Falling back therefore costs archive size, never readability.
+      expect(saved).toContainEqual(["/w/target/.rust-toolchain-stage"]);
+      expect(stageFs.linked).toContain(
+        "/w/target/debug/deps/libgone-bbbbbbbbbbbbbbbb.rlib",
+      );
     });
 
     // Task 4 measured the bad trade directly: an unchurned tree spent 904 ms of
@@ -1563,7 +1676,7 @@ describe("runPost", () => {
     // unpruned paths are cheaper and lose almost nothing.
     it("keeps the unpruned paths when pruning would drop too little", async () => {
       const saved: string[][] = [];
-      const { deps } = postDeps(cacheState("safe"), {
+      const { deps, stageFs } = postDeps(cacheState("safe"), {
         metadata: METADATA,
         files: FILES,
         fingerprintDirs: ["serde-aaaaaaaaaaaaaaaa", "gone-bbbbbbbbbbbbbbbb"],
@@ -1575,7 +1688,44 @@ describe("runPost", () => {
         await original(paths, key);
       };
       await runPost(deps);
-      expect(saved).toContainEqual(["/w/target/**"]);
+      // A fallback changes what the stage holds — everything, including the
+      // artifact a usable keep-set would have dropped — and never the paths
+      // array. Falling back therefore costs archive size, never readability.
+      expect(saved).toContainEqual(["/w/target/.rust-toolchain-stage"]);
+      expect(stageFs.linked).toContain(
+        "/w/target/debug/deps/libgone-bbbbbbbbbbbbbbbb.rlib",
+      );
+    });
+
+    // The last guard, and the only one that sees what actually reached the
+    // stage. An entry that exists, hits its key and restores nothing is worse
+    // than no entry at all: it leaves every later job rebuilding while
+    // believing it was warm.
+    it("does not save a layer whose stage ended up empty", async () => {
+      const { deps, saves, warnings } = postDeps(cacheState("safe"), {
+        metadata: METADATA,
+        files: [],
+      });
+
+      await runPost(deps);
+
+      expect(saves).toEqual([]);
+      expect(warnings.some((w) => /nothing was staged/.test(w))).toBe(true);
+    });
+
+    // The outer backstop: `stageLayers` handles a keep-set it cannot resolve
+    // itself, but staging is filesystem work and can fail on its own terms.
+    it("warns rather than failing when staging itself throws", async () => {
+      const { deps, warnings } = postDeps(cacheState("safe"), {
+        metadata: METADATA,
+        walkFails: true,
+      });
+
+      await runPost(deps);
+
+      expect(warnings.some((w) => /saving everything instead/.test(w))).toBe(
+        true,
+      );
     });
 
     // A payload written by a main phase that predates these fields. Absent means
