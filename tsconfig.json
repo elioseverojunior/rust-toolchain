@@ -5,7 +5,8 @@
   // own DOM/React types — is deliberately NOT referenced here. It used to
   // be: CI's Lint job runs `hk check --all` -> `bun run typecheck` ->
   // `tsc --build`, but `.github/actions/setup/action.yml` installs only the
-  // repository root (`bun install --frozen-lockfile`), never
+  // action's own workspace (`bun install --frozen-lockfile --filter
+  // rust-toolchain`), never
   // `docs/node_modules`. With the reference in place, that job hit 40+
   // `TS2307 Cannot find module '@docusaurus/…'` on every run — invisible on
   // any machine that had ever run `mise run docs:*` and gained

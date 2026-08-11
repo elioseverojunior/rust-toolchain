@@ -5,8 +5,8 @@
 // NOTE: this deliberately does NOT `extend "@docusaurus/tsconfig"`.
 // That base config (3.10.2) sets `baseUrl`, which TypeScript 6.0 removed
 // outright. `extends` can override an inherited key but cannot delete one, so
-// any config inheriting it fails to load under the `typescript@~6.0.2` pinned
-// in package.json. The base's options are therefore reproduced below verbatim,
+// any config inheriting it fails to load under the TypeScript this workspace
+// resolves (`"typescript": "catalog:"`, pinned once in the root manifest). The base's options are therefore reproduced below verbatim,
 // minus `baseUrl`, with `paths` made relative — which resolves against this
 // file's own directory and needs no `baseUrl`.
 // Revisit once Docusaurus ships a TypeScript 6 compatible @docusaurus/tsconfig.
