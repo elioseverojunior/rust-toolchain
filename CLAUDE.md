@@ -26,7 +26,8 @@ Run in this order before every commit:
 
 ```sh
 bun run fix:all      # eslint --fix, then prettier --write
-bun run typecheck    # tsc --build (covers src/*.test.ts and docusaurus/ too)
+bun run typecheck    # tsc --build (covers the action, including src/*.test.ts;
+                      # the docs/ site is type-checked separately, see below)
 bun run test         # 100% line/function/statement gate from bunfig.toml
 bun run build        # regenerate dist/index.js
 hk check --all       # exactly what the CI Lint job runs
@@ -116,11 +117,12 @@ change.
 - Every push to `main` runs the CICD **Release** job: GitVersion computes the
   version, rewrites `owner/repo/...@vX.Y.Z` references under `.github/`, tags,
   and publishes a GitHub Release. Never bump `package.json` or create tags by
-  hand — the manual release steps in `docs/RUNBOOKS.md` are out of date.
+  hand — the manual release steps in `docs/content/RUNBOOKS.md` are out of
+  date.
 
 ## Rustup invariants — do not "simplify" these
 
-Full reasoning in `docs/ARCHITECTURE.md` → Key Design Decisions.
+Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions.
 
 - `src/action.ts` exports `RUSTUP_TOOLCHAIN`; `rustup default` alone loses to a
   workspace `rust-toolchain.toml`, which sits at precedence 4 of 5 and beats
@@ -139,7 +141,7 @@ Full reasoning in `docs/ARCHITECTURE.md` → Key Design Decisions.
 
 ## Cache invariants — do not "simplify" these
 
-Full reasoning in `docs/ARCHITECTURE.md` → Key Design Decisions, in the Cache
+Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions, in the Cache
 Layers, Cache Lifecycle, and `@actions/cache` Adapter Lives In `index.ts`
 subsections.
 
@@ -303,15 +305,16 @@ regenerates as `- uses: @`.
 
 `docs/` holds both the repository's prose — `ARCHITECTURE.md`,
 `COMPARISON.md`, `RUNBOOKS.md`, `design/`, `plans/`, all under
-`docs/content/` — and the Docusaurus site that publishes it. Formatting,
-linting and type-checking are unified into the root's own tooling:
-`bun run fix:all`, the root `eslint.config.js` and the root `tsc --build` all
-cover `docs/**/*.{ts,tsx}` alongside `src/`, and `hk check --all` covers
-`docs/**/*.md` through `rumdl` and `mermaid` exactly as it does everywhere
-else. Building or serving the site itself still goes through `docs/` —
-`mise run docs:build` / `mise run docs:dev` (aliases `docsb`/`docsd`), not
-`bun run build` from the repo root, which only rebuilds the action's
-`dist/index.js`.
+`docs/content/` — and the Docusaurus site that publishes it. Formatting and
+linting are unified into the root's own tooling: `bun run fix:all` and the
+root `eslint.config.js` both cover `docs/**/*.{ts,tsx}` alongside `src/`, and
+`hk check --all` covers `docs/**/*.md` through `rumdl` and `mermaid` exactly
+as it does everywhere else. Type-checking is **not** unified — see the
+`tsc --build` bullet below for why — and the site keeps its own `typecheck`
+script, run through `mise run docs:typecheck`. Building or serving the site
+itself still goes through `docs/` — `mise run docs:build` / `mise run
+docs:dev` (aliases `docsb`/`docsd`), not `bun run build` from the repo root,
+which only rebuilds the action's `dist/index.js`.
 
 - **The site keeps its own `package.json` and `bun.lock`; the root declares
   no `"workspaces"`.** This is a deliberate reversal, measured rather than
@@ -329,14 +332,34 @@ else. Building or serving the site itself still goes through `docs/` —
   `@typescript-eslint/*` at 8.67.0 against the site's 8.66.0. A CI check
   comparing the shared pins is the cheap fix and is not yet written.
 - **`bun run typecheck` is `tsc --build`, and it must stay that way.** The
-  root `tsconfig.json` is solution-style — `"files": []` plus `references` to
-  `tsconfig.src.json` and `docs/tsconfig.json` — so a plain `tsc --noEmit`
-  against it type-checks ZERO files and exits 0, which is how the action's own
-  source could silently stop being type-checked at all. Only `tsc --build`
-  traverses project references. If you ever need to prove the typecheck
-  actually works, inject a deliberate type error and confirm the run FAILS; a
-  passing run on clean code is exactly what the broken invocation also
-  produces.
+  root `tsconfig.json` is solution-style — `"files": []` plus a `references`
+  entry to `tsconfig.src.json` — so a plain `tsc --noEmit` against it
+  type-checks ZERO files and exits 0, which is how the action's own source
+  could silently stop being type-checked at all. Only `tsc --build` traverses
+  project references. If you ever need to prove the typecheck actually works,
+  inject a deliberate type error and confirm the run FAILS; a passing run on
+  clean code is exactly what the broken invocation also produces.
+- **The root typecheck covers the action only; the site is checked
+  separately, and this is deliberate, not an oversight.** `docs/tsconfig.json`
+  used to be a second `references` entry, so one `tsc --build` covered both —
+  until CI proved that wrong. `hk check --all`'s `typecheck` step runs `bun
+run typecheck` in the Lint job, but `.github/actions/setup/action.yml`
+  installs only the repository root (`bun install --frozen-lockfile`), never
+  `docs/node_modules`. With the reference in place, the Lint job hit 40+
+  `TS2307 Cannot find module '@docusaurus/…'` on every run — invisible on any
+  machine that had ever run `mise run docs:*` and picked up
+  `docs/node_modules` locally, which is exactly why the defect reached final
+  review undetected. The site is instead type-checked by `mise run
+docs:typecheck`, which `gh-pages.yml` runs (`dir = "docs"`, so it installs
+  and uses the site's own `tsconfig.json` and dependencies) before `mise run
+docs:build`. Installing `docs/` in the shared setup action was rejected as
+  the fix: it would cost every action CI job the whole Docusaurus tree, the
+  same 320-packages/21.9s versus 644/61.3s cost the workspace bullet above
+  measured and rejected for the identical reason. To prove the root typecheck
+  still works after touching this, move `docs/node_modules` aside and run
+  `bun run typecheck` — it must still PASS, since it no longer touches
+  `docs/` at all; a pass with the directory present proves nothing, since
+  that is precisely how this defect got through.
 - **`compilerOptions.paths` is duplicated between the root `tsconfig.json`
   and `tsconfig.src.json`, on purpose.** Bun reads path aliases off the root
   `tsconfig.json` directly and does not follow `references`, so removing the
@@ -352,6 +375,13 @@ else. Building or serving the site itself still goes through `docs/` —
   and `typecheck` steps globbed `*.ts` and would silently skip a commit that
   touched only `.tsx` files. `hk.pkl`'s `test` step still globs `*.ts` alone,
   on purpose — the site has no tests.
+- **Dev and preview default to port 5273, without VitePress's `strictPort`.**
+  `mise run docs:dev` / `docs:preview` pass `--port {{env.DOCS_PORT | default(value="5273")}}`
+  to `docusaurus start` / `serve`, but neither enforces the port the way
+  VitePress's `strictPort: true` did. A busy 5273 does not fail loudly —
+  `docusaurus start` silently falls back to the next free port and prints the
+  real URL in the terminal, which is easy to miss if you assume `:5273`
+  without reading the output.
 - **Content lives in `docs/content/`, served from the site root.** The docs
   plugin in `docusaurus.config.ts` sets `path: "content"` and
   `routeBasePath: "/"`. Moving it changes every published URL — and because
@@ -392,6 +422,12 @@ else. Building or serving the site itself still goes through `docs/` —
 - **A page reaching a file outside the site root needs an absolute
   repository URL.** `../README.md` resolves outside `docs/content` and is
   exactly what the dead-link check exists to catch.
+- **A referenced `static/` asset is never checked.** `favicon`,
+  `themeConfig.image` and the `apple-touch-icon` `head` tag in
+  `docusaurus.config.ts` all reference files under `static/img/` by a bare
+  path string, and none of those paths are validated at build time — the same
+  gap VitePress had with its `public/` directory, carried across unchanged. A
+  typo there 404s silently in production; nothing here catches it.
 
 ## TOML parsing
 
