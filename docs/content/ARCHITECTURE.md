@@ -503,26 +503,31 @@ flowchart LR
 
 All tests use Bun's built-in test runner with 100% coverage enforced by `bunfig.toml`.
 
-| File                          | Tests                                                                                                                                                                                                 | Coverage Target                   |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `src/action.test.ts`          | `run` against injected fakes — argv shape, timeouts, retry/backoff, spawn errors, rustup bootstrap (POSIX + Windows), cargo env defaults, tolerated `rustup default`, `set-rustup-toolchain`, outputs | 100%                              |
-| `src/core.test.ts`            | `parseRustToolchainToml`, `resolveChannel` (release-day table, bare-minor scaling, rejected names), `generateCacheKey`, `generateSpecCacheKey`, `parseRustcVersion`                                   | 100% lines, functions, statements |
-| `src/config.test.ts`          | `mergeConfig` — toml vs input priority, target alias, default channel, identifier validation; `resolveRustupEnv` — env overrides, blank handling, `HOME` fallback, Windows paths                      | 100%                              |
-| `src/builder.test.ts`         | `ToolchainSpecBuilder` fluent chain, `ToolchainSpec` direct construction, argv generation and batching, install flags                                                                                 | 100%                              |
-| `src/outputs.test.ts`         | `buildActionOutputs` — resolved values, empty-list and absent-profile edges, `inputs`/`toml` provenance; `toOutputEntries` — JSON array serialisation, string booleans, `json` key order              | 100%                              |
-| `src/cache/layers.test.ts`    | `CACHE_LAYER_IDS`, `parseCacheLayers` — separators, dedup, unknown-layer and empty-selection rejection                                                                                                | 100%                              |
-| `src/cache/keys.test.ts`      | `joinKeySegments` — segment collapsing; `buildLayerKey` — registry vs. build key shape, restore-key ladders                                                                                           | 100%                              |
-| `src/cache/env.test.ts`       | `hashBuildEnv` — prefix matching, the exclusion deny-list, order independence, and stability across the action's own `exportVariable` calls                                                           | 100%                              |
-| `src/cache/paths.test.ts`     | `parseWorkspaces` — mapping syntax and escape rejection; `registryPaths`; `buildPaths` — the files-only manifest shape that makes the negation globs effective                                        | 100%                              |
-| `src/cache/budget.test.ts`    | `parseSize` — binary suffixes and unparseable input; `measurePaths` — byte totals and the `unmeasured` fallback                                                                                       | 100%                              |
-| `src/cache/inputs.test.ts`    | `readCacheRequest` — every `cache-*` input, defaults and validation; `buildCacheOutputs` — the `cache` JSON object and `cache-hit`                                                                    | 100%                              |
-| `src/cache/lifecycle.test.ts` | `restoreLayers` — exact/partial/miss classification; `saveLayers` — skip-on-exact-hit, budget refusal, per-layer failure isolation                                                                    | 100%                              |
-| `src/cache/summary.test.ts`   | `renderSummary` — the job-summary table rendered from `CachePhaseState`                                                                                                                               | 100%                              |
-| `src/inputs.test.ts`          | `readBooleanInput` — defaults, casing, and rejection of non-boolean text                                                                                                                              | 100%                              |
-| `src/errors.test.ts`          | `describeError` — `Error` instances and arbitrary thrown values                                                                                                                                       | 100%                              |
-| `src/lib.test.ts`             | Barrel surface pinned export by export, and the guard that `src/lib.ts` never re-exports `src/index.ts`; both path aliases resolve                                                                    | 100%                              |
+| File                          | Tests                                                                                                                                                                                                                                   | Coverage Target                   |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `src/action.test.ts`          | `run` against injected fakes — argv shape, timeouts, retry/backoff, spawn errors, rustup bootstrap (POSIX + Windows), cargo env defaults, tolerated `rustup default`, `set-rustup-toolchain`, outputs                                   | 100%                              |
+| `src/core.test.ts`            | `parseRustToolchainToml`, `resolveChannel` (release-day table, bare-minor scaling, rejected names), `generateCacheKey`, `generateSpecCacheKey`, `parseRustcVersion`                                                                     | 100% lines, functions, statements |
+| `src/config.test.ts`          | `mergeConfig` — toml vs input priority, target alias, default channel, identifier validation; `resolveRustupEnv` — env overrides, blank handling, `HOME` fallback, Windows paths                                                        | 100%                              |
+| `src/builder.test.ts`         | `ToolchainSpecBuilder` fluent chain, `ToolchainSpec` direct construction, argv generation and batching, install flags                                                                                                                   | 100%                              |
+| `src/outputs.test.ts`         | `buildActionOutputs` — resolved values, empty-list and absent-profile edges, `inputs`/`toml` provenance; `toOutputEntries` — JSON array serialisation, string booleans, `json` key order                                                | 100%                              |
+| `src/cache/layers.test.ts`    | `CACHE_LAYER_IDS`, `parseCacheLayers` — separators, dedup, unknown-layer and empty-selection rejection                                                                                                                                  | 100%                              |
+| `src/cache/keys.test.ts`      | `joinKeySegments` — segment collapsing; `buildLayerKey` — registry vs. build key shape, restore-key ladders                                                                                                                             | 100%                              |
+| `src/cache/env.test.ts`       | `hashBuildEnv` — prefix matching, the exclusion deny-list, order independence, and stability across the action's own `exportVariable` calls                                                                                             | 100%                              |
+| `src/cache/paths.test.ts`     | `parseWorkspaces` — mapping syntax and escape rejection; `registryPaths`; `buildPaths` — the files-only manifest shape that makes the negation globs effective                                                                          | 100%                              |
+| `src/cache/budget.test.ts`    | `parseSize` — binary suffixes and unparseable input; `measurePaths` — byte totals and the `unmeasured` fallback                                                                                                                         | 100%                              |
+| `src/cache/inputs.test.ts`    | `readCacheRequest` — every `cache-*` input, defaults and validation; `buildCacheOutputs` — the `cache` JSON object and `cache-hit`                                                                                                      | 100%                              |
+| `src/cache/lifecycle.test.ts` | `restoreLayers` — exact/partial/miss classification; `saveLayers` — skip-on-exact-hit, budget refusal, per-layer failure isolation                                                                                                      | 100%                              |
+| `src/cache/metadata.test.ts`  | `parsePackageSet` — the `cargo metadata` shape, workspace members called out separately, and rejection of malformed or truncated JSON                                                                                                   | 100%                              |
+| `src/cache/prune.test.ts`     | `parsePrunePolicy`; `readFingerprints` — the `<name>-<hash>` recovery, tolerant of an absent directory; `computeKeepSet` — attribution, unattributable handling per policy, and the refusal to mark an empty set usable                 | 100%                              |
+| `src/cache/stage.test.ts`     | `buildStageRoots`/`registryStageRoot`/`stagePaths` — the content-free paths array; `stagedLocation`/`unstagedLocation` — the stage-recursion and prefix guards; `stageFiles`/`unstageFiles` — link, move, and per-file failure counting | 100%                              |
+| `src/cache/fs.test.ts`        | The real `node:fs` adapters against a REAL temp directory: `walkFiles` on a missing directory, `nodeStatFs` throwing where `walkFiles` swallows, and the hard link's shared inode and mtime                                             | 100%                              |
+| `src/cache/summary.test.ts`   | `renderSummary` — the job-summary table rendered from `CachePhaseState`                                                                                                                                                                 | 100%                              |
+| `src/tools.test.ts`           | `parseToolSpecs`; `resolveToolVersions` — registry retry, backoff growth and degradation to `UNRESOLVED_VERSION`; `hashToolSet`; `ensureTools` — the absent/mute/wrong-version probe split and the exact-bin-hit shortcut               | 100%                              |
+| `src/inputs.test.ts`          | `readBooleanInput` — defaults, casing, and rejection of non-boolean text                                                                                                                                                                | 100%                              |
+| `src/errors.test.ts`          | `describeError` — `Error` instances and arbitrary thrown values                                                                                                                                                                         | 100%                              |
+| `src/lib.test.ts`             | Barrel surface pinned export by export, and the guard that `src/lib.ts` never re-exports `src/index.ts`; both path aliases resolve                                                                                                      | 100%                              |
 
-Eighteen test files cover nineteen library modules. `src/cache/client.ts`
+Twenty-one test files cover twenty-two library modules. `src/cache/client.ts`
 declares the `CacheClient` interface and nothing else, so it compiles to no
 executable statements and never reaches the coverage report — the port exists
 precisely so the tests can drive the lifecycle without `@actions/cache`.
@@ -533,6 +538,45 @@ orchestration lives in `src/action.ts` behind the injected `ActionDeps`.
 The release-cycle cases are pinned against real rust-lang.org release dates
 rather than against this codebase's own arithmetic, so a drifting epoch fails
 the suite instead of being reflected by it.
+
+### Mutation Testing
+
+Coverage says every line ran. It says nothing about whether an assertion would
+notice the line being wrong, and this codebase is dense with thresholds and
+equality checks where those are very different claims. Mutation testing closes
+that gap by changing the source and asking whether the suite fails.
+
+```sh
+mise run mutate                    # the configured scope
+mise run mutate src/cache/keys.ts  # one module, seconds instead of minutes
+```
+
+It is deliberately **not** a gate. `thresholds.break` is unset in
+`stryker.config.json`, so a score is reported and nothing exits non-zero on it.
+Several survivors are equivalent mutants — changes no test can detect because
+they cannot change behaviour — and under a threshold each would buy a contrived
+test written to satisfy the tool rather than to describe the code.
+
+Three mechanics are easy to get wrong and are worth stating:
+
+- **Stryker runs under Node, not Bun.** Its Babel instrumenter depends on CJS
+  default-export interop that Bun implements differently, so `bunx --bun` fails
+  before the first mutant with `generator is not a function`. Only the command
+  it shells out to is `bun test`.
+- **`stryker-bunfig.toml` is load-bearing.** The command runner judges a mutant
+  by exit code, and `bunfig.toml` enforces 100% coverage. Stryker instruments
+  each mutated file with mutant-switch branches that cannot all be reached in
+  one run, so coverage drops, `bun test` exits non-zero with every test passing,
+  and Stryker records a kill. That inflates the score silently — every mutant
+  looks dead, including the survivors. `bun test` has `--coverage` to switch
+  coverage on and nothing to switch it off, so a second config file is the only
+  lever.
+- **The config file is a positional argument.** There is no `--configFile` flag.
+
+What it is good at is auditing assertion strength for code that exists. What it
+cannot see is a test double that misrepresents the real thing — that failure
+mode lives in `src/cache/fs.test.ts`, which is why those adapters are exercised
+against a real filesystem rather than a fake.
 
 ## Key Design Decisions
 

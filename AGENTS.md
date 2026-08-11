@@ -32,6 +32,8 @@ Use `mise run` to invoke tasks defined in `mise.toml` (e.g. `mise run uap` to up
 - **Files**: `**/*.test.ts` alongside source (e.g. `src/foo.test.ts`).
 - **Coverage gate**: `bunfig.toml` enforces 100% lines/functions/statements for all files in `src/`, excluding `**/bin/**`, `**/__tests__/**`, `**/integration-*/**`.
 - **Run single test**: `bun test src/path/to/file.test.ts`.
+- **Mutation testing**: `mise run mutate` (or `mise run mutate <file>` for one module) runs Stryker over the modules dense with boundary logic. Not a gate and not part of the pre-commit list — it reports a score and never fails on it. Coverage proves a line ran; this asks whether any assertion would notice it being wrong. Stryker runs under **Node**, not Bun, and `stryker-bunfig.toml` is required: the command runner judges a mutant by exit code, and the 100% coverage threshold would mark every mutant killed and inflate the score silently. See ARCHITECTURE.md → Testing Strategy → Mutation Testing.
+- **Fakes are claims about someone else's code**: a hand-written double that disagrees with the real API cannot be caught by coverage OR by mutation testing, and has caused a shipped bug here twice. Where a port wraps `node:fs`, test the real adapter against a real temp directory — see `src/cache/fs.test.ts`.
 
 ## Development Workflow
 
