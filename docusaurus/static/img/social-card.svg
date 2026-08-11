@@ -3,8 +3,13 @@ SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
 
 SPDX-License-Identifier: MIT OR Apache-2.0
 
-Source for social-card.png, the Open Graph preview. Rendered at 1200x630 with
-`rsvg-convert -w 1200 -h 630`; see docusaurus/static/img/README.md.
+Background and type for social-card.png, the Open Graph preview.
+
+This file is NOT the finished card. build-icons.sh renders it at 1200x630 and
+then composites logos/rust-toolchain-and-cache.svg into the panel reserved at
+(96,180). The logo is ~1500 paths; inlining it here would bury seventy lines of
+layout in it and make this file unreadable. Run build-icons.sh, never
+rsvg-convert on this file alone — doing so produces a card with a hole in it.
 
 1200x630 is the size Open Graph consumers crop toward. Everything that must
 survive is kept inside a ~60px margin, because Slack, Discord and X each crop
@@ -12,19 +17,18 @@ the edges differently and only the centre is common to all of them.
 
 Text is set in Helvetica with a sans-serif fallback, and NOT in a webfont. An
 SVG rasterised offline resolves fonts against the rendering machine, so a
-webfont reference would silently fall back to whatever fontconfig picks and
-the committed PNG would depend on who ran the command. Helvetica is present on
-the macOS host that renders this; the fallback covers a Linux re-render.
+webfont reference would silently fall back to whatever fontconfig picks and the
+committed PNG would depend on who ran the command.
 
-The palette is the mark's own — field #1f5572, registry #f0883e, build
-#7cc0e8 — so the card, the favicon and the site's theme-color agree. The
-orange is `action.yml`'s `branding.color`.
+The logo sits on a white panel rather than straight on the field. Its gear ring
+is near-black and its toolbox is dark grey, both of which lose their silhouette
+against #1f5572 — checked by rendering all three candidate fields side by side.
+The panel is the same shape language as the app icon, so the card and the
+favicon read as the same product.
 
-The two layers are labelled here, which the favicon cannot afford to do. At
-card size there is room to say what the mark means, and "registry" and "build"
-are the two cache layers whose separate keying is the action's whole argument
-against Swatinem/rust-cache. The third layer, `bin`, is deliberately not drawn;
-see apple-touch-icon.svg for why the mark stays a pair.
+Three layer labels, not the two the previous card carried. The logo draws three
+bands and `CACHE_LAYER_IDS` is now genuinely three — registry, build and bin,
+the last shipped in Phase C — so the diagram and the code finally agree.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img"
      aria-label="rust-toolchain — install Rust and cache cargo in one action">
@@ -36,34 +40,36 @@ see apple-touch-icon.svg for why the mark stays a pair.
        thing an aggressive crop eats, and its loss looks like a mistake. -->
   <rect x="0" y="0" width="1200" height="10" fill="#f0883e"/>
 
-  <!-- The mark, left. Overlapped by ~35% of a diamond's height rather than the
-       favicon's ~17%: that ratio merges at 16px but opens a visible gap at this
-       scale, and two diamonds with air between them stop reading as a stack. -->
-  <g transform="translate(96, 223)" stroke="#1f5572" stroke-width="10" stroke-linejoin="round">
-    <path d="M101 90 L192 137 L101 184 L10 137 Z" fill="#7cc0e8"/>
-    <path d="M101 30 L192 77 L101 124 L10 77 Z" fill="#f0883e"/>
-  </g>
+  <!-- The panel the logo is composited into. Kept 12px larger than the 300x304
+       render on every side, so the logo never touches the panel edge.
 
-  <!-- Layer labels. The leaders start at each diamond's right vertex, which the
-       group transform puts at (288,300) and (288,360). A short stub floating in
-       space reads as a stray hyphen rather than as a connector. -->
-  <g stroke="#5b8ba6" stroke-width="2">
-    <line x1="292" y1="300" x2="316" y2="300"/>
-    <line x1="292" y1="360" x2="316" y2="360"/>
-  </g>
-  <g font-family="Helvetica, Arial, sans-serif" font-size="21" fill="#bcd7e8">
-    <text x="326" y="307">registry</text>
-    <text x="326" y="367">build</text>
-  </g>
+       Its y must stay in step with the composite offset in build-icons.sh
+       (currently +96+225). They are two halves of one number and nothing checks
+       that they agree; a mismatch shows up as the logo sitting off its panel. -->
+  <rect x="84" y="213" width="324" height="328" rx="38" fill="#ffffff"/>
 
   <g font-family="Helvetica, Arial, sans-serif">
-    <text x="96" y="150" font-size="86" font-weight="bold" fill="#ffffff">rust-toolchain</text>
-    <text x="96" y="196" font-size="30" fill="#9ec8e0">A GitHub Action</text>
+    <text x="96" y="149" font-size="72" font-weight="bold" fill="#ffffff">rust-toolchain</text>
+    <text x="96" y="193" font-size="28" fill="#9ec8e0">A GitHub Action</text>
 
-    <text x="440" y="290" font-size="40" font-weight="bold" fill="#ffffff">Install Rust and cache</text>
-    <text x="440" y="340" font-size="40" font-weight="bold" fill="#ffffff">cargo in one action</text>
-    <text x="440" y="400" font-size="25" fill="#9ec8e0">Reads your rust-toolchain.toml. Keys the cache</text>
-    <text x="440" y="434" font-size="25" fill="#9ec8e0">in layers, so a compiler bump does not</text>
-    <text x="440" y="468" font-size="25" fill="#9ec8e0">re-download the crates it never touched.</text>
+    <text x="452" y="297" font-size="40" font-weight="bold" fill="#ffffff">Install Rust and cache</text>
+    <text x="452" y="347" font-size="40" font-weight="bold" fill="#ffffff">cargo in one action</text>
+
+    <text x="452" y="407" font-size="24" fill="#9ec8e0">Reads your rust-toolchain.toml. Keys the cache</text>
+    <text x="452" y="439" font-size="24" fill="#9ec8e0">in layers, so a compiler bump does not</text>
+    <text x="452" y="471" font-size="24" fill="#9ec8e0">re-download the crates it never touched.</text>
+  </g>
+
+  <!-- The three cache layers, named. Swatches rather than leader lines: the logo
+       already draws the stack, so this is a legend for it. The fills are
+       sampled from the rendered logo rather than eyeballed, so the legend and
+       the bands it explains are the same colour. -->
+  <g font-family="Helvetica, Arial, sans-serif" font-size="21" fill="#bcd7e8">
+    <rect x="452" y="519" width="18" height="18" rx="4" fill="#f7ac2a"/>
+    <text x="482" y="535">registry</text>
+    <rect x="600" y="519" width="18" height="18" rx="4" fill="#44c1a7"/>
+    <text x="630" y="535">build</text>
+    <rect x="724" y="519" width="18" height="18" rx="4" fill="#3e86c8"/>
+    <text x="754" y="535">bin</text>
   </g>
 </svg>
