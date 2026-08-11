@@ -24921,7 +24921,16 @@ var require_commonjs2 = __commonJS((exports) => {
 
 // src/index.ts
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync as statSync2 } from "node:fs";
+import {
+  existsSync as existsSync4,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync as statSync2
+} from "node:fs";
 
 // node_modules/@actions/core/lib/command.js
 import * as os from "os";
@@ -63291,6 +63300,82 @@ function computeKeepSet(request) {
   return { keep, unattributable, usable: true };
 }
 
+// src/cache/stage.ts
+var STAGE_DIR_NAME = ".rust-toolchain-stage";
+function buildStageRoots(workspaces) {
+  return workspaces.map(({ targetDir }) => ({
+    stageDir: `${targetDir}/${STAGE_DIR_NAME}`,
+    sourceDir: targetDir
+  }));
+}
+function registryStageRoot(cargoHome) {
+  return {
+    stageDir: `${cargoHome}/${STAGE_DIR_NAME}`,
+    sourceDir: cargoHome
+  };
+}
+function stagePaths(roots) {
+  return roots.map((root) => root.stageDir);
+}
+function parentDir(path12) {
+  return path12.slice(0, path12.lastIndexOf("/"));
+}
+function stagedLocation(root, file) {
+  if (file === root.stageDir || file.startsWith(`${root.stageDir}/`)) {
+    return;
+  }
+  const prefix2 = `${root.sourceDir}/`;
+  if (!file.startsWith(prefix2))
+    return;
+  const relative4 = file.slice(prefix2.length);
+  return relative4 ? `${root.stageDir}/${relative4}` : undefined;
+}
+function unstagedLocation(root, staged) {
+  const prefix2 = `${root.stageDir}/`;
+  if (!staged.startsWith(prefix2))
+    return;
+  const relative4 = staged.slice(prefix2.length);
+  return relative4 ? `${root.sourceDir}/${relative4}` : undefined;
+}
+function stageFiles(root, files, fs8) {
+  fs8.remove(root.stageDir);
+  let staged = 0;
+  let failed = 0;
+  for (const file of files) {
+    const destination = stagedLocation(root, file);
+    if (destination === undefined)
+      continue;
+    try {
+      fs8.mkdirp(parentDir(destination));
+      fs8.link(file, destination);
+      staged += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { staged, failed };
+}
+function unstageFiles(root, fs8) {
+  let staged = 0;
+  let failed = 0;
+  for (const file of fs8.walk(root.stageDir)) {
+    const destination = unstagedLocation(root, file);
+    if (destination === undefined) {
+      failed += 1;
+      continue;
+    }
+    try {
+      fs8.mkdirp(parentDir(destination));
+      fs8.move(file, destination);
+      staged += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  fs8.remove(root.stageDir);
+  return { staged, failed };
+}
+
 // src/cache/summary.ts
 function renderSummary(restored, saved) {
   const rows = restored.map((entry) => {
@@ -63484,24 +63569,51 @@ function applyCargoDefaults(deps, release) {
     setIfUnset("CARGO_HTTP_MULTIPLEXING", "false");
   }
 }
-function layerPathsByLayer(request, cargoHome) {
+function layerPathsByLayer(request, cargoHome, prune) {
+  const staged = prune !== "off";
   return {
-    registry: registryPaths(cargoHome),
-    build: buildPaths(request.workspaces),
+    registry: staged ? stagePaths([registryStageRoot(cargoHome)]) : registryPaths(cargoHome),
+    build: staged ? stagePaths(buildStageRoots(request.workspaces)) : buildPaths(request.workspaces),
     bin: binPaths(cargoHome)
   };
 }
-function buildLayerPlans(request, cache, cargoHome) {
-  const pathsByLayer = layerPathsByLayer(request, cargoHome);
+function stageRootsFor(layer, workspaces, cargoHome) {
+  if (layer === "build")
+    return buildStageRoots(workspaces);
+  if (layer === "registry")
+    return [registryStageRoot(cargoHome)];
+  return [];
+}
+function buildLayerPlans(request, cache, cargoHome, prune) {
+  const pathsByLayer = layerPathsByLayer(request, cargoHome, prune);
   return request.layers.map((layer) => {
     const derived = cache.layers[layer];
+    const stageRoots = prune === "off" ? [] : stageRootsFor(layer, request.workspaces, cargoHome);
     return {
       layer,
       key: derived.key,
       restoreKeys: derived.restoreKeys,
-      paths: pathsByLayer[layer]
+      paths: pathsByLayer[layer],
+      ...stageRoots.length > 0 ? { stageRoots } : {}
     };
   });
+}
+function unstageRestored(deps, restored, plans) {
+  for (const plan of plans) {
+    if (!plan.stageRoots)
+      continue;
+    const outcome = restored.find((entry) => entry.layer === plan.layer);
+    if (!outcome || outcome.result === "miss")
+      continue;
+    for (const root of plan.stageRoots) {
+      try {
+        const { staged, failed } = unstageFiles(root, deps.stageFs);
+        deps.core.info(`${plan.layer}: restored ${staged} file(s) into ${root.sourceDir}` + (failed > 0 ? `, ${failed} could not be moved` : ""));
+      } catch (error2) {
+        deps.core.warning(`${plan.layer}: could not unpack ${root.stageDir}, continuing ` + `without it — ${describeError(error2)}`);
+      }
+    }
+  }
 }
 function foldRestoredResults(cache, restored) {
   const layers = {};
@@ -63518,11 +63630,12 @@ async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome
   const cache = buildCacheOutputs(cacheRequest, specCacheKey, toolSetHash);
   if (!cacheRequest)
     return { cache, cacheHit: false };
-  const plans = buildLayerPlans(cacheRequest, cache, cargoHome);
+  const plans = buildLayerPlans(cacheRequest, cache, cargoHome, prune);
   const restored = await restoreLayers(deps.cache, plans, {
     info: deps.core.info,
     warning: deps.core.warning
   });
+  unstageRestored(deps, restored, plans);
   const state3 = {
     plans,
     restored,
@@ -63623,21 +63736,21 @@ async function run(deps) {
   }
 }
 var PRUNE_WORTH_IT = 0.05;
-async function prunePlans(plans, state3, deps) {
-  if (state3.prune === undefined || state3.workspaces === undefined)
-    return plans;
-  if (state3.prune === "off")
-    return plans;
+var UNUSABLE_KEEP_SET = {
+  usable: false,
+  build: [],
+  packages: new Set,
+  droppedBytes: 0
+};
+var BUILD_EXCLUDED = /\/(incremental|examples)\//;
+async function resolveKeepSet(state3, deps) {
   const packages = new Set;
-  const members = new Set;
   const keep = [];
   let allFiles = [];
   for (const workspace of state3.workspaces) {
     const set = parsePackageSet(await deps.metadata.read(workspace.manifestDir));
     for (const id of set.packages)
       packages.add(id);
-    for (const id of set.workspaceMembers)
-      members.add(id);
     const files = deps.walk(workspace.targetDir);
     allFiles = allFiles.concat(files);
     const result = computeKeepSet({
@@ -63649,34 +63762,79 @@ async function prunePlans(plans, state3, deps) {
       policy: state3.prune
     });
     if (!result.usable)
-      return plans;
+      return UNUSABLE_KEEP_SET;
     keep.push(...result.keep);
     if (result.unattributable.length > 0) {
       deps.core.info(`prune: ${result.unattributable.length} artifact(s) under ` + `${workspace.targetDir} matched no package and were ` + `${state3.prune === "safe" ? "kept" : "dropped"}`);
     }
   }
   if (keep.length === 0 || packages.size === 0)
-    return plans;
+    return UNUSABLE_KEEP_SET;
   const total = deps.measure(allFiles).bytes;
   const kept = deps.measure(keep).bytes;
   const dropped = total - kept;
   if (total === 0 || dropped / total < PRUNE_WORTH_IT) {
-    deps.core.info(`prune: would drop ${dropped} of ${total} bytes, below the ` + `${PRUNE_WORTH_IT * 100}% threshold, so the unpruned paths are kept`);
-    return plans;
+    deps.core.info(`prune: would drop ${dropped} of ${total} bytes, below the ` + `${PRUNE_WORTH_IT * 100}% threshold, so the whole tree is staged`);
+    return UNUSABLE_KEEP_SET;
   }
-  return plans.map((plan) => {
-    if (plan.layer === "build") {
-      return {
-        ...plan,
-        paths: buildPaths(state3.workspaces, keep),
-        prunedBytes: dropped
-      };
+  return { usable: true, build: keep, packages, droppedBytes: dropped };
+}
+function registryAllFiles(cargoHome, deps) {
+  return [
+    `${cargoHome}/registry/index`,
+    `${cargoHome}/registry/cache`,
+    `${cargoHome}/git/db`
+  ].flatMap((dir) => deps.walk(dir));
+}
+function registryKeepFiles(cargoHome, packages, deps) {
+  const wanted = new Set([...packages].map((id) => {
+    const at = id.lastIndexOf("@");
+    return `${id.slice(0, at)}-${id.slice(at + 1)}.crate`;
+  }));
+  const crates = deps.walk(`${cargoHome}/registry/cache`).filter((file) => wanted.has(file.slice(file.lastIndexOf("/") + 1)));
+  return [
+    ...deps.walk(`${cargoHome}/registry/index`),
+    ...crates,
+    ...deps.walk(`${cargoHome}/git/db`)
+  ];
+}
+function filesToStage(layer, root, keep, deps) {
+  if (layer === "registry") {
+    return keep.usable ? registryKeepFiles(root.sourceDir, keep.packages, deps) : registryAllFiles(root.sourceDir, deps);
+  }
+  return keep.usable ? keep.build.filter((file) => file.startsWith(`${root.sourceDir}/`)) : deps.walk(root.sourceDir).filter((file) => !BUILD_EXCLUDED.test(file));
+}
+async function stageLayers(plans, state3, deps) {
+  if (state3.prune === undefined || state3.workspaces === undefined)
+    return plans;
+  if (state3.prune === "off")
+    return plans;
+  let keep;
+  try {
+    keep = await resolveKeepSet(state3, deps);
+  } catch (error2) {
+    deps.core.warning(`prune: could not narrow the cache to the resolved package set, ` + `saving everything instead — ${describeError(error2)}`);
+    keep = UNUSABLE_KEEP_SET;
+  }
+  const filled = [];
+  for (const plan of plans) {
+    if (!plan.stageRoots) {
+      filled.push(plan);
+      continue;
     }
-    if (plan.layer === "registry") {
-      return { ...plan, paths: registryPaths(state3.cargoHome, packages) };
+    let staged = 0;
+    for (const root of plan.stageRoots) {
+      const outcome = stageFiles(root, filesToStage(plan.layer, root, keep, deps), deps.stageFs);
+      staged += outcome.staged;
+      deps.core.info(`${plan.layer}: staged ${outcome.staged} file(s) from ` + `${root.sourceDir}` + (outcome.failed > 0 ? `, ${outcome.failed} could not be linked` : ""));
     }
-    return plan;
-  });
+    if (staged === 0) {
+      deps.core.warning(`${plan.layer}: nothing was staged, so the layer is not saved — ` + `an empty entry would hit its key and restore nothing`);
+      continue;
+    }
+    filled.push(keep.usable && plan.layer === "build" ? { ...plan, prunedBytes: keep.droppedBytes } : plan);
+  }
+  return filled;
 }
 async function writeSummarySafely(core, restored, saved) {
   try {
@@ -63694,7 +63852,7 @@ async function runPost(deps) {
     const { restored, budget } = state3;
     let plans = state3.plans;
     try {
-      plans = await prunePlans(plans, state3, deps);
+      plans = await stageLayers(plans, state3, deps);
     } catch (error2) {
       deps.core.warning(`prune: could not narrow the cache to the resolved package set, ` + `saving everything instead — ${describeError(error2)}`);
     }
@@ -63729,6 +63887,17 @@ var walk = (dir) => {
       out.push(full);
   }
   return out;
+};
+var stageFs = {
+  mkdirp: (dir) => {
+    mkdirSync(dir, { recursive: true });
+  },
+  link: (from, to) => linkSync(from, to),
+  walk: (dir) => existsSync4(dir) ? walk(dir) : [],
+  move: (from, to) => renameSync(from, to),
+  remove: (dir) => {
+    rmSync(dir, { recursive: true, force: true });
+  }
 };
 var metadata2 = {
   read: async (manifestDir) => spawnSync("cargo", ["metadata", "--format-version", "1", "--locked"], {
@@ -63766,7 +63935,8 @@ if (process.env.STATE_isPost === "true") {
     measure: (paths) => measurePaths(paths, fs8),
     metadata: metadata2,
     walk,
-    readdir: (dir) => readdirSync(dir)
+    readdir: (dir) => readdirSync(dir),
+    stageFs
   });
 } else {
   await run({
@@ -63803,6 +63973,7 @@ if (process.env.STATE_isPost === "true") {
     },
     delay: (ms) => new Promise((resolve3) => setTimeout(resolve3, ms)),
     cache: client,
-    registry
+    registry,
+    stageFs
   });
 }

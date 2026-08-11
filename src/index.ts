@@ -3,7 +3,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 
 import * as cache from "@actions/cache";
 import {
@@ -58,6 +67,27 @@ const walk = (dir: string): string[] => {
     else out.push(full);
   }
   return out;
+};
+
+/**
+ * The staging half of the wiring.
+ *
+ * Hard links rather than copies, for the reason `stageFiles` gives: they cost
+ * an inode reference instead of the bytes, and they share the source file's
+ * mtime, which is what cargo's freshness check reads. `walk` tolerates a
+ * missing directory here because a stage that was never written is the normal
+ * case on a cache miss.
+ */
+const stageFs = {
+  mkdirp: (dir: string): void => {
+    mkdirSync(dir, { recursive: true });
+  },
+  link: (from: string, to: string): void => linkSync(from, to),
+  walk: (dir: string): string[] => (existsSync(dir) ? walk(dir) : []),
+  move: (from: string, to: string): void => renameSync(from, to),
+  remove: (dir: string): void => {
+    rmSync(dir, { recursive: true, force: true });
+  },
 };
 
 /**
@@ -129,6 +159,7 @@ if (process.env.STATE_isPost === "true") {
     metadata,
     walk,
     readdir: (dir) => readdirSync(dir),
+    stageFs,
   });
 } else {
   await run({
@@ -172,5 +203,6 @@ if (process.env.STATE_isPost === "true") {
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     cache: client,
     registry,
+    stageFs,
   });
 }

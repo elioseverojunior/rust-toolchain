@@ -33,6 +33,7 @@ import {
   binPaths,
   buildPaths,
   registryPaths,
+  type Workspace,
 } from "@rust-toolchain/cache/paths";
 import {
   computeKeepSet,
@@ -40,6 +41,15 @@ import {
   readFingerprints,
   type PrunePolicy,
 } from "@rust-toolchain/cache/prune";
+import {
+  buildStageRoots,
+  registryStageRoot,
+  stageFiles,
+  stagePaths,
+  unstageFiles,
+  type StageFs,
+  type StageRoot,
+} from "@rust-toolchain/cache/stage";
 import { renderSummary } from "@rust-toolchain/cache/summary";
 import {
   assertProfileAvailable,
@@ -126,6 +136,14 @@ export interface ActionDeps {
   cache: CacheClient;
   /** The only real implementation calls crates.io, also in `src/index.ts`. */
   registry: RegistryClient;
+  /**
+   * Moves a staged layer's files back into the tree after a restore.
+   *
+   * Needed in the main phase as well as the post phase: a staged archive
+   * unpacks into a directory nothing reads from, so the restore is only half
+   * done until this has run.
+   */
+  stageFs: StageFs;
 }
 
 /** Toolchain downloads are network-bound; a stalled one must not hang the job. */
@@ -374,16 +392,44 @@ function applyCargoDefaults(deps: ActionDeps, release: string): void {
  * `DERIVERS` is one: adding a layer to `CACHE_LAYER_IDS` then fails to
  * compile here until it is given a path list, instead of silently falling
  * through to whichever branch an `if` chain happened to end on.
+ *
+ * **The paths array is part of the cache entry's identity**, not just a
+ * description of what to archive: `@actions/cache` matches on
+ * `(key, sha256(paths | …))`. Both phases therefore have to derive the same
+ * array, and `prune` is the only thing that changes its shape — which is why
+ * the switch is on the *input* and never on whether a keep-set was ultimately
+ * worth using. The keep-set is not computed until the post phase, so deciding
+ * on it here would be deciding on something the restore cannot know, and the
+ * entry it wrote would be unreadable for the rest of its life.
  */
 function layerPathsByLayer(
   request: CacheRequest,
   cargoHome: string,
+  prune: PrunePolicy,
 ): Record<CacheLayerId, string[]> {
+  const staged = prune !== "off";
   return {
-    registry: registryPaths(cargoHome),
-    build: buildPaths(request.workspaces),
+    registry: staged
+      ? stagePaths([registryStageRoot(cargoHome)])
+      : registryPaths(cargoHome),
+    build: staged
+      ? stagePaths(buildStageRoots(request.workspaces))
+      : buildPaths(request.workspaces),
+    // Never staged: the `bin` layer has nothing to prune, so it keeps the
+    // cheaper form where tar recurses the directory itself.
     bin: binPaths(cargoHome),
   };
+}
+
+/** The stage roots a layer archives from, or none when it is not staged. */
+function stageRootsFor(
+  layer: CacheLayerId,
+  workspaces: Workspace[],
+  cargoHome: string,
+): StageRoot[] {
+  if (layer === "build") return buildStageRoots(workspaces);
+  if (layer === "registry") return [registryStageRoot(cargoHome)];
+  return [];
 }
 
 /**
@@ -399,17 +445,62 @@ function buildLayerPlans(
   request: CacheRequest,
   cache: CacheOutputs,
   cargoHome: string,
+  prune: PrunePolicy,
 ): LayerPlan[] {
-  const pathsByLayer = layerPathsByLayer(request, cargoHome);
+  const pathsByLayer = layerPathsByLayer(request, cargoHome, prune);
   return request.layers.map((layer) => {
     const derived = cache.layers[layer]!;
+    const stageRoots =
+      prune === "off"
+        ? []
+        : stageRootsFor(layer, request.workspaces, cargoHome);
     return {
       layer,
       key: derived.key,
       restoreKeys: derived.restoreKeys,
       paths: pathsByLayer[layer],
+      ...(stageRoots.length > 0 ? { stageRoots } : {}),
     };
   });
+}
+
+/**
+ * Moves a staged layer's files back into the tree they belong to.
+ *
+ * A staged archive unpacks into `<tree>/.rust-toolchain-stage/…`, which is
+ * where nothing looks for it — cargo reads `target/debug`, not
+ * `target/.rust-toolchain-stage/debug`. This is the step that makes a restore
+ * mean anything, and it is deliberately the last thing the restore does.
+ *
+ * Caught per layer and reduced to a warning, like every other cache failure:
+ * a stage that could not be unpacked leaves the tree exactly as the job found
+ * it, which is a cold build and not a broken one.
+ */
+function unstageRestored(
+  deps: ActionDeps,
+  restored: RestoredLayer[],
+  plans: LayerPlan[],
+): void {
+  for (const plan of plans) {
+    if (!plan.stageRoots) continue;
+    const outcome = restored.find((entry) => entry.layer === plan.layer);
+    if (!outcome || outcome.result === "miss") continue;
+
+    for (const root of plan.stageRoots) {
+      try {
+        const { staged, failed } = unstageFiles(root, deps.stageFs);
+        deps.core.info(
+          `${plan.layer}: restored ${staged} file(s) into ${root.sourceDir}` +
+            (failed > 0 ? `, ${failed} could not be moved` : ""),
+        );
+      } catch (error) {
+        deps.core.warning(
+          `${plan.layer}: could not unpack ${root.stageDir}, continuing ` +
+            `without it — ${describeError(error)}`,
+        );
+      }
+    }
+  }
 }
 
 /**
@@ -455,11 +546,12 @@ async function resolveCacheLifecycle(
   const cache = buildCacheOutputs(cacheRequest, specCacheKey, toolSetHash);
   if (!cacheRequest) return { cache, cacheHit: false };
 
-  const plans = buildLayerPlans(cacheRequest, cache, cargoHome);
+  const plans = buildLayerPlans(cacheRequest, cache, cargoHome, prune);
   const restored = await restoreLayers(deps.cache, plans, {
     info: deps.core.info,
     warning: deps.core.warning,
   });
+  unstageRestored(deps, restored, plans);
 
   // Typed as `CachePhaseState` rather than left to inference: `runPost` casts
   // the parsed JSON to the same interface, so the two halves of the handoff
@@ -692,6 +784,8 @@ export interface PostDeps {
   walk: (dir: string) => string[];
   /** One directory's entries, for reading `.fingerprint/`. */
   readdir: (dir: string) => string[];
+  /** Links the keep-set into each staged layer's stage directory. */
+  stageFs: StageFs;
 }
 
 /**
@@ -705,35 +799,50 @@ export interface PostDeps {
  */
 const PRUNE_WORTH_IT = 0.05;
 
+/** The keep-set, resolved once and shared by every staged layer. */
+interface ResolvedKeepSet {
+  /**
+   * Whether the keep-set may be used at all.
+   *
+   * `false` is the fallback signal, and every failure mode converges on it:
+   * `cargo metadata` missing, a workspace with no manifest, a lockfile
+   * `--locked` rejects, a fingerprint layout cargo has restructured, and a
+   * tree with too little to drop to be worth resolving.
+   */
+  usable: boolean;
+  /** Files to keep under the workspaces' target directories. */
+  build: string[];
+  /** The resolved package set, for selecting `.crate` archives. */
+  packages: ReadonlySet<string>;
+  /** Bytes the keep-set excludes, for the job summary. */
+  droppedBytes: number;
+}
+
+const UNUSABLE_KEEP_SET: ResolvedKeepSet = {
+  usable: false,
+  build: [],
+  packages: new Set(),
+  droppedBytes: 0,
+};
+
+/** Regenerable subtrees, excluded from the build layer whether pruned or not. */
+const BUILD_EXCLUDED = /\/(incremental|examples)\//;
+
 /**
- * Narrows the plans to a keep-set, when one can be computed and is worth using.
+ * Resolves the keep-set, or reports that the whole tree should be staged.
  *
- * Every failure here falls back to the plans the main phase already built,
- * which are the Phase B glob set. That is the invariant the whole phase turns
- * on: **an empty or unusable keep-set must never be saved.** Saving one is not
- * a small cache but a poisoned one — an entry that exists, hits its key,
- * restores nothing, and leaves every later job rebuilding while believing it
- * was warm. `cargo metadata` missing, a workspace with no manifest, a lockfile
- * `--locked` rejects, and a fingerprint layout cargo has restructured all
- * converge on that same empty result, so the fallback is the common path and
- * not the rare one.
+ * Returns `usable: false` rather than throwing on every failure path. The
+ * caller turns that into "stage everything", which is the invariant this phase
+ * turns on: **an empty or unusable keep-set must never be saved.** Saving one
+ * is not a small cache but a poisoned one — an entry that exists, hits its
+ * key, restores nothing, and leaves every later job rebuilding while believing
+ * it was warm.
  */
-async function prunePlans(
-  plans: LayerPlan[],
+async function resolveKeepSet(
   state: CachePhaseState,
   deps: PostDeps,
-): Promise<LayerPlan[]> {
-  // The state is a cross-version contract: `action.yml` invokes `dist/index.js`
-  // twice as two unrelated processes, and during an upgrade the payload can
-  // have been written by a main phase that predates these fields. Absent is
-  // therefore an ordinary case meaning "no pruning was planned", not a fault —
-  // warning about it would fire on every mid-upgrade job for something nobody
-  // can act on.
-  if (state.prune === undefined || state.workspaces === undefined) return plans;
-  if (state.prune === "off") return plans;
-
+): Promise<ResolvedKeepSet> {
   const packages = new Set<string>();
-  const members = new Set<string>();
   const keep: string[] = [];
   let allFiles: string[] = [];
 
@@ -742,7 +851,6 @@ async function prunePlans(
       await deps.metadata.read(workspace.manifestDir),
     );
     for (const id of set.packages) packages.add(id);
-    for (const id of set.workspaceMembers) members.add(id);
 
     const files = deps.walk(workspace.targetDir);
     allFiles = allFiles.concat(files);
@@ -757,7 +865,7 @@ async function prunePlans(
       packageSet: set,
       policy: state.prune,
     });
-    if (!result.usable) return plans;
+    if (!result.usable) return UNUSABLE_KEEP_SET;
     keep.push(...result.keep);
     if (result.unattributable.length > 0) {
       deps.core.info(
@@ -768,7 +876,7 @@ async function prunePlans(
     }
   }
 
-  if (keep.length === 0 || packages.size === 0) return plans;
+  if (keep.length === 0 || packages.size === 0) return UNUSABLE_KEEP_SET;
 
   // The guard Task 4's measurement forced. Both measurements are needed for
   // `prunedBytes` regardless, so deciding on them is nearly free.
@@ -778,24 +886,164 @@ async function prunePlans(
   if (total === 0 || dropped / total < PRUNE_WORTH_IT) {
     deps.core.info(
       `prune: would drop ${dropped} of ${total} bytes, below the ` +
-        `${PRUNE_WORTH_IT * 100}% threshold, so the unpruned paths are kept`,
+        `${PRUNE_WORTH_IT * 100}% threshold, so the whole tree is staged`,
     );
-    return plans;
+    return UNUSABLE_KEEP_SET;
   }
 
-  return plans.map((plan) => {
-    if (plan.layer === "build") {
-      return {
-        ...plan,
-        paths: buildPaths(state.workspaces, keep),
-        prunedBytes: dropped,
-      };
+  return { usable: true, build: keep, packages, droppedBytes: dropped };
+}
+
+/** Every file the registry layer archives when nothing is pruned. */
+function registryAllFiles(cargoHome: string, deps: PostDeps): string[] {
+  // `registry/src` holds extracted sources, regenerable from the `.crate`
+  // files in `registry/cache`, so it is simply never listed.
+  return [
+    `${cargoHome}/registry/index`,
+    `${cargoHome}/registry/cache`,
+    `${cargoHome}/git/db`,
+  ].flatMap((dir) => deps.walk(dir));
+}
+
+/**
+ * The registry layer's keep-set.
+ *
+ * Version-exact, unlike the build layer. A crate archive is named
+ * `<name>-<version>.crate`, so the version is in the filename — where the
+ * build layer's fingerprint directories record only `<name>-<hash>` and force
+ * attribution by name alone. Pruning here is therefore precise: a crate that
+ * left the lockfile is dropped even when another version of it stayed.
+ */
+function registryKeepFiles(
+  cargoHome: string,
+  packages: ReadonlySet<string>,
+  deps: PostDeps,
+): string[] {
+  const wanted = new Set(
+    [...packages].map((id) => {
+      const at = id.lastIndexOf("@");
+      return `${id.slice(0, at)}-${id.slice(at + 1)}.crate`;
+    }),
+  );
+  const crates = deps
+    .walk(`${cargoHome}/registry/cache`)
+    .filter((file) => wanted.has(file.slice(file.lastIndexOf("/") + 1)));
+
+  // The index is never pruned: it is what makes a `.crate` resolvable at all,
+  // it is shared across every package rather than owned by one, and it is
+  // regenerated by a network round-trip rather than from anything on disk.
+  return [
+    ...deps.walk(`${cargoHome}/registry/index`),
+    ...crates,
+    ...deps.walk(`${cargoHome}/git/db`),
+  ];
+}
+
+/** Which files one stage root should be filled with. */
+function filesToStage(
+  layer: CacheLayerId,
+  root: StageRoot,
+  keep: ResolvedKeepSet,
+  deps: PostDeps,
+): string[] {
+  if (layer === "registry") {
+    return keep.usable
+      ? registryKeepFiles(root.sourceDir, keep.packages, deps)
+      : registryAllFiles(root.sourceDir, deps);
+  }
+  return keep.usable
+    ? keep.build.filter((file) => file.startsWith(`${root.sourceDir}/`))
+    : deps.walk(root.sourceDir).filter((file) => !BUILD_EXCLUDED.test(file));
+}
+
+/**
+ * Fills each staged layer's stage directory, ready for `saveLayers` to archive.
+ *
+ * This replaces narrowing each plan's `paths` array to the keep-set, which was
+ * unreadable by construction. `@actions/cache` matches an entry on
+ * `(key, sha256(paths | …))`, so an entry saved under a content-derived paths
+ * array can never be found again: the restore that would need it does not yet
+ * know the content, asks under the coarse array, and misses forever while
+ * still paying the upload on every run. `stagePaths` carries the full
+ * reasoning.
+ *
+ * The keep-set now decides what is *linked into* the stage, and the stage
+ * directory is what gets archived — so pruning changes an archive's contents
+ * without touching its identity. Nothing is removed from the working tree,
+ * exactly as before: a link is an addition, and a save failure still cannot
+ * damage the checkout.
+ */
+async function stageLayers(
+  plans: LayerPlan[],
+  state: CachePhaseState,
+  deps: PostDeps,
+): Promise<LayerPlan[]> {
+  // The state is a cross-version contract: `action.yml` invokes `dist/index.js`
+  // twice as two unrelated processes, and during an upgrade the payload can
+  // have been written by a main phase that predates these fields. Absent is
+  // therefore an ordinary case meaning "no staging was planned", not a fault —
+  // warning about it would fire on every mid-upgrade job for something nobody
+  // can act on.
+  if (state.prune === undefined || state.workspaces === undefined) return plans;
+  if (state.prune === "off") return plans;
+
+  let keep: ResolvedKeepSet;
+  try {
+    keep = await resolveKeepSet(state, deps);
+  } catch (error) {
+    // Caught *here* rather than left to `runPost`'s outer guard, and the
+    // difference is the whole invariant. Under the old design a throw left the
+    // unpruned paths in place, which still archived everything. Under staging
+    // it would leave every stage empty and save exactly the poisoned entry the
+    // fallback exists to prevent — one that hits its key, restores nothing,
+    // and leaves every later job rebuilding while believing it was warm.
+    deps.core.warning(
+      `prune: could not narrow the cache to the resolved package set, ` +
+        `saving everything instead — ${describeError(error)}`,
+    );
+    keep = UNUSABLE_KEEP_SET;
+  }
+
+  const filled: LayerPlan[] = [];
+  for (const plan of plans) {
+    if (!plan.stageRoots) {
+      filled.push(plan);
+      continue;
     }
-    if (plan.layer === "registry") {
-      return { ...plan, paths: registryPaths(state.cargoHome, packages) };
+
+    let staged = 0;
+    for (const root of plan.stageRoots) {
+      const outcome = stageFiles(
+        root,
+        filesToStage(plan.layer, root, keep, deps),
+        deps.stageFs,
+      );
+      staged += outcome.staged;
+      deps.core.info(
+        `${plan.layer}: staged ${outcome.staged} file(s) from ` +
+          `${root.sourceDir}` +
+          (outcome.failed > 0 ? `, ${outcome.failed} could not be linked` : ""),
+      );
     }
-    return plan;
-  });
+
+    // The last guard, and the only one that sees what actually reached the
+    // stage rather than what was meant to. Dropping the plan is what stops an
+    // empty archive being saved at all.
+    if (staged === 0) {
+      deps.core.warning(
+        `${plan.layer}: nothing was staged, so the layer is not saved — ` +
+          `an empty entry would hit its key and restore nothing`,
+      );
+      continue;
+    }
+
+    filled.push(
+      keep.usable && plan.layer === "build"
+        ? { ...plan, prunedBytes: keep.droppedBytes }
+        : plan,
+    );
+  }
+  return filled;
 }
 
 /**
@@ -845,7 +1093,7 @@ export async function runPost(deps: PostDeps): Promise<void> {
     // read a `target/` that does not exist.
     let plans = state.plans;
     try {
-      plans = await prunePlans(plans, state, deps);
+      plans = await stageLayers(plans, state, deps);
     } catch (error) {
       deps.core.warning(
         `prune: could not narrow the cache to the resolved package set, ` +
