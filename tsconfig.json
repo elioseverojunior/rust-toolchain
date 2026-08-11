@@ -1,32 +1,35 @@
 {
-  "extends": ["./tsconfig.base.json"],
+  // Solution-style config: this file type-checks nothing itself (`files: []`)
+  // and instead points `tsc --build` at the two independent projects that
+  // make up the repository. `tsconfig.src.json` is the action's own config
+  // (formerly this file); `docusaurus/tsconfig.json` is the site's
+  // self-managing config with its own DOM/React types. Keeping them as
+  // separate referenced projects — rather than merging — is what lets the
+  // action's type-check stay free of `docusaurus/`'s `DOM` lib.
+  //
+  // `compilerOptions.paths` below is a deliberate duplicate of
+  // `tsconfig.src.json`'s, not a stray leftover: it is here for a consumer
+  // other than `tsc`. Bun resolves the `@/*`/`@rust-toolchain*` aliases the
+  // test suite imports through by reading `compilerOptions.paths` off the
+  // nearest tsconfig.json to the repo root, and it does not follow
+  // `references` to find one — without this, `bun test` fails every test
+  // file with "Cannot find module '@/...'". `extends` was tried first and
+  // rejected: it also pulls in `tsconfig.src.json`'s `include: ["**/*.ts"]`,
+  // which — unlike `files`, `include` is additive, not replaced by an empty
+  // `files: []` — put every source file back into this program directly and
+  // broke `tsc --build` with TS6305/TS6306 against the referenced project.
+  // Repeating just `paths` here has no such effect, since `files: []` with
+  // no `include` still selects zero inputs for `tsc` itself.
   "compilerOptions": {
-    // Build configs. `noEmit` is set in the base config — bun produces
-    // dist/index.js — so these only scope what tsc will type-check. rootDir is
-    // the repo root so tooling under scripts/ is checked alongside src/.
-    "outDir": "./dist",
-    "rootDir": ".",
-
-    // Resolved relative to this file, so no `baseUrl` — it is deprecated as of
-    // TypeScript 6.0 and errors with TS5101. The trailing `/*` on both sides is
-    // what makes these prefix rules: without it `"@/"` matches only a module
-    // named exactly `@/`, which resolves nothing and reports nothing.
-    //
-    // `@rust-toolchain` names the barrel, never `src/index.ts` — that file
-    // exports nothing and calls `run()` at the top level, so importing it would
-    // execute the action.
     "paths": {
       "@/*": ["./src/*"],
       "@rust-toolchain": ["./src/lib.ts"],
       "@rust-toolchain/*": ["./src/*"]
     }
   },
-  "include": ["**/*.ts"],
-  // `docusaurus/` is a self-managing subproject: it ships its own
-  // tsconfig.json declaring the DOM lib and its `@site/*` paths, and this
-  // config declares neither. `docs/` needs no entry here only because its
-  // config is `.mts`, which `**/*.ts` does not match — a distinction that is
-  // accidental, so a second subproject with plain `.ts` files is what exposed
-  // it.
-  "exclude": ["node_modules", "docusaurus"]
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.src.json" },
+    { "path": "./docusaurus/tsconfig.json" }
+  ]
 }
