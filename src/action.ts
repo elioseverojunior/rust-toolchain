@@ -888,6 +888,79 @@ export async function run(deps: ActionDeps): Promise<void> {
     }
     env.RUSTUP_TOOLCHAIN = spec.channel;
 
+    // Installs the crate's DECLARED MSRV (`config.manifest.rustVersion`, the
+    // same value the `msrv` output reports) alongside the resolved toolchain,
+    // so a later step can run `cargo +<msrv> check` without its own `rustup
+    // toolchain install`. Grouped here with the other toolchain concerns, not
+    // with the MSRV check further down: it reads only the manifest Phase 1
+    // already parsed and never touches `cargo metadata`.
+    //
+    // Deliberately the declared floor, never `msrvEffective` — that value does
+    // not exist yet, and the whole point is proving the crate builds at the
+    // number it advertises. If a dependency has pushed the real floor higher,
+    // a `cargo +<msrv> check` failure is the correct and useful result, not
+    // something this action should paper over.
+    //
+    // Must NOT become the active toolchain: no `rustup default` and no
+    // `RUSTUP_TOOLCHAIN` export for it, so `env.RUSTUP_TOOLCHAIN` above is left
+    // untouched and the resolved channel stays what later steps see by
+    // default. This toolchain is reachable only via `cargo +<msrv>`.
+    const msrvInstall = readBooleanInput(deps.core, "msrv-install", false);
+    const declaredMsrv = config.manifest.rustVersion;
+    if (msrvInstall.value && declaredMsrv !== undefined) {
+      if (declaredMsrv === spec.channel) {
+        deps.core.info(
+          `msrv-install: the declared MSRV (${declaredMsrv}) is already the ` +
+            "resolved toolchain, skipping a redundant install.",
+        );
+      } else {
+        // `spec.profile` — the *resolved* profile `resolveConfiguration`
+        // already merged from the `profile` input and `rust-toolchain.toml`
+        // for the primary toolchain — never a hardcoded one: there is no
+        // reason for the MSRV toolchain to silently diverge from what the
+        // caller configured. A caller who set `profile: complete` would
+        // otherwise get `clippy` and `rustfmt` on the primary toolchain and
+        // not on the one their own `cargo +<msrv> clippy` step reaches for.
+        // Built as a second `ToolchainSpec` purely to reuse
+        // `toRustupInstallArgs` and `toRustupProfileComponentAddArgs`
+        // unchanged, rather than re-deriving their argv shape by hand.
+        const msrvSpecBuilder = new ToolchainSpecBuilder().withChannel(
+          declaredMsrv,
+        );
+        if (spec.profile) msrvSpecBuilder.withProfile(spec.profile);
+        const msrvSpec = msrvSpecBuilder.build();
+
+        // Unlike the check below, a failure here is not downgraded to a
+        // warning: this toolchain was explicitly requested, so a bad
+        // `rust-version` or a channel rustup cannot resolve is a real
+        // configuration error. Swallowing it would only resurface later as a
+        // confusing failure in the caller's own `cargo +<msrv>` step.
+        rustupOrThrow(deps, msrvSpec.toRustupInstallArgs(), env);
+
+        // Mirrors the primary install's own profile-component step above, and
+        // for the identical reason: rustup only honours `--profile` on a
+        // toolchain's first install and silently ignores it on one already
+        // present, which the restored channel of a hosted runner often is.
+        // Pinned to the MSRV toolchain with `--toolchain`, exactly as
+        // `target add`/`component add` pin the primary. Best-effort like the
+        // primary's: these are implied, not requested, and a channel missing
+        // one of them must not fail the job.
+        const msrvProfileComponentArgs =
+          msrvSpec.toRustupProfileComponentAddArgs();
+        if (msrvProfileComponentArgs) {
+          try {
+            rustupOrThrow(deps, msrvProfileComponentArgs, env);
+          } catch (error) {
+            deps.core.info(
+              `Could not add every component implied by the ` +
+                `"${msrvSpec.profile}" profile to the MSRV toolchain, ` +
+                `continuing: ${describeError(error)}`,
+            );
+          }
+        }
+      }
+    }
+
     const rustc = readRustcVersion(deps, env);
     deps.core.info(rustc.banner);
     applyCargoDefaults(deps, rustc.info.version);

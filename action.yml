@@ -103,6 +103,34 @@ inputs:
     required: false
     default: "warn"
 
+  msrv-install:
+    description: >
+      Whether to also install the crate's declared MSRV (`rust-version` from
+      the workspace-root `Cargo.toml`, the same value published as the `msrv`
+      output) alongside the resolved toolchain (default false), so a later
+      step can run `cargo +<msrv> check` without its own `rustup toolchain
+      install`. Installs the declared floor, never `msrv-effective` — the
+      point is proving the crate builds at the version it advertises, so a
+      dependency that has pushed the real floor higher should fail that check
+      rather than being papered over. Installed at the same resolved
+      `profile` as the primary toolchain — never a hardcoded one — with that
+      profile's implied components (e.g. `clippy`, `rustfmt` under `default`)
+      added by name afterwards, so `cargo +<msrv> clippy` works the same way
+      it does on the primary toolchain. Never becomes the active toolchain:
+      no `rustup default` and no `RUSTUP_TOOLCHAIN` export, so it is
+      reachable only via `cargo +<msrv>`. Skipped, with a note in the log,
+      when the declared MSRV already equals the resolved channel; does
+      nothing at all,
+      silently, when no `rust-version` is declared anywhere. Off by default
+      because the installed toolchain is inert until a workflow step invokes
+      it directly, so defaulting it on would cost every user a download for
+      something most never call. Unlike `msrv-check`, a failed install here
+      fails the job: this toolchain was explicitly requested, so an
+      unresolvable channel is a real configuration error, not something to
+      warn past.
+    required: false
+    default: "false"
+
   cargo-tools:
     description: >
       Cargo-installed tools to make available, comma, space or newline
