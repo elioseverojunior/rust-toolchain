@@ -122,6 +122,7 @@ function harness(
     env?: Record<string, string | undefined>;
     restoreResult?: (key: string) => string | undefined;
     toolVersions?: Record<string, string>;
+    files?: Record<string, string>;
   } = {},
 ): Harness {
   const calls: ExecCall[] = [];
@@ -152,9 +153,15 @@ function harness(
       }
       return { status: 0, stdout: "" };
     },
-    readFile: () => {
-      if (options.toml == null) throw new Error("ENOENT");
-      return options.toml;
+    readFile: (path: string) => {
+      const name = path.split(/[\\/]/).pop() ?? "";
+      if (name === "rust-toolchain.toml") {
+        if (options.toml == null) throw new Error("ENOENT");
+        return options.toml;
+      }
+      const extra = options.files?.[name];
+      if (extra === undefined) throw new Error("ENOENT");
+      return extra;
     },
     core: {
       getInput: (name) => options.inputs?.[name] ?? "",
@@ -2269,5 +2276,49 @@ describe("cargo tools", () => {
     await run(h.deps);
     expect(h.failures[0]).toMatch(/more than once/);
     expect(h.calls).toEqual([]);
+  });
+});
+
+describe("msrv-fallback", () => {
+  it("installs the rust-version when the flag is on and nothing else names a channel", async () => {
+    const h = harness({
+      toml: null,
+      inputs: { "msrv-fallback": "true" },
+      files: { "Cargo.toml": '[package]\nrust-version = "1.88"\n' },
+    });
+    await run(h.deps);
+
+    const install = h.calls.find(
+      (c) => c.file === "rustup" && c.args[0] === "toolchain",
+    );
+    expect(install?.args).toContain("1.88");
+    expect(h.outputs["msrv"]).toBe("1.88");
+    expect(h.outputs["msrv-source"]).toBe("cargo-toml");
+  });
+
+  it("installs stable when the flag is off, whatever Cargo.toml says", async () => {
+    const h = harness({
+      toml: null,
+      files: { "Cargo.toml": '[package]\nrust-version = "1.88"\n' },
+    });
+    await run(h.deps);
+
+    const install = h.calls.find(
+      (c) => c.file === "rustup" && c.args[0] === "toolchain",
+    );
+    expect(install?.args).toContain("stable");
+    // The declared MSRV is still reported; only the channel is unaffected.
+    expect(h.outputs["msrv"]).toBe("1.88");
+  });
+
+  it("falls through to stable when the flag is on but no Cargo.toml exists", async () => {
+    const h = harness({ toml: null, inputs: { "msrv-fallback": "true" } });
+    await run(h.deps);
+
+    const install = h.calls.find(
+      (c) => c.file === "rustup" && c.args[0] === "toolchain",
+    );
+    expect(install?.args).toContain("stable");
+    expect(h.outputs["msrv-source"]).toBe("none");
   });
 });

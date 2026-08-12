@@ -61471,11 +61471,11 @@ function assertIdentifiers(kind, values) {
   }
   return values;
 }
-function mergeConfig(tomlConfig, inputs) {
+function mergeConfig(tomlConfig, inputs, msrvFallback) {
   if (!inputs.toolchain && !tomlConfig.channel && tomlConfig.path) {
     throw new Error("rust-toolchain.toml sets `path`, which selects a local custom toolchain " + "that rustup cannot install. Set the `toolchain` input to choose a channel.");
   }
-  const channel = inputs.toolchain ?? tomlConfig.channel ?? "stable";
+  const channel = inputs.toolchain ?? tomlConfig.channel ?? msrvFallback ?? "stable";
   const inputTargets = parseCommaList(inputs.targets || inputs.target);
   const tomlTargets = tomlConfig.targets ?? [];
   const targets = assertIdentifiers("target", [
@@ -63332,6 +63332,46 @@ function renderSummary(restored, saved) {
 `);
 }
 
+// src/msrv.ts
+var NONE = { source: "none" };
+var isRecord2 = (value) => typeof value === "object" && value !== null;
+function declaredVersion(table) {
+  if (!isRecord2(table))
+    return;
+  const value = table["rust-version"];
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+function inherits(table) {
+  if (!isRecord2(table))
+    return false;
+  const value = table["rust-version"];
+  return isRecord2(value) && value.workspace === true;
+}
+function parseCargoManifest(contents) {
+  if (!contents.trim())
+    return NONE;
+  let document2;
+  try {
+    document2 = parse2(contents);
+  } catch (error2) {
+    throw new Error(`Cargo.toml is not valid TOML: ${describeError(error2)}`, {
+      cause: error2
+    });
+  }
+  if (!isRecord2(document2))
+    return NONE;
+  const workspacePackage = isRecord2(document2.workspace) ? document2.workspace.package : undefined;
+  const workspaceVersion = declaredVersion(workspacePackage);
+  const own = declaredVersion(document2.package);
+  if (own !== undefined)
+    return { rustVersion: own, source: "cargo-toml" };
+  const inheritable = !isRecord2(document2.package) || inherits(document2.package);
+  if (inheritable && workspaceVersion !== undefined) {
+    return { rustVersion: workspaceVersion, source: "workspace-inherit" };
+  }
+  return NONE;
+}
+
 // src/outputs.ts
 function buildActionOutputs(args) {
   const { spec, inputs, toml } = args;
@@ -63341,6 +63381,9 @@ function buildActionOutputs(args) {
     target: spec.targets[0] ?? "",
     components: [...spec.components],
     profile: spec.profile ?? "",
+    msrv: args.msrv.declared ?? "",
+    "msrv-effective": args.msrv.effective ?? "",
+    "msrv-source": args.msrv.source,
     "set-rustup-toolchain": args.setRustupToolchain.value,
     "cargo-tools": args.tools.map(({ name, version: version3 }) => `${name}@${version3}`),
     name: spec.channel,
@@ -63375,6 +63418,9 @@ function toOutputEntries(outputs) {
     ["target", outputs.target],
     ["components", JSON.stringify(outputs.components)],
     ["profile", outputs.profile],
+    ["msrv", outputs.msrv],
+    ["msrv-effective", outputs["msrv-effective"]],
+    ["msrv-source", outputs["msrv-source"]],
     ["set-rustup-toolchain", String(outputs["set-rustup-toolchain"])],
     ["cargo-tools", JSON.stringify(outputs["cargo-tools"])],
     ["cache-hit", String(outputs["cache-hit"])],
@@ -63432,6 +63478,16 @@ function readTomlConfig(deps) {
   }
   return parseRustToolchainToml(contents);
 }
+function readCargoManifest(deps) {
+  const workspace = deps.env.GITHUB_WORKSPACE ?? ".";
+  let contents;
+  try {
+    contents = deps.readFile(join8(workspace, "Cargo.toml"));
+  } catch {
+    return { source: "none" };
+  }
+  return parseCargoManifest(contents);
+}
 function readInputs(deps) {
   return {
     toolchain: deps.core.getInput("toolchain") || undefined,
@@ -63444,13 +63500,15 @@ function readInputs(deps) {
 function resolveConfiguration(deps) {
   const inputs = readInputs(deps);
   const toml = readTomlConfig(deps);
-  const resolved = mergeConfig(toml, inputs);
+  const manifest = readCargoManifest(deps);
+  const fallback = readBooleanInput(deps.core, "msrv-fallback", false);
+  const resolved = mergeConfig(toml, inputs, fallback.value ? manifest.rustVersion : undefined);
   const channel = resolveChannel(resolved.channel);
   assertProfileAvailable(channel, resolved.profile);
   const builder = new ToolchainSpecBuilder().withChannel(channel).withTargets(...resolved.targets).withComponents(...resolved.components);
   if (resolved.profile)
     builder.withProfile(resolved.profile);
-  return { spec: builder.build(), inputs, toml };
+  return { spec: builder.build(), inputs, toml, manifest };
 }
 function hasRustup(deps, env) {
   const probe = deps.exec("rustup", ["--help"], {
@@ -63667,7 +63725,11 @@ async function run(deps) {
       specCacheKey,
       cache,
       cacheHit,
-      tools: toolResolution.tools
+      tools: toolResolution.tools,
+      msrv: {
+        declared: config.manifest.rustVersion,
+        source: config.manifest.source
+      }
     });
     for (const [name, value] of toOutputEntries(outputs)) {
       deps.core.setOutput(name, value);

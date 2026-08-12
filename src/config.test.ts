@@ -329,3 +329,23 @@ describe("mergeConfig with a path toolchain", () => {
     expect(result.channel).toBe("nightly");
   });
 });
+
+describe("mergeConfig msrv fallback", () => {
+  it("uses the fallback when neither input nor toml names a channel", () => {
+    expect(mergeConfig({}, {}, "1.88").channel).toBe("1.88");
+  });
+
+  it("loses to the toml channel", () => {
+    expect(mergeConfig({ channel: "1.97" }, {}, "1.88").channel).toBe("1.97");
+  });
+
+  it("loses to the toolchain input", () => {
+    expect(mergeConfig({}, { toolchain: "nightly" }, "1.88").channel).toBe(
+      "nightly",
+    );
+  });
+
+  it("falls through to stable when no fallback is supplied", () => {
+    expect(mergeConfig({}, {}).channel).toBe("stable");
+  });
+});
