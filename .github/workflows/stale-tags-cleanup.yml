@@ -28,10 +28,15 @@ on:
         type: number
         default: 30
 
-# Tag + release deletion needs write access to the repo. No other
-# permission is required — this workflow does not create PRs, run
-# tests, or touch any other surface.
-permissions: read-all
+# Read-only at the top level, with the write this workflow actually needs
+# declared on the `cleanup` job instead. A job's `permissions` block REPLACES
+# the workflow default rather than narrowing it, so the job still gets its
+# `contents: write` for tag and release deletion -- while OpenSSF Scorecard's
+# Token-Permissions check, which treats any workflow-wide write as granted to
+# every job, sees only the read. No other permission is required: this workflow
+# creates no PRs, runs no tests, and touches no other surface.
+permissions:
+  contents: read
 
 # Prevent multiple concurrent cleanup runs from racing on the same
 # tag-delete operations. Only one can run at a time; any new

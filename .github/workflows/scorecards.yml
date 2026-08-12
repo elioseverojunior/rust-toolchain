@@ -12,8 +12,14 @@ on:
   branch_protection_rule:
   workflow_dispatch:
 
-# Top-level read-all; jobs that upload results need additional write permissions.
-permissions: read-all
+# Read-only at the top level, NOT `read-all`. Scorecard's own Token-Permissions
+# check reads a workflow-wide grant as granting it to every job, and `read-all`
+# expands to read on every scope there is. The `analysis` job below declares the
+# full set it needs -- `security-events: write` and `id-token: write` to upload,
+# plus the read scopes Scorecard inspects -- and a job block replaces the
+# default rather than narrowing it, so nothing loses access.
+permissions:
+  contents: read
 
 jobs:
   analysis:
