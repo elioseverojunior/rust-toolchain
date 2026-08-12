@@ -763,6 +763,19 @@ describe("effectiveMsrv", () => {
       effectiveMsrv([{ name: "a", version: "1.0.0", rustVersion: "???" }]),
     ).toBeUndefined();
   });
+
+  // Every other fixture here lists its highest requirement LAST, so the
+  // max-tracking comparison in `bestRequirement` is executed by all of them
+  // and pinned by none — delete it and each still passes. This one puts the
+  // maximum first, so a later, lower entry must not displace it.
+  it("keeps the maximum when a later entry declares a lower requirement", () => {
+    expect(
+      effectiveMsrv([
+        { name: "high", version: "1.0.0", rustVersion: "1.95" },
+        { name: "low", version: "2.0.0", rustVersion: "1.70" },
+      ]),
+    ).toEqual({ version: "1.95", package: "high 1.0.0" });
+  });
 });
 
 describe("evaluateMsrv", () => {
