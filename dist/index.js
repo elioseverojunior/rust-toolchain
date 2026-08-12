@@ -63886,11 +63886,18 @@ var client = {
   }
 };
 var metadata2 = {
-  read: async (manifestDir) => spawnSync("cargo", ["metadata", "--format-version", "1", "--locked"], {
-    cwd: manifestDir,
-    encoding: "utf-8",
-    maxBuffer: 64 * 1024 * 1024
-  }).stdout ?? ""
+  read: async (manifestDir) => {
+    const result = spawnSync("cargo", ["metadata", "--format-version", "1", "--locked"], { cwd: manifestDir, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+    if (result.error)
+      throw result.error;
+    if (result.status !== 0) {
+      const stderr = (result.stderr ?? "").trim();
+      const detail = stderr === "" ? "no stderr" : stderr.split(`
+`)[0] ?? "";
+      throw new Error(`\`cargo metadata --locked\` exited ${result.status} in ${manifestDir}: ${detail}`);
+    }
+    return result.stdout ?? "";
+  }
 };
 var registry = {
   latestVersion: async (name) => {
