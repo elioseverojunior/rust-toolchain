@@ -177,6 +177,8 @@ describe("binPaths", () => {
   it("matches files only, so the shim exclusions survive tar", () => {
     expect(binPaths("/home/runner/.cargo")).toEqual([
       `${BIN}/**`,
+      "/home/runner/.cargo/.crates.toml",
+      "/home/runner/.cargo/.crates2.json",
       `!${BIN}/cargo`,
       `!${BIN}/cargo.exe`,
       `!${BIN}/cargo-clippy`,
@@ -208,6 +210,30 @@ describe("binPaths", () => {
       `!${BIN}/`,
       `!${BIN}/**/`,
     ]);
+  });
+
+  // The ledger is what makes a restored binary recognisable. Without it cargo
+  // finds files it has no record of and refuses — "binary `x` already exists in
+  // destination", exit 101 — where with it the same command is
+  // "Ignored package `x` is already installed", exit 0. Measured against cargo
+  // 1.97.1, and it is the difference between a warm cache being usable and a
+  // consumer's own `cargo install` step failing on every run after the first.
+  it("carries cargo's install ledger, which lives above bin/", () => {
+    const paths = binPaths("/home/runner/.cargo");
+
+    expect(paths).toContain("/home/runner/.cargo/.crates.toml");
+    expect(paths).toContain("/home/runner/.cargo/.crates2.json");
+  });
+
+  // Both entries are plain file paths, not globs, and must not be negated by
+  // the directory patterns that strip `bin/` itself.
+  it("keeps the ledger out of the negated patterns", () => {
+    const negated = binPaths("/home/runner/.cargo").filter((p) =>
+      p.startsWith("!"),
+    );
+
+    expect(negated).not.toContain("!/home/runner/.cargo/.crates.toml");
+    expect(negated).not.toContain("!/home/runner/.cargo/.crates2.json");
   });
 
   // Emitted unconditionally rather than behind a platform check: a negation for
