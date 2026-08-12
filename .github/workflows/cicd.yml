@@ -279,7 +279,27 @@ jobs:
         with:
           cache: true
           cache-key-hash: ${{ hashFiles('bun.lock') }}
-          cache-key-suffix: ci
+          # The run id is in the suffix so this entry belongs to THIS run, and
+          # it is a correctness fix rather than hygiene.
+          #
+          # Without it the key was stable across runs -- `hashFiles('bun.lock')`
+          # plus a literal `ci`, against a pinned toolchain -- so the E2E job
+          # restored the entry a PREVIOUS run had saved, reported "unchanged
+          # since an exact hit, not saving", and never uploaded what it had just
+          # staged. `E2E Warm Cache` then asserted against that inherited entry
+          # instead of this run's work.
+          #
+          # Self-perpetuating, which is what made it so persistent: an entry
+          # saved back when pruning was broken carried the whole tree, every
+          # later run got an exact hit on it, every later run skipped its save,
+          # and no fix to the pruning could replace it. The keep-set was already
+          # correct -- the job staged 12 files with itoa excluded -- and the
+          # assertion still failed against an archive from days earlier.
+          #
+          # The cost is that E2E never restores across runs, which it should not:
+          # `e2e-warm` needs `e2e` in the SAME run, so the cross-run hit was
+          # accidental and only ever hid what this job exists to prove.
+          cache-key-suffix: ci-${{ github.run_id }}
           cache-workspaces: e2e-probe -> e2e-probe/target
           # Pinned, so crates.io is never consulted and a registry outage
           # cannot redden CI. hexyl is chosen because its binary is named after
@@ -473,7 +493,7 @@ jobs:
         with:
           cache: true
           cache-key-hash: ${{ hashFiles('bun.lock') }}
-          cache-key-suffix: ci-second
+          cache-key-suffix: ci-second-${{ github.run_id }}
           cache-workspaces: e2e-probe -> e2e-probe/target
           # `bin` is left out here, and the suffix is why it has to be. The bin
           # key deliberately carries no suffix — two jobs resolving the same
@@ -662,7 +682,7 @@ jobs:
         with:
           cache: true
           cache-key-hash: ${{ hashFiles('bun.lock') }}
-          cache-key-suffix: ci
+          cache-key-suffix: ci-${{ github.run_id }}
           cache-workspaces: e2e-probe -> e2e-probe/target
           # Must match the previous job's exactly. The bin key is a digest of
           # the resolved tool set, so omitting this would derive the empty-set
