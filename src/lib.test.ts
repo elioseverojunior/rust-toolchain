@@ -133,6 +133,7 @@ describe("library barrel", () => {
       cache: { enabled: false, layers: {} },
       cacheHit: false,
       tools: [],
+      msrv: { source: "none" },
     });
     expect(outputs.target).toBe("wasm32-unknown-unknown");
   });

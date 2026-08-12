@@ -44,6 +44,7 @@ const args = (
   cache: { enabled: false, layers: {} },
   cacheHit: false,
   tools: [],
+  msrv: { source: "none" },
   ...overrides,
 });
 
@@ -221,6 +222,28 @@ describe("buildActionOutputs", () => {
       expect(outputs.toml.path).toBe("/opt/custom");
     });
   });
+
+  describe("msrv", () => {
+    it("publishes the declared and effective MSRV with their provenance", () => {
+      const outputs = buildActionOutputs(
+        args({
+          msrv: { declared: "1.79", source: "cargo-toml", effective: "1.95.0" },
+        }),
+      );
+
+      expect(outputs.msrv).toBe("1.79");
+      expect(outputs["msrv-effective"]).toBe("1.95.0");
+      expect(outputs["msrv-source"]).toBe("cargo-toml");
+    });
+
+    it("emits empty strings when no MSRV was found", () => {
+      const outputs = buildActionOutputs(args({ msrv: { source: "none" } }));
+
+      expect(outputs.msrv).toBe("");
+      expect(outputs["msrv-effective"]).toBe("");
+      expect(outputs["msrv-source"]).toBe("none");
+    });
+  });
 });
 
 describe("toOutputEntries", () => {
@@ -296,6 +319,26 @@ describe("toOutputEntries", () => {
     expect(flat["cachekey-full"]).toBe("20250915abcd-1f2e3d4c");
   });
 
+  it("flattens the MSRV outputs into the entry list", () => {
+    const entries = toOutputEntries(
+      buildActionOutputs(
+        args({
+          msrv: {
+            declared: "1.79",
+            source: "cargo-toml",
+            effective: "1.95.0",
+          },
+        }),
+      ),
+    );
+    const byName = Object.fromEntries(entries);
+
+    expect(byName["msrv"]).toBe("1.79");
+    expect(byName["msrv-effective"]).toBe("1.95.0");
+    expect(byName["msrv-source"]).toBe("cargo-toml");
+    expect(JSON.parse(byName["json"] ?? "{}").msrv).toBe("1.79");
+  });
+
   // The whole point of the `json` output: one key a consumer can fromJSON()
   // instead of re-splitting the flat strings.
   it("emits the complete outputs object as `json`", () => {
@@ -317,6 +360,9 @@ describe("toOutputEntries", () => {
       "target",
       "components",
       "profile",
+      "msrv",
+      "msrv-effective",
+      "msrv-source",
       "set-rustup-toolchain",
       "cargo-tools",
       "name",
@@ -340,6 +386,9 @@ describe("toOutputEntries", () => {
       "target",
       "components",
       "profile",
+      "msrv",
+      "msrv-effective",
+      "msrv-source",
       "set-rustup-toolchain",
       "cargo-tools",
       "cache-hit",

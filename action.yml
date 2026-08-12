@@ -78,6 +78,27 @@ inputs:
     required: false
     default: "true"
 
+  msrv-fallback:
+    description: >
+      Whether to derive the toolchain from `Cargo.toml`'s `rust-version` when
+      neither the `toolchain` input nor `rust-toolchain.toml` names a channel
+      (default false). Off by default because `rust-version` is a floor, not a
+      pin: turning it on silently moves a repository that has one from
+      `stable` to its MSRV.
+    required: false
+    default: "false"
+
+  msrv-check:
+    description: >
+      What to do when the installed toolchain is older than the highest
+      `rust-version` in the resolved dependency graph: `off`, `warn` (default)
+      or `error`. The graph is what binds, not the crate's own declaration —
+      a crate can declare 1.79 while pinning a dependency that needs 1.95.
+      A check that cannot run, for want of a lockfile or a manifest, always
+      warns and never fails, whatever this is set to.
+    required: false
+    default: "warn"
+
   cargo-tools:
     description: >
       Cargo-installed tools to make available, comma, space or newline
@@ -283,6 +304,24 @@ outputs:
     description: >
       The resolved profile — `minimal`, `default` or `complete`. Always
       populated, since an unset profile resolves to `default`.
+
+  msrv:
+    description: >
+      The `rust-version` declared by the workspace-root `Cargo.toml`, or an
+      empty string. The root manifest only, never a maximum over workspace
+      members.
+
+  msrv-effective:
+    description: >
+      The highest `rust-version` across every package in the resolved
+      dependency graph, or an empty string. Use this, not `msrv`, to choose a
+      toolchain: the two differ whenever a dependency outruns the crate's own
+      declared floor.
+
+  msrv-source:
+    description: >
+      Where `msrv` was read from — `cargo-toml`, `workspace-inherit`, or
+      `none`.
 
   set-rustup-toolchain:
     description: >

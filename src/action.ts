@@ -785,6 +785,10 @@ export async function run(deps: ActionDeps): Promise<void> {
       // `ensureTools`' outcomes: a consumer reading both `cargo-tools` and the
       // bin key needs them to describe one resolution.
       tools: toolResolution.tools,
+      // MSRV awareness is not wired up yet — Task 5 only declares the output
+      // surface. Every run reports `none` until a later task reads
+      // `Cargo.toml` and the resolved dependency graph.
+      msrv: { source: "none" },
     });
     for (const [name, value] of toOutputEntries(outputs)) {
       deps.core.setOutput(name, value);
