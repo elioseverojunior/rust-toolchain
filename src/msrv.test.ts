@@ -6,6 +6,9 @@ import { describe, expect, it } from "bun:test";
 
 import {
   compareVersions,
+  describeVerdict,
+  effectiveMsrv,
+  evaluateMsrv,
   parseCargoManifest,
   parseMsrvPolicy,
   parseVersion,
@@ -157,5 +160,122 @@ describe("parseCargoManifest", () => {
     expect(parseCargoManifest("[package]\nrust-version = 188\n")).toEqual({
       source: "none",
     });
+  });
+});
+
+// The measured case that motivates walking the graph at all: cargo-binstall
+// declares 1.79 while its locked graph needs 1.95.
+const BINSTALL_GRAPH = [
+  { name: "cargo-binstall", version: "1.21.1", rustVersion: "1.79" },
+  { name: "fs-lock", version: "0.1.16", rustVersion: "1.89.0" },
+  { name: "cargo-platform", version: "0.3.3", rustVersion: "1.91" },
+  { name: "vergen", version: "10.0.1", rustVersion: "1.95.0" },
+];
+
+describe("effectiveMsrv", () => {
+  it("returns the highest requirement and who demands it", () => {
+    expect(effectiveMsrv(BINSTALL_GRAPH)).toEqual({
+      version: "1.95.0",
+      package: "vergen 10.0.1",
+    });
+  });
+
+  it("returns undefined when nothing declares a version", () => {
+    expect(effectiveMsrv([])).toBeUndefined();
+  });
+
+  // Every other fixture in this file happens to list its highest requirement
+  // last, which lets a broken comparison (e.g. "keep whatever is seen last")
+  // pass unnoticed. Put the maximum first and a lower value after it, so only
+  // a real maximum-tracking comparison returns the right package.
+  it("keeps the maximum when a later entry declares a lower requirement", () => {
+    expect(
+      effectiveMsrv([
+        { name: "a", version: "1.0.0", rustVersion: "1.90" },
+        { name: "b", version: "2.0.0", rustVersion: "1.70" },
+      ]),
+    ).toEqual({ version: "1.90", package: "a 1.0.0" });
+  });
+
+  it("ignores versions it cannot parse", () => {
+    expect(
+      effectiveMsrv([
+        { name: "a", version: "1.0.0", rustVersion: "not-a-version" },
+        { name: "b", version: "2.0.0", rustVersion: "1.70" },
+      ]),
+    ).toEqual({ version: "1.70", package: "b 2.0.0" });
+  });
+
+  it("returns undefined when no version is parseable", () => {
+    expect(
+      effectiveMsrv([{ name: "a", version: "1.0.0", rustVersion: "???" }]),
+    ).toBeUndefined();
+  });
+});
+
+describe("evaluateMsrv", () => {
+  it("reports a violation naming the crate that demands it", () => {
+    expect(evaluateMsrv("1.88.0", BINSTALL_GRAPH)).toEqual({
+      kind: "violation",
+      installed: "1.88.0",
+      required: { version: "1.95.0", package: "vergen 10.0.1" },
+    });
+  });
+
+  // `ok` carries the requirement it cleared, so the caller can publish
+  // `msrv-effective` without recomputing the maximum.
+  it("is ok when the installed toolchain meets the requirement", () => {
+    expect(evaluateMsrv("1.97.1", BINSTALL_GRAPH)).toEqual({
+      kind: "ok",
+      required: { version: "1.95.0", package: "vergen 10.0.1" },
+    });
+  });
+
+  it("is ok when the installed toolchain matches exactly", () => {
+    expect(
+      evaluateMsrv("1.70.0", [
+        { name: "a", version: "1.0.0", rustVersion: "1.70" },
+      ]),
+    ).toEqual({
+      kind: "ok",
+      required: { version: "1.70", package: "a 1.0.0" },
+    });
+  });
+
+  it("skips when no package declares a requirement", () => {
+    expect(evaluateMsrv("1.88.0", [])).toEqual({
+      kind: "skipped",
+      reason: "no package in the graph declares a rust-version",
+    });
+  });
+
+  it("skips when the installed version cannot be read", () => {
+    expect(evaluateMsrv("", BINSTALL_GRAPH)).toEqual({
+      kind: "skipped",
+      reason: "the installed rustc version could not be read",
+    });
+  });
+});
+
+describe("describeVerdict", () => {
+  it("names the crate, its requirement and what is installed", () => {
+    expect(describeVerdict(evaluateMsrv("1.88.0", BINSTALL_GRAPH))).toBe(
+      "vergen 10.0.1 requires rustc 1.95.0, but 1.88.0 is installed.",
+    );
+  });
+
+  it("explains a skip", () => {
+    expect(describeVerdict(evaluateMsrv("1.88.0", []))).toBe(
+      "MSRV check skipped: no package in the graph declares a rust-version.",
+    );
+  });
+
+  it("says nothing interesting when the check passed", () => {
+    expect(
+      describeVerdict({
+        kind: "ok",
+        required: { version: "1.95.0", package: "vergen 10.0.1" },
+      }),
+    ).toBe("The installed toolchain satisfies every declared rust-version.");
   });
 });
