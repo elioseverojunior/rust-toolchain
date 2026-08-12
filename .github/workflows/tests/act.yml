@@ -25,9 +25,46 @@ jobs:
             targets: ""
             components: ""
             profile: ""
-            # A <major.minor> channel is passed through to rustup, which
-            # resolves it to the newest patch in the 1.97 series.
             expected: "1.97"
+            unexpected: ""
+            # No `cargo-binstall` here, and it is not an oversight: `ensureTools`
+            # installs with `cargo install --locked`, always from source, and
+            # cargo-binstall's tree does not finish inside
+            # CARGO_INSTALL_TIMEOUT_MS (15 min). Measured: three attempts, each
+            # killed with `spawnSync cargo ETIMEDOUT`, 46m22s total before the
+            # step failed. The tool that exists to avoid source builds cannot
+            # itself be installed without one.
+            #
+            # `ignorefile-cli`, not `ignorefile`: the latter is the library half
+            # of the same project and ships no binary, so `cargo install` exits
+            # with "there is nothing to install".
+            cargo-tools: "comply@0.1.1, ignorefile-cli@0.1.0"
+            # Binaries, not crate names — `ignorefile-cli` installs `ign` and
+            # `ignorefile`.
+            tool-bins: "comply ignorefile ign"
+            toml: |
+              [toolchain]
+              channel = "1.97"
+              targets = []
+              components = []
+              profile = "default"
+
+          - name: "1.88 input overrides toml 1.97"
+            toolchain: "1.88"
+            targets: ""
+            components: ""
+            profile: ""
+            expected: "1.88"
+            unexpected: "1.97"
+            # No tools on this row, and not from lack of trying: none of the
+            # three build on 1.88. `comply` declares rust-version 1.95, and
+            # `cargo-binstall` declares 1.79 but pins `vergen 10.0.1`, which
+            # needs 1.95 — `--locked` means cargo cannot pick an older one.
+            # Measured, not assumed: the run failed after 1m25s having retried
+            # the compile three times. A crate's declared MSRV says nothing
+            # about its locked dependency graph, so check the graph.
+            cargo-tools: ""
+            tool-bins: ""
             toml: |
               [toolchain]
               channel = "1.97"
@@ -78,6 +115,7 @@ jobs:
           cache: true
           cache-key-hash: ${{ hashFiles('bun.lock') }}
           cache-key-suffix: act
+          cargo-tools: ${{ matrix.cargo-tools }}
 
       - name: Verify Cache Output
         shell: bash
@@ -85,12 +123,25 @@ jobs:
         # also the only place the README's `restore-keys` expression is ever
         # evaluated by a real runner, and its block scalar must keep both lines
         # at identical indentation or the join separator gains leading spaces.
+        #
+        # `|| '{}'` is load-bearing, not defensive clutter. A step that failed
+        # publishes no outputs, so `outputs.cache` is `''` and `fromJSON('')`
+        # aborts the whole step with
+        # `The template is not valid ... Error reading JToken from JsonReader`.
+        # That error names a line number in this file and says nothing about
+        # the real failure, so it reads as a workflow bug and BURIES the
+        # action's own diagnostic. Seen for real in a downstream repo: the
+        # action failed with a precise "`cache-key-hash` is required" message,
+        # and two of the three errors on the run were this noise instead.
+        # Falling back to an empty object keeps the assertions below intact —
+        # they still fail, but on "registry cache key is empty", which is true
+        # and actionable.
         env:
           CACHE_JSON: ${{ steps.rust-toolchain.outputs.cache }}
-          REGISTRY_KEY: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.registry.key }}
-          BUILD_KEY: ${{ fromJSON(steps.rust-toolchain.outputs.cache).layers.build.key }}
+          REGISTRY_KEY: ${{ fromJSON(steps.rust-toolchain.outputs.cache || '{}').layers.registry.key }}
+          BUILD_KEY: ${{ fromJSON(steps.rust-toolchain.outputs.cache || '{}').layers.build.key }}
           REGISTRY_RESTORE_KEYS: |
-            ${{ join(fromJSON(steps.rust-toolchain.outputs.cache).layers.registry.restoreKeys, '
+            ${{ join(fromJSON(steps.rust-toolchain.outputs.cache || '{}').layers.registry.restoreKeys, '
             ') }}
         run: |
           echo "cache: $CACHE_JSON"
@@ -166,6 +217,90 @@ jobs:
               fi
           fi
 
+      - name: Verify Toml Was Read But Lost To The Input
+        if: matrix.unexpected != ''
+        shell: bash
+        # The provenance blocks are the only evidence that distinguishes "the
+        # input won" from "the toml was never parsed". Both produce a resolved
+        # 1.88, but only the first is the documented contract: a toml whose
+        # channel is ignored must still contribute its targets, components and
+        # profile, and it cannot do that if it was skipped outright.
+        env:
+          RESOLVED: ${{ steps.rust-toolchain.outputs.toolchain }}
+          # `|| '{}'` for the reason spelled out on Verify Cache Output above:
+          # an unguarded fromJSON over a failed step's empty output replaces the
+          # action's real error with a template error pointing here.
+          FROM_INPUT: ${{ fromJSON(steps.rust-toolchain.outputs.json || '{}').inputs.toolchain }}
+          FROM_TOML: ${{ fromJSON(steps.rust-toolchain.outputs.json || '{}').toml.channel }}
+          EXPECTED: ${{ matrix.expected }}
+          UNEXPECTED: ${{ matrix.unexpected }}
+        run: |
+          echo "resolved toolchain: $RESOLVED"
+          echo "inputs.toolchain:   $FROM_INPUT"
+          echo "toml.channel:       $FROM_TOML"
+
+          if [[ "$RESOLVED" != "$EXPECTED" ]]; then
+            echo "resolved toolchain is $RESOLVED, expected $EXPECTED"
+            exit 1
+          fi
+          if [[ "$FROM_INPUT" != "$EXPECTED" ]]; then
+            echo "inputs provenance is $FROM_INPUT, expected $EXPECTED"
+            exit 1
+          fi
+          # The losing channel must still be reported, verbatim, as what the
+          # file asked for.
+          if [[ "$FROM_TOML" != "$UNEXPECTED" ]]; then
+            echo "toml provenance is $FROM_TOML, expected $UNEXPECTED"
+            exit 1
+          fi
+
+      - name: Verify Overridden Channel Was Never Installed
+        if: matrix.unexpected != ''
+        shell: bash
+        env:
+          UNEXPECTED: ${{ matrix.unexpected }}
+        run: |
+          installed=$(rustup toolchain list)
+          echo "$installed"
+
+          # Anchored, with the dots escaped, so "1.97" cannot match inside a
+          # longer version and a substring match cannot pass for a real one.
+          if grep -qE "^${UNEXPECTED//./\\.}-" <<<"$installed"; then
+            echo "$UNEXPECTED was installed; the input should have replaced it"
+            exit 1
+          fi
+
+      - name: Verify Cargo Tools Installed
+        if: matrix.cargo-tools != ''
+        shell: bash
+        # Asserts the *binaries*, not the crate names. They diverge here:
+        # `ignorefile-cli` installs `ign` and `ignorefile`, which also means the
+        # action's `<name> --version` probe can never find it under its own
+        # crate name and will reinstall it on every run — the `bin` layer cannot
+        # help a tool it is unable to recognise.
+        env:
+          RESOLVED: ${{ steps.rust-toolchain.outputs.cargo-tools }}
+          TOOL_BINS: ${{ matrix.tool-bins }}
+        run: |
+          echo "cargo-tools output: $RESOLVED"
+
+          bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          for tool in $TOOL_BINS; do
+            if [[ ! -x "$bin/$tool" ]]; then
+              echo "$tool is not in $bin"
+              find "$bin" -maxdepth 1 -mindepth 1 -exec basename {} \; | sort
+              exit 1
+            fi
+            echo "  present: $tool"
+          done
+
+          # An unresolvable crate degrades to UNRESOLVED_VERSION rather than
+          # throwing, so a registry outage would otherwise pass silently here.
+          if [[ "$RESOLVED" == *UNRESOLVED_VERSION* ]]; then
+            echo "a tool version never resolved: $RESOLVED"
+            exit 1
+          fi
+
       - name: Verify Rust Installed
         shell: bash
         run: |
@@ -209,3 +344,45 @@ jobs:
             echo "default toolchain is not $expected"
             exit 1
           fi
+
+      - name: Verify Resolved Toolchain Persists Beside A Toml
+        shell: bash
+        # The last step in the job, deliberately: every assertion above reads
+        # the toolchain in the same step the action ran in, which cannot tell an
+        # exported `RUSTUP_TOOLCHAIN` from one that merely survived a single
+        # step. This runs cargo in a *fresh directory carrying the losing toml*,
+        # which is the only arrangement where the override chain is actually
+        # exercised — `rust-toolchain.toml` sits at precedence 4 and beats
+        # `rustup default`, so without the exported variable at precedence 2
+        # cargo here would resolve the toml's channel and download it.
+        env:
+          EXPECTED: ${{ matrix.expected }}
+        run: |
+          echo "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-<unset>}"
+
+          work="${RUNNER_TEMP:-/tmp}/persistence"
+          rm -rf "$work"
+          cargo new --bin "$work" >/dev/null
+
+          # Outside the checkout, so nothing here can be answered by the
+          # workspace itself; the toml is copied in so the directory makes the
+          # same claim the checkout does.
+          if [[ -f rust-toolchain.toml ]]; then
+            cp rust-toolchain.toml "$work/rust-toolchain.toml"
+            echo "copied toml:"
+            cat "$work/rust-toolchain.toml"
+          fi
+
+          cd "$work"
+
+          version=$(rustc --version)
+          echo "rustc beside the toml: $version"
+          if [[ "$version" != *"$EXPECTED"* ]]; then
+            echo "rustc is not $EXPECTED; the toml won at use time"
+            exit 1
+          fi
+
+          # A real compile, not just a version probe: the proxies pick the
+          # toolchain per invocation, so building is what proves cargo and rustc
+          # agree on it.
+          cargo build 2>&1 | tail -n 5
