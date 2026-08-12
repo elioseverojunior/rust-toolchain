@@ -340,6 +340,21 @@ describe("parseCargoManifest", () => {
     });
   });
 
+  // The single-crate-workspace layout: [package] and [workspace] in one file.
+  // Cargo does NOT inherit here — the member never opted in — so neither do
+  // we. Reporting 1.75 would claim an MSRV the crate does not declare, and
+  // under `msrv-fallback: true` would install it.
+  it("does not inherit into a package that did not opt in", () => {
+    const toml = [
+      "[workspace.package]",
+      'rust-version = "1.75"',
+      "",
+      "[package]",
+      'name = "root-crate"',
+    ].join("\n");
+    expect(parseCargoManifest(toml)).toEqual({ source: "none" });
+  });
+
   it("reports none for an empty manifest", () => {
     expect(parseCargoManifest("")).toEqual({ source: "none" });
   });
@@ -438,10 +453,18 @@ export function parseCargoManifest(contents: string): ManifestMsrv {
   const own = declaredVersion(document.package);
   if (own !== undefined) return { rustVersion: own, source: "cargo-toml" };
 
-  if (inherits(document.package) && workspaceVersion !== undefined) {
-    return { rustVersion: workspaceVersion, source: "workspace-inherit" };
-  }
-  if (workspaceVersion !== undefined) {
+  // Inheritance is opt-in, and that is the whole subtlety. Cargo hands a
+  // member the workspace value ONLY when it writes
+  // `rust-version.workspace = true`; a `[package]` that simply omits the key
+  // has no MSRV, even with `[workspace.package]` sitting in the same file.
+  // A virtual manifest is the other case — no `[package]` at all, so the
+  // workspace table IS the declaration rather than something inherited.
+  //
+  // Falling back to the workspace value unconditionally would report an MSRV
+  // the crate does not have, and under `msrv-fallback: true` would install a
+  // toolchain cargo never asked for.
+  const inheritable = !isRecord(document.package) || inherits(document.package);
+  if (inheritable && workspaceVersion !== undefined) {
     return { rustVersion: workspaceVersion, source: "workspace-inherit" };
   }
   return NONE;
