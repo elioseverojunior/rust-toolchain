@@ -25,8 +25,10 @@ import {
   type SavedLayer,
 } from "@rust-toolchain/cache/lifecycle";
 import {
+  parsePackageMsrv,
   parsePackageSet,
   type MetadataReader,
+  type PackageMsrv,
   type PackageSet,
 } from "@rust-toolchain/cache/metadata";
 import {
@@ -67,7 +69,14 @@ import {
 } from "@rust-toolchain/core";
 import { describeError } from "@rust-toolchain/errors";
 import { readBooleanInput } from "@rust-toolchain/inputs";
-import { parseCargoManifest, type ManifestMsrv } from "@rust-toolchain/msrv";
+import {
+  describeVerdict,
+  evaluateMsrv,
+  parseCargoManifest,
+  parseMsrvPolicy,
+  type ManifestMsrv,
+  type MsrvPolicy,
+} from "@rust-toolchain/msrv";
 import {
   buildActionOutputs,
   toOutputEntries,
@@ -137,6 +146,14 @@ export interface ActionDeps {
   cache: CacheClient;
   /** The only real implementation calls crates.io, also in `src/index.ts`. */
   registry: RegistryClient;
+  /**
+   * Runs `cargo metadata`; the real one is in `src/index.ts`.
+   *
+   * Shared with `PostDeps` below — one object serves both phases. `run` reads
+   * it for the MSRV check; `runPost` reads it again, separately, to compute a
+   * pruned layer's keep-set.
+   */
+  metadata: MetadataReader;
   /**
    * Moves a staged layer's files back into the tree after a restore.
    *
@@ -614,6 +631,49 @@ async function resolveCacheLifecycle(
   };
 }
 
+/**
+ * Compares the installed toolchain against the resolved graph's MSRV.
+ *
+ * Returns the effective requirement for the outputs, or `undefined` when the
+ * check did not run. Never throws: a check that cannot run is reported as a
+ * warning even under `error`, because inability to verify is not a violation
+ * and would otherwise fail every repository without a lockfile.
+ */
+async function checkMsrv(
+  deps: ActionDeps,
+  policy: MsrvPolicy,
+  installed: string,
+  manifestDir: string,
+): Promise<string | undefined> {
+  if (policy === "off") return undefined;
+
+  let packages: PackageMsrv[];
+  try {
+    packages = parsePackageMsrv(await deps.metadata.read(manifestDir));
+  } catch (error) {
+    deps.core.warning(`MSRV check could not run: ${describeError(error)}`);
+    return undefined;
+  }
+
+  const verdict = evaluateMsrv(installed, packages);
+  if (verdict.kind === "skipped") {
+    deps.core.warning(describeVerdict(verdict));
+    return undefined;
+  }
+
+  if (verdict.kind === "ok") {
+    deps.core.info(describeVerdict(verdict));
+    return verdict.required.version;
+  }
+
+  if (policy === "error") {
+    deps.core.setFailed(describeVerdict(verdict));
+  } else {
+    deps.core.warning(describeVerdict(verdict));
+  }
+  return verdict.required.version;
+}
+
 /** Installs the requested toolchain and publishes the action's outputs. */
 export async function run(deps: ActionDeps): Promise<void> {
   try {
@@ -745,6 +805,14 @@ export async function run(deps: ActionDeps): Promise<void> {
     deps.core.info(rustc.banner);
     applyCargoDefaults(deps, rustc.info.version);
 
+    const msrvPolicy = parseMsrvPolicy(deps.core.getInput("msrv-check"));
+    const msrvEffective = await checkMsrv(
+      deps,
+      msrvPolicy,
+      rustc.info.version,
+      deps.env.GITHUB_WORKSPACE ?? ".",
+    );
+
     const specCacheKey = generateSpecCacheKey(rustc.info.cacheKey, spec);
 
     // BEFORE the keys are derived, unavoidably: `toolSetHash` is a segment of
@@ -806,12 +874,10 @@ export async function run(deps: ActionDeps): Promise<void> {
       // `ensureTools`' outcomes: a consumer reading both `cargo-tools` and the
       // bin key needs them to describe one resolution.
       tools: toolResolution.tools,
-      // `effective` is not wired up yet — that reads the resolved dependency
-      // graph, a later task's job. This is only the declared floor from
-      // Cargo.toml, plus its provenance.
       msrv: {
         declared: config.manifest.rustVersion,
         source: config.manifest.source,
+        effective: msrvEffective,
       },
     });
     for (const [name, value] of toOutputEntries(outputs)) {
