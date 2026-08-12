@@ -11,8 +11,24 @@ on:
 permissions:
   contents: read
 
-env:
-  REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+# No `checkout` anywhere in this file, deliberately. `pull_request_target` runs
+# in the BASE repository's context with secrets and a writable token — here
+# `pull-requests: write` — so checking out a pull request's head would put
+# attacker-controlled code in a privileged workspace, which is the one mistake
+# this trigger exists to make easy. `actions/labeler` needs no working tree:
+# absent a local file it reads `.github/labeler.yml` from the source repository
+# over the API, which on this event is the base repo, so the config is trusted
+# no matter what the pull request contains.
+#
+# What stood here was a `ref: ${{ env.REF }}` checkout whose REF read
+# `github.event_name == 'pull_request' && ...head.sha || github.ref`. That
+# condition can never be true — `pull_request_target` is the only trigger — so
+# it always resolved to `github.ref`, the base branch, and a real run confirms
+# it checked out `refs/heads/main`. It was therefore safe, and CodeQL alert #1
+# ("Checkout of untrusted code in a privileged context") did not evaluate the
+# dead condition. Removed anyway: it advertised an intent that could not fire,
+# and collapsing that ternary to the head SHA someone would assume it already
+# used turns a false positive into a genuine high-severity vulnerability.
 
 jobs:
   label-files:
@@ -22,14 +38,6 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          submodules: "recursive"
-          fetch-depth: 0
-          fetch-tags: "true"
-          ref: ${{ env.REF }}
-
       - name: Label PR based on file paths
         uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
         with:
