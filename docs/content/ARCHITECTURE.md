@@ -321,7 +321,7 @@ flowchart TD
     K -.-> L[rustc --version --verbose]
     L --> M[applyCargoDefaults:<br/>CARGO_INCREMENTAL, CARGO_TERM_COLOR,<br/>registry protocol, http multiplexing]
     M --> Q[resolveCacheLifecycle, when cache is on:<br/>restoreLayers per enabled layer,<br/>saveState cache = plans + restored + budget]
-    Q --> R[checkMsrv, when msrv-check != off<br/>and Cargo.toml was readable:<br/>cargo metadata, compare against installed rustc.<br/>AFTER the restore on purpose -- a cold registry<br/>index must not be fetched twice]
+    Q --> R[checkMsrv, when msrv-check != off:<br/>per cache-workspaces directory with a readable<br/>Cargo.toml, cargo metadata + pool packages,<br/>compare max rust-version against installed rustc.<br/>AFTER the restore on purpose -- a cold registry<br/>index must not be fetched twice]
     R --> N[buildActionOutputs + toOutputEntries:<br/>cachekey, cachekey-full, name,<br/>toolchain, targets, target, components,<br/>profile, set-rustup-toolchain, cache,<br/>cache-hit, msrv, msrv-effective,<br/>msrv-source, json]
 ```
 
