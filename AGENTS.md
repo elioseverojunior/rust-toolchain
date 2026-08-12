@@ -379,6 +379,25 @@ subsections.
   version, rewrites `owner/repo/...@vX.Y.Z` references under `.github/`, tags,
   and publishes a GitHub Release. Never bump `package.json` or create tags by
   hand — the job does both, and a hand-made tag desynchronises GitVersion.
+- **A release moves four tags, and only the longest is stable.** For `0.5.0-11`
+  it publishes `v0.5.0-11` — created once and never moved — plus `v0.5.0`,
+  `v0.5` and `v0`, each deleted and recreated at the new commit. So `v0.5.0`
+  floats across `-N` rebuilds (verified: `v0.2.1` resolves to `v0.2.1-4`, not
+  `-2`), and `v0` crosses **minor** bumps, which pre-1.0 is where the
+  compatibility boundary is — `@v0` is the trap, not the safe default. When
+  checking any of this locally, note `git fetch --tags` will **not** overwrite a
+  tag you already have; a local `v0` can sit releases behind the remote and read
+  as a broken ladder. Use `git ls-remote --tags origin`.
+- **The rewrite covers `.github/` only, and extending it to `README.md` would be
+  a bug, not an improvement.** The `sed` rewrites any `@vX.Y` to the exact new
+  version, which is right for `.github/`, where every reference is a literal pin
+  that must move together. README's version references are pedagogical — the
+  Versioning table exists to contrast `@v0.5` against `@v0.5.0-11` — so the same
+  rewrite would collapse the recommended float into a fixed release and delete
+  the distinction the table teaches. The pattern also requires a path after the
+  repo name (`owner/repo/...@v`), so a bare `owner/repo@v0.5` never matches
+  anyway. README pins are updated by hand on a minor bump; there were 17 sitting
+  at `@v0.1` when the action had shipped `0.5`.
   `docs/content/RUNBOOKS.md` → Release Process documents the same job and was
   verified accurate against `cicd.yml`; the note that once called it out of
   date was itself the stale claim.
