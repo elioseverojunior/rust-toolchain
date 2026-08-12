@@ -554,6 +554,37 @@ describe("parsePackageMsrv", () => {
     expect(parsePackageMsrv(json)).toEqual([]);
   });
 
+  // Each guard needs its own input, or it is merely executed rather than
+  // pinned: with every fixture carrying a valid `version`, the version guard
+  // runs on every package and evaluates false every time, so deleting it
+  // would not fail a single test while 100% line coverage still passed.
+  it("skips a package whose version is missing or not a string", () => {
+    const json = JSON.stringify({
+      packages: [
+        { id: "a", name: "alpha", rust_version: "1.75" },
+        { id: "b", name: "beta", version: 2, rust_version: "1.80" },
+        { id: "c", name: "gamma", version: "", rust_version: "1.85" },
+      ],
+    });
+    expect(parsePackageMsrv(json)).toEqual([]);
+  });
+
+  it("skips a package whose name is empty", () => {
+    const json = JSON.stringify({
+      packages: [{ id: "a", name: "", version: "1.0.0", rust_version: "1.75" }],
+    });
+    expect(parsePackageMsrv(json)).toEqual([]);
+  });
+
+  it("skips an empty rust_version string", () => {
+    const json = JSON.stringify({
+      packages: [
+        { id: "a", name: "alpha", version: "1.0.0", rust_version: "" },
+      ],
+    });
+    expect(parsePackageMsrv(json)).toEqual([]);
+  });
+
   // Unlike parsePackageSet, this never throws on a half-formed entry: the
   // MSRV check is advisory, and a malformed package should cost its own
   // contribution, not the whole check.
