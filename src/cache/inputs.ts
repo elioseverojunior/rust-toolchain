@@ -178,6 +178,28 @@ function readCacheKeySuffix(source: CacheInputSource): string {
 }
 
 /**
+ * Reads `cache-workspaces` into resolved mappings, independent of whether
+ * `cache` itself is enabled.
+ *
+ * `readCacheRequest` below only reaches its own `parseWorkspaces` call when
+ * `cache` is on, which is right for the cache layers themselves — but the
+ * MSRV check (`checkMsrv` in `action.ts`) needs this same manifest-directory
+ * list whether or not caching is on: MSRV verification and caching are
+ * independent inputs, and gating manifest discovery behind `cache` would
+ * silently narrow the check to one directory for every consumer who runs
+ * with caching off, which is most of them until they opt in. Exported so
+ * `action.ts` can call it directly — as the fallback when `readCacheRequest`
+ * returned `undefined` — without re-implementing the default or the
+ * `GITHUB_WORKSPACE` resolution a second time.
+ */
+export function readCacheWorkspaces(source: CacheInputSource): Workspace[] {
+  return parseWorkspaces(
+    source.getInput("cache-workspaces").trim() || ". -> target",
+    (source.env.GITHUB_WORKSPACE ?? "").trim() || ".",
+  );
+}
+
+/**
  * Reads and validates every cache input, before anything is installed.
  *
  * Returns `undefined` when caching is off, which is also why none of the other
@@ -211,10 +233,7 @@ export function readCacheRequest(
     envHash: hashBuildEnv(source.env),
   };
 
-  const workspaces = parseWorkspaces(
-    source.getInput("cache-workspaces").trim() || ". -> target",
-    (source.env.GITHUB_WORKSPACE ?? "").trim() || ".",
-  );
+  const workspaces = readCacheWorkspaces(source);
   const budget = parseSize(source.getInput("cache-budget"));
 
   // Checked against a same-width stand-in for the digest, so the build layer —
