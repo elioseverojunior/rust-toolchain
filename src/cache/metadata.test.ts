@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "bun:test";
 
-import { parsePackageSet } from "@/cache/metadata";
+import { parsePackageMsrv, parsePackageSet } from "@/cache/metadata";
 
 /** Builds a `cargo metadata --format-version 1` document. */
 const doc = (
@@ -122,5 +122,55 @@ describe("parsePackageSet", () => {
     expect(() =>
       parsePackageSet(doc([{ name: "serde", version: "1.0.0" } as never])),
     ).toThrow(/id/i);
+  });
+});
+
+describe("parsePackageMsrv", () => {
+  it("returns only packages that declare a rust_version", () => {
+    const json = JSON.stringify({
+      packages: [
+        { id: "a", name: "alpha", version: "1.0.0", rust_version: "1.75" },
+        { id: "b", name: "beta", version: "2.0.0" },
+        { id: "c", name: "gamma", version: "3.0.0", rust_version: "1.95" },
+      ],
+    });
+    expect(parsePackageMsrv(json)).toEqual([
+      { name: "alpha", version: "1.0.0", rustVersion: "1.75" },
+      { name: "gamma", version: "3.0.0", rustVersion: "1.95" },
+    ]);
+  });
+
+  it("returns an empty list when no package declares one", () => {
+    const json = JSON.stringify({
+      packages: [{ id: "a", name: "alpha", version: "1.0.0" }],
+    });
+    expect(parsePackageMsrv(json)).toEqual([]);
+  });
+
+  it("skips a rust_version that is not a string", () => {
+    const json = JSON.stringify({
+      packages: [{ id: "a", name: "alpha", version: "1.0.0", rust_version: 1 }],
+    });
+    expect(parsePackageMsrv(json)).toEqual([]);
+  });
+
+  // Unlike parsePackageSet, this never throws on a half-formed entry: the
+  // MSRV check is advisory, and a malformed package should cost its own
+  // contribution, not the whole check.
+  it("skips entries that are not objects or lack a name", () => {
+    const json = JSON.stringify({
+      packages: [null, { version: "1.0.0", rust_version: "1.75" }],
+    });
+    expect(parsePackageMsrv(json)).toEqual([]);
+  });
+
+  it("returns an empty list when packages is missing", () => {
+    expect(parsePackageMsrv("{}")).toEqual([]);
+  });
+
+  it("throws on invalid JSON", () => {
+    expect(() => parsePackageMsrv("not json")).toThrow(
+      "`cargo metadata` did not emit valid JSON",
+    );
   });
 });
