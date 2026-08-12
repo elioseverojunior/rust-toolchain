@@ -91,6 +91,9 @@ describe("library barrel", () => {
         "compareVersions",
         "parseMsrvPolicy",
         "parseCargoManifest",
+        "effectiveMsrv",
+        "evaluateMsrv",
+        "describeVerdict",
         // outputs.ts
         "buildActionOutputs",
         "toOutputEntries",

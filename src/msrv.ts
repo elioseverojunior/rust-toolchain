@@ -4,6 +4,7 @@
 
 import { parse } from "smol-toml";
 
+import type { PackageMsrv } from "@rust-toolchain/cache/metadata";
 import { describeError } from "@rust-toolchain/errors";
 
 /** A Rust version as three numbers, with the pre-release suffix discarded. */
@@ -153,4 +154,120 @@ export function parseCargoManifest(contents: string): ManifestMsrv {
     return { rustVersion: workspaceVersion, source: "workspace-inherit" };
   }
   return NONE;
+}
+
+/** The highest declared requirement, and the package that declares it. */
+export interface MsrvRequirement {
+  version: string;
+  package: string;
+}
+
+/** The highest requirement, keeping the parsed form for comparison. */
+interface BestRequirement {
+  parsed: Version;
+  requirement: MsrvRequirement;
+}
+
+/**
+ * The maximum `rust-version` across the graph, parsed form included.
+ *
+ * Private, and the parsed value is why: `evaluateMsrv` needs it to compare
+ * without parsing the same string twice, while callers outside this module
+ * only ever want the requirement.
+ */
+function bestRequirement(packages: PackageMsrv[]): BestRequirement | undefined {
+  let best: BestRequirement | undefined;
+
+  for (const entry of packages) {
+    const parsed = parseVersion(entry.rustVersion);
+    if (!parsed) continue;
+    if (best && compareVersions(parsed, best.parsed) <= 0) continue;
+    best = {
+      parsed,
+      requirement: {
+        version: entry.rustVersion,
+        package: `${entry.name} ${entry.version}`,
+      },
+    };
+  }
+
+  return best;
+}
+
+/**
+ * The maximum `rust-version` across the resolved graph.
+ *
+ * A crate's own declaration is not the answer: cargo-binstall 1.21.1 declares
+ * 1.79 while pinning vergen 10.0.1, which needs 1.95. Under `--locked` the
+ * graph binds, so the floor is sixteen minor versions above what the crate
+ * advertises. Unparseable values are skipped rather than fatal — see
+ * `parseVersion`.
+ */
+export function effectiveMsrv(
+  packages: PackageMsrv[],
+): MsrvRequirement | undefined {
+  return bestRequirement(packages)?.requirement;
+}
+
+/**
+ * The outcome of comparing the installed toolchain against the graph.
+ *
+ * `ok` carries the requirement it cleared so the caller can publish
+ * `msrv-effective` from the verdict alone. Without it every caller would run
+ * the maximum a second time, and the two results could drift apart under a
+ * later edit.
+ */
+export type MsrvVerdict =
+  | { kind: "ok"; required: MsrvRequirement }
+  | { kind: "skipped"; reason: string }
+  | { kind: "violation"; installed: string; required: MsrvRequirement };
+
+/**
+ * Compares the installed rustc against the graph's effective MSRV.
+ *
+ * `skipped` is a distinct outcome from `ok` on purpose: a check that could not
+ * run is not a check that passed, and the caller reports the two differently.
+ * Inability to verify never fails a build, even under `msrv-check: error`.
+ */
+export function evaluateMsrv(
+  installed: string,
+  packages: PackageMsrv[],
+): MsrvVerdict {
+  const current = parseVersion(installed);
+  if (!current) {
+    return {
+      kind: "skipped",
+      reason: "the installed rustc version could not be read",
+    };
+  }
+
+  const best = bestRequirement(packages);
+  if (!best) {
+    return {
+      kind: "skipped",
+      reason: "no package in the graph declares a rust-version",
+    };
+  }
+
+  // `best.parsed` rather than re-parsing `best.requirement.version`: the same
+  // string, already read once, and re-reading it would add a branch for a
+  // failure that cannot happen here.
+  if (compareVersions(current, best.parsed) < 0) {
+    return { kind: "violation", installed, required: best.requirement };
+  }
+  return { kind: "ok", required: best.requirement };
+}
+
+/** Renders a verdict as the line a human reads in the log. */
+export function describeVerdict(verdict: MsrvVerdict): string {
+  if (verdict.kind === "violation") {
+    return (
+      `${verdict.required.package} requires rustc ${verdict.required.version}, ` +
+      `but ${verdict.installed} is installed.`
+    );
+  }
+  if (verdict.kind === "skipped") {
+    return `MSRV check skipped: ${verdict.reason}.`;
+  }
+  return "The installed toolchain satisfies every declared rust-version.";
 }
