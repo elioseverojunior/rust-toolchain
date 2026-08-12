@@ -126,6 +126,21 @@ describe("parseCargoManifest", () => {
     });
   });
 
+  // The single-crate-workspace layout: [package] and [workspace] in one file.
+  // Cargo does NOT inherit here — the member never opted in — so neither do
+  // we. Reporting 1.75 would claim an MSRV the crate does not declare, and
+  // under `msrv-fallback: true` would install it.
+  it("does not inherit into a package that did not opt in", () => {
+    const toml = [
+      "[workspace.package]",
+      'rust-version = "1.75"',
+      "",
+      "[package]",
+      'name = "root-crate"',
+    ].join("\n");
+    expect(parseCargoManifest(toml)).toEqual({ source: "none" });
+  });
+
   it("reports none for an empty manifest", () => {
     expect(parseCargoManifest("")).toEqual({ source: "none" });
   });
