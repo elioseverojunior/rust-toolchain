@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+import { parse } from "smol-toml";
+
+import { describeError } from "@rust-toolchain/errors";
+
 /** A Rust version as three numbers, with the pre-release suffix discarded. */
 export interface Version {
   major: number;
@@ -70,4 +74,75 @@ export function parseMsrvPolicy(value: string): MsrvPolicy {
     `\`msrv-check\` is \`${value.trim()}\`, which is not a policy. ` +
       `Valid values are off, warn, error.`,
   );
+}
+
+/** Where a resolved `rust-version` came from. */
+export type MsrvSource = "cargo-toml" | "workspace-inherit" | "none";
+
+/** A manifest's declared MSRV, with its provenance. */
+export interface ManifestMsrv {
+  rustVersion?: string;
+  source: MsrvSource;
+}
+
+const NONE: ManifestMsrv = { source: "none" };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+/** The string at `<table>.rust-version`, or undefined when absent or typed wrong. */
+function declaredVersion(table: unknown): string | undefined {
+  if (!isRecord(table)) return undefined;
+  const value = table["rust-version"];
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/** True for `rust-version.workspace = true`, cargo's inheritance marker. */
+function inherits(table: unknown): boolean {
+  if (!isRecord(table)) return false;
+  const value = table["rust-version"];
+  return isRecord(value) && value.workspace === true;
+}
+
+/**
+ * Reads a `Cargo.toml`'s MSRV, resolving workspace inheritance.
+ *
+ * Three shapes matter. `[package] rust-version` is the plain case. A virtual
+ * manifest has no `[package]` and declares `[workspace.package] rust-version`.
+ * A member writes `rust-version.workspace = true`, which parses to the OBJECT
+ * `{ workspace: true }` — read naively that is not a version at all, and it is
+ * the one trap in this function.
+ *
+ * Throws on malformed TOML rather than guessing, matching
+ * `parseRustToolchainToml`: a syntax error hides the author's intent, and
+ * falling back would install a toolchain nobody asked for.
+ */
+export function parseCargoManifest(contents: string): ManifestMsrv {
+  if (!contents.trim()) return NONE;
+
+  let document: unknown;
+  try {
+    document = parse(contents);
+  } catch (error) {
+    throw new Error(`Cargo.toml is not valid TOML: ${describeError(error)}`, {
+      cause: error,
+    });
+  }
+  if (!isRecord(document)) return NONE;
+
+  const workspacePackage = isRecord(document.workspace)
+    ? document.workspace.package
+    : undefined;
+  const workspaceVersion = declaredVersion(workspacePackage);
+
+  const own = declaredVersion(document.package);
+  if (own !== undefined) return { rustVersion: own, source: "cargo-toml" };
+
+  if (inherits(document.package) && workspaceVersion !== undefined) {
+    return { rustVersion: workspaceVersion, source: "workspace-inherit" };
+  }
+  if (workspaceVersion !== undefined) {
+    return { rustVersion: workspaceVersion, source: "workspace-inherit" };
+  }
+  return NONE;
 }
