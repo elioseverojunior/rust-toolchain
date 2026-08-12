@@ -268,7 +268,7 @@ requirement and fail the step if they cannot be installed.
 > the step immediately, with a message naming the cause, rather than after a
 > failed download.
 
-<!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v0.1" -->
+<!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v0.5" -->
 
 ## Description
 
@@ -436,7 +436,7 @@ This action is a `node24` action.
     # Default: false
 ```
 
-<!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v0.1" -->
+<!-- action-docs-all source="action.yml" project="elioseverojunior/rust-toolchain" version="v0.5" -->
 
 ## Reading the Resolved Configuration
 

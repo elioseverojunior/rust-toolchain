@@ -2844,6 +2844,51 @@ describe("msrv-check across cache-workspaces directories", () => {
     ).toBe(true);
   });
 
+  it("evaluates the maximum MSRV across every directory, even when the higher one is first", async () => {
+    // The companion test above happens to put the higher MSRV in the LAST
+    // directory processed, which cannot distinguish "pool every directory's
+    // packages" from "keep only the last directory read" -- both give the
+    // same answer. This fixture inverts the order so only pooling is
+    // correct: if `checkMsrv` ever regressed to last-directory-wins, this
+    // would report 1.70 (from crates/b) instead of 1.95.0 (from crates/a).
+    const h = harness({
+      inputs: MULTI_WORKSPACE,
+      files: { ...CARGO_TOML_A, ...CARGO_TOML_B },
+      metadataByDir: {
+        "/workspace/crates/a": JSON.stringify({
+          packages: [
+            {
+              id: "a",
+              name: "pkg-a",
+              version: "1.0.0",
+              rust_version: "1.95.0",
+            },
+          ],
+        }),
+        "/workspace/crates/b": JSON.stringify({
+          packages: [
+            { id: "b", name: "pkg-b", version: "1.0.0", rust_version: "1.70" },
+          ],
+        }),
+      },
+      release: "1.88.0",
+    });
+    await run(h.deps);
+
+    expect(h.metadataCalls.slice().sort()).toEqual([
+      "/workspace/crates/a",
+      "/workspace/crates/b",
+    ]);
+    expect(h.outputs["msrv-effective"]).toBe("1.95.0");
+    expect(
+      h.warnings.some((w) =>
+        /pkg-a 1\.0\.0 requires rustc 1\.95\.0, but 1\.88\.0 is installed/.test(
+          w,
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("skips a directory with no Cargo.toml silently, and still checks the other", async () => {
     const h = harness({
       inputs: MULTI_WORKSPACE,
