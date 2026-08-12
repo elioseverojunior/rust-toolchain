@@ -27,9 +27,16 @@ Two independent capabilities, deliberately separate inputs because they read dif
   with the packages pooled and evaluated once, since one installed toolchain compiles all of them.
 - **`msrv-fallback`** (boolean, default `false`) — when neither an input nor `rust-toolchain.toml` names a channel,
   derive it from `Cargo.toml`'s `rust-version` instead of falling through to `stable`.
+- **`msrv-install`** (boolean, default `false`) — after the resolved toolchain installs, also install the declared
+  MSRV (the same value as the `msrv` output, never `msrv-effective`) as a second, inert toolchain: no `rustup
+default`, no `RUSTUP_TOOLCHAIN` export, so it is reachable only via `cargo +<msrv>`. Skipped when the declared MSRV
+  already equals the resolved channel, and a no-op when no `rust-version` is declared. Unlike `msrv-check`, a failed
+  install here fails the job — the toolchain was explicitly requested, so an unresolvable channel is a configuration
+  error, not something to warn past.
 
 Plus three outputs — `msrv`, `msrv-effective`, `msrv-source` — so a downstream job can build a matrix from values
-this action already computed.
+this action already computed. `msrv-install` adds no output of its own; it consumes `msrv` rather than publishing
+anything new.
 
 Each output has exactly one source, so neither can drift into meaning the other:
 
@@ -69,8 +76,14 @@ downstream matrix reads `1.79`, installs it, and fails — in exactly the situat
 
 ## Non-goals
 
-- **Installing a second toolchain.** The action installs one toolchain, as it does today. Verification is a version
-  comparison, not a second build.
+- **Building with a second toolchain.** The action still compiles with exactly one toolchain, as it does today;
+  verification is a version comparison, not a second build. This is narrower than, and not a contradiction of,
+  **installing** a second toolchain: `msrv-install` (above) does exactly that, but the toolchain it installs is
+  inert — never made active, no `rustup default`, no `RUSTUP_TOOLCHAIN` export — so it sits on disk unused until a
+  later step names it explicitly with `cargo +<msrv>`. Actually _building_ with it remains out of scope, and for the
+  reason the Cache interaction section below gives: two toolchains compiling into one `target/` would make each
+  cache layer carry the other's bytes forever, which is exactly what a workflow matrix (one job per toolchain, each
+  calling this action with a different `toolchain` input) avoids for free.
 - **Building twice.** An MSRV job that actually compiles under the MSRV is a workflow matrix concern — one job per
   toolchain, each calling this action with a different `toolchain` input, which already works and already yields
   clean per-toolchain `build` cache keys. Folding that inside one job duplicates the matrix and, as
@@ -288,3 +301,8 @@ that an existing workflow sees no behaviour change on upgrade and adopts either 
 `rust-toolchain.toml` from silently moving off `stable`. `warn` for the check means a dependency bump that raises
 the graph's floor surfaces as a warning rather than a red build, which is the right default for something whose
 input can change without the repository changing.
+
+**`msrv-install: false`** is decided on the same principle as the other two: no behaviour change on upgrade. Unlike
+the fallback, though, the installed toolchain is inert — it cannot silently change what a build does — so the reason
+is cost rather than correctness: it is a download nobody asked for until a workflow step names it with
+`cargo +<msrv>`, and most workflows never will.

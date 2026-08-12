@@ -144,6 +144,7 @@ This is a **GitHub Action** for Rust toolchain installation, inspired by [dtolna
 
 - **`rust-toolchain.toml` by default** — reads the project's `rust-toolchain.toml` to determine channel/targets/components/profile
 - **`cargo-tools`** — installs cargo tools and caches their binaries in a `bin` layer keyed on the resolved tool set alone, with rustup's own shims excluded so a toolchain bump does not reinstall them
+- **`msrv-install`** — installs the crate's declared MSRV alongside the resolved toolchain, inert and reachable only via `cargo +<msrv>`, so a later step can run `cargo +<msrv> check` without its own `rustup toolchain install`
 - **Override by inputs** — action inputs (`toolchain`, `targets`, `target`, `components`, `profile`) override toml values. For the list inputs that means merged and deduped with inputs leading, so `targets[0]` — and therefore the `target` output — is one the caller named whenever they named one
 - **Fluent Builder pattern** — `ToolchainSpecBuilder` with chaining for programmatic construction
 - **Compatible outputs** — `cachekey` and `name` match dtolnay/rust-toolchain; `cachekey-full` extends it with the full-precision digest the `build` restore ladder refuses to fall back past
@@ -215,6 +216,34 @@ Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions.
   1.21.1 declares `rust-version = 1.79` while pinning vergen 10.0.1, which
   needs 1.95, so a manifest-only check passes and the build then fails. This is
   why `msrv` and `msrv-effective` are separate outputs.
+- **`msrv-install` installs the DECLARED `msrv`, never `msrv-effective`, and
+  never becomes the active toolchain.** It exists so a later step can run
+  `cargo +<msrv> check` without its own `rustup toolchain install`; the point
+  is proving the crate builds at the floor it advertises, so a dependency that
+  pushed the real floor higher should fail that check rather than have this
+  action quietly install a newer toolchain instead. Default `false`, for the
+  same "no behaviour change on upgrade" reason as `msrv-fallback`/`msrv-check`
+  — the toolchain is inert until named, so the cost is a wasted download, not
+  a correctness hazard. Grouped with the primary install in `src/action.ts`,
+  not with the MSRV check: it reads only `config.manifest`, already parsed in
+  Phase 1, and never touches `cargo metadata`. No `rustup default` and no
+  `RUSTUP_TOOLCHAIN` export for it — those two lines are what make the
+  resolved channel win every override chain, and doing either for the MSRV
+  toolchain would make `cargo +<msrv>` redundant with plain `cargo`. Skipped
+  with a `core.info` line when the declared MSRV already equals the resolved
+  channel, silently a no-op when no `rust-version` is declared. Unlike the
+  check, a failed install here is never downgraded to a warning: the
+  toolchain was explicitly requested, so an unresolvable channel is a real
+  configuration error the caller needs to see now, not a confusing failure in
+  their own `cargo +<msrv>` step later. It also installs at `spec.profile` —
+  the SAME resolved profile the primary toolchain uses, built via a second
+  `ToolchainSpec` so `toRustupInstallArgs`/`toRustupProfileComponentAddArgs`
+  need no re-derivation — never a profile of its own; a hardcoded `minimal`
+  was tried and rejected, because it silently drops `clippy`/`rustfmt` from a
+  `default`-profile job's `cargo +<msrv> clippy` step. The implied components
+  are added afterwards pinned to the MSRV toolchain with `--toolchain`, for
+  the same reason the primary's own profile-component step exists: rustup
+  honours `--profile` only on a toolchain's first install.
 - **`checkMsrv` runs `cargo metadata` once per `cache-workspaces` directory,
   not once at `GITHUB_WORKSPACE`.** A monorepo whose crates live under
   `crates/a`, `crates/b` is checked in every one of them, with a directory's

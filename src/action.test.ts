@@ -2362,6 +2362,210 @@ describe("msrv-fallback", () => {
   });
 });
 
+// `msrv-install` installs the DECLARED MSRV (the `msrv` output), never
+// `msrv-effective`, and only so a later `cargo +<msrv>` step has something to
+// find — it never becomes the active toolchain and never depends on
+// `cargo metadata`, unlike the msrv-check describes above.
+describe("msrv-install", () => {
+  const toolchainInstalls = (h: Harness): ExecCall[] =>
+    h.calls.filter(
+      (c) =>
+        c.file === "rustup" &&
+        c.args[0] === "toolchain" &&
+        c.args[1] === "install",
+    );
+
+  it("installs nothing extra by default, even with a declared rust-version", async () => {
+    const h = harness({
+      files: { "Cargo.toml": '[package]\nrust-version = "1.88"\n' },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(toolchainInstalls(h)).toHaveLength(1);
+    expect(toolchainInstalls(h)[0]?.args).not.toContain("1.88");
+  });
+
+  it("installs exactly the declared MSRV when true, at the resolved (default) profile", async () => {
+    const h = harness({
+      inputs: { "msrv-install": "true" },
+      files: { "Cargo.toml": '[package]\nrust-version = "1.88"\n' },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    const installs = toolchainInstalls(h);
+    expect(installs).toHaveLength(2);
+    const msrvInstall = installs.find((c) => c.args[2] === "1.88");
+    expect(msrvInstall?.args).toEqual([
+      "toolchain",
+      "install",
+      "1.88",
+      "--profile",
+      "default",
+      "--no-self-update",
+    ]);
+  });
+
+  // The MSRV toolchain must follow the SAME resolved profile as the primary
+  // one — never a hardcoded profile of its own — whether that profile came
+  // from an input or from rust-toolchain.toml.
+  it("uses the resolved profile input, not a hardcoded one", async () => {
+    const h = harness({
+      inputs: {
+        toolchain: "nightly",
+        profile: "complete",
+        "msrv-install": "true",
+      },
+      files: { "Cargo.toml": '[package]\nrust-version = "1.75"\n' },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    const msrvInstall = toolchainInstalls(h).find((c) => c.args[2] === "1.75");
+    expect(msrvInstall?.args).toEqual([
+      "toolchain",
+      "install",
+      "1.75",
+      "--profile",
+      "complete",
+      "--no-self-update",
+    ]);
+  });
+
+  it("uses the resolved profile from rust-toolchain.toml when no profile input is set", async () => {
+    const h = harness({
+      toml: `[toolchain]
+channel = "1.89.0"
+profile = "minimal"
+`,
+      inputs: { "msrv-install": "true" },
+      files: { "Cargo.toml": '[package]\nrust-version = "1.60"\n' },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    const msrvInstall = toolchainInstalls(h).find((c) => c.args[2] === "1.60");
+    expect(msrvInstall?.args).toEqual([
+      "toolchain",
+      "install",
+      "1.60",
+      "--profile",
+      "minimal",
+      "--no-self-update",
+    ]);
+    // `minimal` implies no components, so nothing is added on the MSRV
+    // toolchain's behalf.
+    expect(
+      h.calls.some((c) => c.args[0] === "component" && c.args[3] === "1.60"),
+    ).toBe(false);
+  });
+
+  // rustup only honours `--profile` on a toolchain's first install and
+  // silently ignores it on one already present, so the implied components
+  // must also be added by name, pinned to the MSRV toolchain specifically —
+  // mirroring the primary install's own profile-component step.
+  it("adds the profile's implied components pinned to the MSRV toolchain", async () => {
+    const h = harness({
+      inputs: { "msrv-install": "true" },
+      files: { "Cargo.toml": '[package]\nrust-version = "1.88"\n' },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(h.calls.map((c) => c.args)).toContainEqual([
+      "component",
+      "add",
+      "--toolchain",
+      "1.88",
+      "rust-docs",
+      "rustfmt",
+      "clippy",
+    ]);
+  });
+
+  it("warns rather than fails when a profile component cannot be added to the MSRV toolchain", async () => {
+    const h = harness({
+      inputs: { "msrv-install": "true" },
+      files: { "Cargo.toml": '[package]\nrust-version = "1.88"\n' },
+      execResults: {
+        // The primary toolchain's own implied-component add succeeds first;
+        // every attempt at the MSRV toolchain's then fails.
+        "component add": [
+          { status: 0, stdout: "" },
+          { status: 1 },
+          { status: 1 },
+          { status: 1 },
+        ],
+      },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(h.logs).toContain(
+      'Could not add every component implied by the "default" profile to ' +
+        "the MSRV toolchain, continuing: rustup component add --toolchain " +
+        "1.88 rust-docs rustfmt clippy failed with exit code 1",
+    );
+  });
+
+  it("installs nothing and warns nothing when no rust-version exists anywhere", async () => {
+    const h = harness({ inputs: { "msrv-install": "true" } });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(toolchainInstalls(h)).toHaveLength(1);
+    expect(h.warnings).toEqual([]);
+    expect(h.logs.some((l) => /msrv-install/i.test(l))).toBe(false);
+  });
+
+  it("skips a redundant install when the declared MSRV equals the resolved channel", async () => {
+    const h = harness({
+      inputs: { toolchain: "nightly", "msrv-install": "true" },
+      files: { "Cargo.toml": '[package]\nrust-version = "nightly"\n' },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(toolchainInstalls(h)).toHaveLength(1);
+    expect(h.logs).toContain(
+      "msrv-install: the declared MSRV (nightly) is already the resolved " +
+        "toolchain, skipping a redundant install.",
+    );
+  });
+
+  it("never becomes the active toolchain", async () => {
+    const h = harness({
+      inputs: { "msrv-install": "true" },
+      files: { "Cargo.toml": '[package]\nrust-version = "1.60"\n' },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(h.exported.RUSTUP_TOOLCHAIN).toBe("stable");
+    expect(h.calls.map((c) => c.args)).not.toContainEqual(["default", "1.60"]);
+  });
+
+  it("surfaces a failed MSRV install as a build failure rather than swallowing it", async () => {
+    const h = harness({
+      inputs: { "msrv-install": "true" },
+      files: { "Cargo.toml": '[package]\nrust-version = "1.60"\n' },
+      execResults: {
+        "toolchain install": [
+          { status: 0, stdout: "" },
+          { status: 1 },
+          { status: 1 },
+          { status: 1 },
+        ],
+      },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toHaveLength(1);
+    expect(h.failures[0]).toMatch(/rustup toolchain install/);
+  });
+});
+
 // F7: parseCargoManifest's throw is justified only when msrv-fallback needs
 // the file to resolve a channel. With the flag off, nothing downstream reads
 // the manifest, so a TOML error in it must not fail an action that never

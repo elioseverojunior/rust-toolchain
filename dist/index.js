@@ -63853,6 +63853,27 @@ async function run(deps) {
       deps.core.exportVariable("RUSTUP_TOOLCHAIN", spec.channel);
     }
     env.RUSTUP_TOOLCHAIN = spec.channel;
+    const msrvInstall = readBooleanInput(deps.core, "msrv-install", false);
+    const declaredMsrv = config.manifest.rustVersion;
+    if (msrvInstall.value && declaredMsrv !== undefined) {
+      if (declaredMsrv === spec.channel) {
+        deps.core.info(`msrv-install: the declared MSRV (${declaredMsrv}) is already the ` + "resolved toolchain, skipping a redundant install.");
+      } else {
+        const msrvSpecBuilder = new ToolchainSpecBuilder().withChannel(declaredMsrv);
+        if (spec.profile)
+          msrvSpecBuilder.withProfile(spec.profile);
+        const msrvSpec = msrvSpecBuilder.build();
+        rustupOrThrow(deps, msrvSpec.toRustupInstallArgs(), env);
+        const msrvProfileComponentArgs = msrvSpec.toRustupProfileComponentAddArgs();
+        if (msrvProfileComponentArgs) {
+          try {
+            rustupOrThrow(deps, msrvProfileComponentArgs, env);
+          } catch (error2) {
+            deps.core.info(`Could not add every component implied by the ` + `"${msrvSpec.profile}" profile to the MSRV toolchain, ` + `continuing: ${describeError(error2)}`);
+          }
+        }
+      }
+    }
     const rustc = readRustcVersion(deps, env);
     deps.core.info(rustc.banner);
     applyCargoDefaults(deps, rustc.info.version);
