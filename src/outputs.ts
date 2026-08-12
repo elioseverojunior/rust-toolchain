@@ -8,6 +8,7 @@ import type { CacheLayerId } from "@rust-toolchain/cache/layers";
 import type { LayerResult } from "@rust-toolchain/cache/lifecycle";
 import type { ToolchainInputs } from "@rust-toolchain/config";
 import type { ToolchainTomlConfig } from "@rust-toolchain/core";
+import type { MsrvSource } from "@rust-toolchain/msrv";
 import type { ResolvedTool } from "@rust-toolchain/tools";
 
 /**
@@ -109,6 +110,26 @@ export interface ActionOutputs {
   target: string;
   components: string[];
   profile: string;
+  /**
+   * The workspace root's declared `rust-version`, or `""`.
+   *
+   * The root manifest only, never a maximum over members: this is read before
+   * cargo exists, so expanding member globs would mean reimplementing cargo's
+   * workspace resolution. A member declaring more still surfaces, through
+   * `msrv-effective`.
+   */
+  msrv: string;
+  /**
+   * The highest `rust-version` in the resolved graph, or `""`.
+   *
+   * Distinct from `msrv` because they routinely differ, and the gap is the
+   * finding: cargo-binstall declares 1.79 and its graph needs 1.95. A consumer
+   * choosing a toolchain wants this one; a consumer reporting the project's
+   * own floor wants `msrv`.
+   */
+  "msrv-effective": string;
+  /** Where `msrv` came from. */
+  "msrv-source": MsrvSource;
   "set-rustup-toolchain": boolean;
   /**
    * The resolved cargo tools as `name@version`, in the order they were asked
@@ -169,6 +190,12 @@ export interface ActionOutputsArgs {
    * caller forgets, and forgetting it publishes an empty tool list forever.
    */
   tools: readonly ResolvedTool[];
+  /** The declared and effective MSRV, and where the declared one was read. */
+  msrv: {
+    declared?: string;
+    source: MsrvSource;
+    effective?: string;
+  };
 }
 
 /**
@@ -192,6 +219,9 @@ export function buildActionOutputs(args: ActionOutputsArgs): ActionOutputs {
     // mergeConfig always resolves a profile, but ToolchainSpec permits none;
     // the fallback keeps `undefined` out of a string-typed output.
     profile: spec.profile ?? "",
+    msrv: args.msrv.declared ?? "",
+    "msrv-effective": args.msrv.effective ?? "",
+    "msrv-source": args.msrv.source,
     "set-rustup-toolchain": args.setRustupToolchain.value,
     // Built here rather than shared with `hashToolSet`, which formats the same
     // pair identically. The resemblance is a coincidence of both being the
@@ -244,6 +274,9 @@ export function toOutputEntries(outputs: ActionOutputs): [string, string][] {
     ["target", outputs.target],
     ["components", JSON.stringify(outputs.components)],
     ["profile", outputs.profile],
+    ["msrv", outputs.msrv],
+    ["msrv-effective", outputs["msrv-effective"]],
+    ["msrv-source", outputs["msrv-source"]],
     ["set-rustup-toolchain", String(outputs["set-rustup-toolchain"])],
     ["cargo-tools", JSON.stringify(outputs["cargo-tools"])],
     ["cache-hit", String(outputs["cache-hit"])],
