@@ -94,8 +94,12 @@ inputs:
       `rust-version` in the resolved dependency graph: `off`, `warn` (default)
       or `error`. The graph is what binds, not the crate's own declaration —
       a crate can declare 1.79 while pinning a dependency that needs 1.95.
-      A check that cannot run, for want of a lockfile or a manifest, always
-      warns and never fails, whatever this is set to.
+      Covers every directory named by `cache-workspaces` (default the
+      checkout root alone), not the root manifest only, so a monorepo whose
+      crates live under their own manifests is still checked. A directory
+      with no `Cargo.toml` is skipped silently. A check that cannot run, for
+      want of a lockfile or a manifest anywhere, always warns and never
+      fails, whatever this is set to.
     required: false
     default: "warn"
 
@@ -314,13 +318,15 @@ outputs:
   msrv-effective:
     description: >
       The highest `rust-version` across every package in the resolved
-      dependency graph, or an empty string. Use this, not `msrv`, to choose a
+      dependency graph, or an empty string. Resolved over every directory
+      named by `cache-workspaces`, not the root manifest only — unlike
+      `msrv` below, which stays root-only. Use this, not `msrv`, to choose a
       toolchain: the two differ whenever a dependency outruns the crate's own
       declared floor. Empty under `msrv-check: off`, since the check that
       computes it never ran — also empty when the check ran but could not
-      complete (no `Cargo.toml`, no lockfile, or no package in the graph
-      declares a `rust-version`), the same as `off`. Build a matrix from this
-      output only when `msrv-check` is `warn` or `error`.
+      complete (no `Cargo.toml` in any directory, no lockfile, or no package
+      in the graph declares a `rust-version`), the same as `off`. Build a
+      matrix from this output only when `msrv-check` is `warn` or `error`.
 
   msrv-source:
     description: >

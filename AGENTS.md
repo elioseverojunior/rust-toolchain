@@ -215,6 +215,18 @@ Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions.
   1.21.1 declares `rust-version = 1.79` while pinning vergen 10.0.1, which
   needs 1.95, so a manifest-only check passes and the build then fails. This is
   why `msrv` and `msrv-effective` are separate outputs.
+- **`checkMsrv` runs `cargo metadata` once per `cache-workspaces` directory,
+  not once at `GITHUB_WORKSPACE`.** A monorepo whose crates live under
+  `crates/a`, `crates/b` is checked in every one of them, with a directory's
+  packages skipped silently when it has no `Cargo.toml` and a directory's
+  `cargo metadata` failure warned by name rather than aborting the others;
+  every directory's packages are pooled and evaluated once, since one
+  installed toolchain compiles all of them. `cacheRequest.workspaces` only
+  exists when `cache` is enabled, so the check falls back to a direct
+  `readCacheWorkspaces` parse (`src/cache/inputs.ts`) when it is off — the
+  common default — rather than silently narrowing to one directory for every
+  consumer who has not opted into caching. `msrv`/`msrv-source` are
+  unaffected and stay root-manifest-only: see the note on `src/msrv.ts` below.
 
 ## Architecture
 
@@ -231,7 +243,7 @@ Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions.
   - `src/outputs.ts` — `buildActionOutputs` maps the resolved spec plus the inputs, toml and cache lifecycle outcome it was merged from onto the action's outputs; `toOutputEntries` flattens them to the `name, value` pairs GitHub accepts, serialising lists as JSON arrays and the whole object as `json`
   - `src/cache/layers.ts` — `CACHE_LAYER_IDS`, the canonical layer list, and `parseCacheLayers`, which reads the `cache-layers` input into a deduped layer list
   - `src/cache/keys.ts` — `joinKeySegments` (collapses empty segments) and `buildLayerKey`, which derives a layer's key and restore-key ladder; the `build` key folds in `envHash`
-  - `src/cache/inputs.ts` — reads and validates every `cache-*` input before anything is installed (`readCacheRequest`), then completes the validated request into per-layer keys once the spec digest exists (`buildCacheOutputs`). Takes a narrow `CacheInputSource` rather than `ActionDeps`, which is what keeps it free of an import cycle back to `action.ts`
+  - `src/cache/inputs.ts` — reads and validates every `cache-*` input before anything is installed (`readCacheRequest`), then completes the validated request into per-layer keys once the spec digest exists (`buildCacheOutputs`). `readCacheWorkspaces` reads `cache-workspaces` on its own, independent of whether `cache` itself is enabled — `readCacheRequest` calls it internally, and `action.ts` calls it a second time as the MSRV check's fallback for when `cacheRequest` is `undefined`. Takes a narrow `CacheInputSource` rather than `ActionDeps`, which is what keeps it free of an import cycle back to `action.ts`
   - `src/cache/env.ts` — `hashBuildEnv` digests the `CARGO_*`/`CC`/`CFLAGS`/`CXX`/`CMAKE`/`RUST*` environment into the `build` key's `envHash` segment, so two jobs differing only in `RUSTFLAGS` stop sharing a key
   - `src/cache/paths.ts` — `parseWorkspaces` reads `cache-workspaces` into resolved `<manifest-dir> -> <target-dir>` mappings, rejecting anything that resolves outside the checkout; `registryPaths` and `buildPaths` name each layer's **unpruned** paths, used when `cache-prune: off`. `registryPaths` lists bare directories and lets tar recurse; `buildPaths` cannot, because it has exclusions — it emits a files-only glob set (`<target>/**` plus `!<target>/**/incremental/**`, `!<target>/**/examples/**` and the `!<target>/` and `!<target>/**/` directory negations), since `@actions/cache` runs `tar --files-from` without `--no-recursion` and any directory left in the manifest re-includes the excluded subtrees. Neither takes a keep-set: narrowing the paths array changes the cache entry's identity, so a pruned layer archives a stage instead — see `cache/stage.ts`
   - `src/cache/budget.ts` — `parseSize` reads `cache-budget` into a byte count (binary suffixes, `0` disables it); `measurePaths` sums a layer's on-disk size through an injected `StatFs` port

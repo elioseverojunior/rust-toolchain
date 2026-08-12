@@ -13,6 +13,7 @@ import type { CacheClient } from "@rust-toolchain/cache/client";
 import {
   buildCacheOutputs,
   readCacheRequest,
+  readCacheWorkspaces,
   type CacheRequest,
 } from "@rust-toolchain/cache/inputs";
 import type { CacheLayerId } from "@rust-toolchain/cache/layers";
@@ -245,38 +246,41 @@ function readTomlConfig(deps: ActionDeps): ToolchainTomlConfig {
   return parseRustToolchainToml(contents);
 }
 
-/** The outcome of attempting to read the workspace's `Cargo.toml`. */
-interface CargoManifestRead {
-  manifest: ManifestMsrv;
-  /**
-   * False only when no `Cargo.toml` exists in the workspace at all.
-   *
-   * This is the signal `checkMsrv` uses to skip silently: a warning is right
-   * when the check was *expected* to work and could not (an unreadable
-   * `cargo metadata`, a missing lockfile), and wrong when there was never
-   * anything to check. A manifest that exists but fails to parse is still
-   * `present: true` — the file `cargo metadata` would read is right there,
-   * so the check is left to try it rather than being skipped pre-emptively.
-   */
-  present: boolean;
+/**
+ * Reads a directory's `Cargo.toml`, or `undefined` when none exists there.
+ *
+ * The single I/O boundary both `readCargoManifest` below (root-only, for the
+ * `msrv`/`msrv-source` outputs) and `checkMsrv` (per `cache-workspaces`
+ * directory, where only presence matters) go through, so "no Cargo.toml
+ * here" is decided in exactly one place instead of two try/catch blocks that
+ * could drift. Returning the contents rather than a bare boolean lets
+ * `readCargoManifest` reuse this same read instead of opening the file
+ * twice; `checkMsrv` only cares whether the result is `undefined`.
+ */
+function readManifestIfPresent(
+  deps: ActionDeps,
+  dir: string,
+): string | undefined {
+  try {
+    return deps.readFile(join(dir, "Cargo.toml"));
+  } catch {
+    // Not every consumer of this action has a Cargo.toml in every directory
+    // it names — not every dtolnay/rust-toolchain-style checkout is a Rust
+    // workspace at all — and its absence is not an error.
+    return undefined;
+  }
 }
 
 function readCargoManifest(
   deps: ActionDeps,
   fallbackOn: boolean,
-): CargoManifestRead {
+): ManifestMsrv {
   const workspace = deps.env.GITHUB_WORKSPACE ?? ".";
-  let contents: string;
-  try {
-    contents = deps.readFile(join(workspace, "Cargo.toml"));
-  } catch {
-    // No manifest in the workspace — not every consumer of this action has
-    // one at the root, and its absence is not an error.
-    return { manifest: { source: "none" }, present: false };
-  }
+  const contents = readManifestIfPresent(deps, workspace);
+  if (contents === undefined) return { source: "none" };
 
   try {
-    return { manifest: parseCargoManifest(contents), present: true };
+    return parseCargoManifest(contents);
   } catch (error) {
     // A malformed Cargo.toml must not fail the whole action when neither
     // MSRV feature needs it to parse. parseCargoManifest's own throw is
@@ -289,7 +293,7 @@ function readCargoManifest(
       `Cargo.toml could not be parsed, continuing without its MSRV data: ` +
         describeError(error),
     );
-    return { manifest: { source: "none" }, present: true };
+    return { source: "none" };
   }
 }
 
@@ -315,8 +319,6 @@ interface ResolvedConfiguration {
   inputs: ToolchainInputs;
   toml: ToolchainTomlConfig;
   manifest: ManifestMsrv;
-  /** Whether a `Cargo.toml` exists at all — see `CargoManifestRead`. */
-  manifestPresent: boolean;
 }
 
 function resolveConfiguration(deps: ActionDeps): ResolvedConfiguration {
@@ -325,10 +327,7 @@ function resolveConfiguration(deps: ActionDeps): ResolvedConfiguration {
   // Read before the manifest: readCargoManifest's rethrow-vs-warn choice for
   // a malformed Cargo.toml depends on whether msrv-fallback is on.
   const fallback = readBooleanInput(deps.core, "msrv-fallback", false);
-  const { manifest, present: manifestPresent } = readCargoManifest(
-    deps,
-    fallback.value,
-  );
+  const manifest = readCargoManifest(deps, fallback.value);
   const resolved = mergeConfig(
     toml,
     inputs,
@@ -349,7 +348,6 @@ function resolveConfiguration(deps: ActionDeps): ResolvedConfiguration {
     inputs,
     toml,
     manifest,
-    manifestPresent,
   };
 }
 
@@ -680,37 +678,55 @@ async function resolveCacheLifecycle(
 }
 
 /**
- * Compares the installed toolchain against the resolved graph's MSRV.
+ * Compares the installed toolchain against every `cache-workspaces`
+ * directory's resolved MSRV.
  *
- * Returns the effective requirement for the outputs, or `undefined` when the
- * check did not run. Never throws: a check that cannot run is reported as a
- * warning even under `error`, because inability to verify is not a violation
- * and would otherwise fail every repository without a lockfile.
+ * One toolchain compiles every directory the job touches, so the packages
+ * from all of them are pooled and evaluated ONCE — the effective MSRV is
+ * their maximum, wherever in the tree it is declared. Returns that
+ * requirement for the outputs, or `undefined` when the check did not run
+ * anywhere. Never throws: a check that cannot run is reported as a warning
+ * even under `error`, because inability to verify is not a violation and
+ * would otherwise fail every repository without a lockfile.
  *
- * The one exception to "reported as a warning" is `manifestPresent: false`:
- * with no `Cargo.toml` at all there was never anything to check, which is not
- * the same fact as "the check was expected to work and could not" — so this
- * returns `undefined` silently, before `cargo metadata` is ever invoked,
- * rather than warning on every run for a consumer who never enabled either
- * MSRV feature.
+ * Each directory is independent. One with no `Cargo.toml` is skipped
+ * silently — no warning, and `cargo metadata` is never invoked for it —
+ * because there was never anything to check there, which is not the same
+ * fact as "the check was expected to work and could not". If not a single
+ * directory has a manifest, this returns `undefined` silently, exactly
+ * today's behaviour for a repository with no `Cargo.toml` anywhere. One
+ * whose `cargo metadata` fails warns *naming that directory* and the loop
+ * continues — a monorepo needs to know which crate broke the check, and one
+ * bad directory must not silence every other one's contribution.
  */
 async function checkMsrv(
   deps: ActionDeps,
   policy: MsrvPolicy,
   installed: string,
-  manifestDir: string,
-  manifestPresent: boolean,
+  manifestDirs: string[],
 ): Promise<string | undefined> {
   if (policy === "off") return undefined;
-  if (!manifestPresent) return undefined;
 
-  let packages: PackageMsrv[];
-  try {
-    packages = parsePackageMsrv(await deps.metadata.read(manifestDir));
-  } catch (error) {
-    deps.core.warning(`MSRV check could not run: ${describeError(error)}`);
-    return undefined;
+  const packages: PackageMsrv[] = [];
+  // Distinct from `packages.length > 0`: a directory can read successfully
+  // and still declare no `rust-version` anywhere, which is a real verdict
+  // ("skipped: no package declares") rather than "the check never ran".
+  let anyMetadataRead = false;
+
+  for (const dir of manifestDirs) {
+    if (readManifestIfPresent(deps, dir) === undefined) continue;
+
+    try {
+      packages.push(...parsePackageMsrv(await deps.metadata.read(dir)));
+      anyMetadataRead = true;
+    } catch (error) {
+      deps.core.warning(
+        `MSRV check could not run for ${dir}: ${describeError(error)}`,
+      );
+    }
   }
+
+  if (!anyMetadataRead) return undefined;
 
   const verdict = evaluateMsrv(installed, packages);
   if (verdict.kind === "skipped") {
@@ -760,10 +776,19 @@ export async function run(deps: ActionDeps): Promise<void> {
     // Narrowed to what that module actually needs, rather than handed the whole
     // of `deps`: taking `ActionDeps` there would make it import this file for
     // the type while this file imports it back.
-    const cacheRequest = readCacheRequest({
-      getInput: deps.core.getInput,
-      env: deps.env,
-    });
+    const cacheInputSource = { getInput: deps.core.getInput, env: deps.env };
+    const cacheRequest = readCacheRequest(cacheInputSource);
+
+    // `cacheRequest.workspaces` only exists when `cache` is enabled — but
+    // `checkMsrv` below needs the same manifest-directory list regardless,
+    // since MSRV checking and caching are independent inputs. Falling back to
+    // a fresh `cache-workspaces` parse (rather than defaulting to just
+    // `GITHUB_WORKSPACE`) is what makes the check monorepo-aware for the
+    // common case where caching is off. Computed here, with the other cache
+    // inputs, so a malformed `cache-workspaces` fails before the rustup
+    // bootstrap it would otherwise throw away.
+    const cacheWorkspaces =
+      cacheRequest?.workspaces ?? readCacheWorkspaces(cacheInputSource);
 
     // Parsed alongside the cache inputs, and for the same reason: it is
     // checked against nothing but itself, so a malformed tool name must fail
@@ -904,12 +929,15 @@ export async function run(deps: ActionDeps): Promise<void> {
     // asks for it. See the design doc's Risks section: "must run after the
     // registry layer restores or it may fetch the index." Do not move this
     // back above `resolveCacheLifecycle`.
+    //
+    // `cacheWorkspaces` names every directory `cache-workspaces` does, not
+    // just the root: a monorepo's crates live under their own manifests, and
+    // `cargo metadata` at the repo root alone would find none of them.
     const msrvEffective = await checkMsrv(
       deps,
       msrvPolicy,
       rustc.info.version,
-      deps.env.GITHUB_WORKSPACE ?? ".",
-      config.manifestPresent,
+      cacheWorkspaces.map((workspace) => workspace.manifestDir),
     );
 
     // AFTER the restore, and that ordering is the point (D2 of the Phase C

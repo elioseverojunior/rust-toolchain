@@ -22,7 +22,9 @@ Two independent capabilities, deliberately separate inputs because they read dif
 
 - **`msrv-check`** (`off` / `warn` / `error`, default `warn`) — after the toolchain is installed, compare the
   installed `rustc` against the **effective MSRV** of the resolved dependency graph, and report a violation naming
-  the crate responsible.
+  the crate responsible. Runs over every directory named by `cache-workspaces` (default the checkout root alone), not
+  the root manifest only — a monorepo whose crates live under `crates/a`, `crates/b` is checked in every one of them,
+  with the packages pooled and evaluated once, since one installed toolchain compiles all of them.
 - **`msrv-fallback`** (boolean, default `false`) — when neither an input nor `rust-toolchain.toml` names a channel,
   derive it from `Cargo.toml`'s `rust-version` instead of falling through to `stable`.
 
@@ -34,13 +36,17 @@ Each output has exactly one source, so neither can drift into meaning the other:
 | output           | defined as                                                                                                       | read in                   |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------- |
 | `msrv`           | `rust-version` in the workspace-root `Cargo.toml` — `[package]`, or `[workspace.package]` for a virtual manifest | Phase 1, `smol-toml`      |
-| `msrv-effective` | the maximum `rust_version` across every package in the locked graph                                              | Phase 2, `cargo metadata` |
+| `msrv-effective` | the maximum `rust_version` across every package in the locked graph of every `cache-workspaces` directory        | Phase 2, `cargo metadata` |
 | `msrv-source`    | `cargo-toml`, `workspace-inherit`, or `none`                                                                     | Phase 1                   |
 
-`msrv` is deliberately the **root manifest only**, not a maximum over workspace members. Phase 1 runs before cargo
-exists, so member globs cannot be expanded without reimplementing cargo's own workspace resolution. A member
-declaring a higher `rust-version` than the root is still caught — it appears in the graph, so it lands in
-`msrv-effective`.
+`msrv` is deliberately the **root manifest only**, not a maximum over workspace members or `cache-workspaces`
+directories. Phase 1 runs before cargo exists, so member globs cannot be expanded without reimplementing cargo's own
+workspace resolution. The check does not share that constraint — Phase 2 runs after the toolchain install, so `cargo
+metadata` is available and is run once per `cache-workspaces` directory (default the checkout root alone). A member
+declaring a higher `rust-version` than the root is still caught within one workspace's own graph, and a monorepo's
+crate under `crates/a` with its own `Cargo.toml` is caught too, because `cache-workspaces` names that directory
+separately — both land in `msrv-effective`, which is the maximum across every directory's pooled packages, evaluated
+once since one installed toolchain compiles all of them.
 
 ## Why the effective MSRV is the point
 
@@ -100,8 +106,8 @@ flowchart TD
 
     subgraph P2["Phase 2 — verification, cargo now exists"]
         direction TB
-        Meta["NEW cargo metadata --format-version 1 --locked"]
-        Meta --> Collect["NEW collect rust_version from<br/>every package in the graph"]
+        Meta["NEW cargo metadata --format-version 1 --locked,<br/>once per cache-workspaces directory"]
+        Meta --> Collect["NEW pool rust_version from every<br/>package across every directory's graph"]
         Collect --> Eff["NEW effective MSRV = max of them"]
         Eff --> Cmp{"NEW installed rustc<br/>&gt;= effective MSRV?"}
         Cmp -- yes --> OK["proceed"]
@@ -154,6 +160,15 @@ shape this codebase quarantines in `src/index.ts` to keep the coverage gate reac
 - Phase 1: when `msrv-fallback` is on and neither source names a channel, read `<workspace>/Cargo.toml`.
 - Phase 2: after `readRustcVersion`, run the check. **`metadata` must be wired into `run`'s `ActionDeps`** — today
   `src/index.ts:142` injects it into `runPost` only, so this is new wiring, not a reuse.
+- `checkMsrv` takes the list of manifest directories `cache-workspaces` names — the same list `computeKeepSet`
+  already walks for pruning, read through `cacheRequest.workspaces` when caching is on, or a direct
+  `readCacheWorkspaces` parse when it is off, since MSRV checking and caching are independent inputs and gating one
+  behind the other would silently narrow the check to one directory for every consumer who runs with caching off,
+  which is most of them until they opt in. A directory with no `Cargo.toml` is skipped before `cargo metadata` is
+  ever invoked for it; one whose `cargo metadata` fails warns _naming that directory_ and the others still
+  contribute — a monorepo needs to know which crate broke the check, and one bad directory must not silence every
+  other one's contribution. Every directory's packages are pooled and evaluated once, since one installed toolchain
+  compiles all of them.
 
 ### `action.yml` / `src/outputs.ts`
 
@@ -170,14 +185,16 @@ code rather than what was asked for.
 
 A verification feature that silently skips is worse than none, so the two failure modes are reported differently:
 
-| situation                                                                   | behaviour                                                                        |
-| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Violation found                                                             | obey `msrv-check`; the message names the crate, its version, and the requirement |
-| Check could not run — no `Cargo.toml`, no lockfile, `cargo metadata` failed | **always warn, never fail**, even under `error`, and say why                     |
-| No `rust-version` anywhere in the graph                                     | `msrv` empty, check skipped, no warning                                          |
+| situation                                                             | behaviour                                                                                                          |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Violation found                                                       | obey `msrv-check`; the message names the crate, its version, and the requirement                                   |
+| No directory named by `cache-workspaces` has a `Cargo.toml`           | silent skip, no warning, `cargo metadata` never runs                                                               |
+| One directory's `cargo metadata` failed — no lockfile, a broken graph | **always warn, never fail**, even under `error`; the message names that directory, and the others still contribute |
+| No `rust-version` anywhere in the pooled graph                        | `msrv-effective` empty, check skipped, one warning                                                                 |
 
 Inability to verify is not a violation. Conflating them would make `msrv-check: error` fail every repository without
-a lockfile.
+a lockfile. A directory with no `Cargo.toml` at all is the one case that stays silent even under `error`: there was
+never anything to check there, which is a different fact from "the check was expected to work and could not".
 
 ## Cache interaction
 
@@ -199,9 +216,10 @@ are not enough.
 
 ## Risks
 
-**A new main-phase `cargo metadata` call.** It needs `Cargo.lock`, and it must run after the `registry` layer
-restores or it may fetch the index. This is real added cost on every run where `msrv-check` is on, which is why the
-check is skippable with `off` and why an unavailable graph degrades to a warning rather than an error.
+**A new main-phase `cargo metadata` call, once per `cache-workspaces` directory.** Each needs its own `Cargo.lock`,
+and every one of them must run after the `registry` layer restores or it may fetch the index. This is real added
+cost on every run where `msrv-check` is on, scaling with the directory count, which is why the check is skippable
+with `off` and why an unavailable graph degrades to a warning rather than an error.
 
 **Dependency MSRV drift.** A green build can turn red after an unrelated `cargo update` pulls a dependency with a
 higher `rust-version`. That is the check working, but it will surprise people; the `warn` default softens the
@@ -222,6 +240,13 @@ pin, not an MSRV. Conflating them is the central hazard this feature must not in
   workspace, using the measured `cargo-binstall` / `vergen` numbers as the fixture.
 - Unit, `src/action.test.ts`: the policy matrix — `off` / `warn` / `error` × violation / no violation / cannot
   determine — plus fallback on and off with each combination of input and toml.
+- Unit, `src/action.test.ts`, `describe("msrv-check across cache-workspaces directories")`: the maximum across two
+  directories regardless of which one is higher; a directory with no manifest skipped silently while the other still
+  runs; no directory anywhere having a manifest; one directory's `cargo metadata` failing while the other still
+  contributes, naming the failed directory in the warning; a violation originating in a non-root directory failing
+  under `error`; and `off` calling `metadata.read` zero times across several directories. Caching stays off
+  throughout these, since that is the default and `cacheRequest.workspaces` does not exist in that case —
+  `readCacheWorkspaces` is what the check falls back to.
 - `metadata` is already a port, so no subprocess is needed in tests.
 - One case in `.github/workflows/tests/act.yml` exercising a real graph end to end.
 
@@ -235,6 +260,24 @@ pin, not an MSRV. Conflating them is the central hazard this feature must not in
 3. `msrv` and `msrv-effective` differ on the `cargo-binstall` fixture, and both appear in `json`.
 4. A repository with no lockfile warns and succeeds under `msrv-check: error`.
 5. 100% coverage holds and `hk check --all` stays green.
+6. A monorepo whose crates live under directories named by `cache-workspaces` — not the checkout root — is checked in
+   every one of them, with no dependency on `cache` being enabled.
+
+## Monorepo awareness — closed
+
+The first shipped version of `checkMsrv` ran `cargo metadata` against exactly one directory —
+`deps.env.GITHUB_WORKSPACE ?? "."` — regardless of `cache-workspaces`. A monorepo whose crates live under `crates/a`,
+`crates/b` therefore got no MSRV check at all: `cargo metadata` at the repo root either fails (no `Cargo.toml` there)
+or resolves a graph nobody meant to check. This was a recorded limitation, not a design decision, and it is now
+closed: `checkMsrv` takes the list of manifest directories `cache-workspaces` names, pools every directory's packages
+that has a `Cargo.toml`, and evaluates the maximum once — the same list `computeKeepSet` already walks for pruning.
+
+The one wrinkle is that `cacheRequest.workspaces` only exists when `cache` is enabled — the common default is
+`cache: false`, and `readCacheRequest` returns `undefined` before it ever parses `cache-workspaces` in that case. The
+check therefore falls back to a direct `readCacheWorkspaces` parse (`src/cache/inputs.ts`) whenever `cacheRequest` is
+`undefined`, so MSRV coverage never depends on caching being turned on. `msrv` and `msrv-source` are unaffected by any
+of this — they stay root-manifest-only, for the reason given above: Phase 1 runs before cargo exists, so member globs
+and `cache-workspaces` entries alike cannot be expanded without reimplementing cargo's own workspace resolution.
 
 ## Decided
 

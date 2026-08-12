@@ -63004,6 +63004,9 @@ function readCacheKeySuffix(source) {
     return suffix;
   throw new Error("`cache-key-suffix` must not contain a comma or whitespace, got " + `${JSON.stringify(suffix)}. actions/cache rejects a key containing a ` + "comma, and a joined `restore-keys` block splits on a newline, so an " + "embedded one would arrive as two keys.");
 }
+function readCacheWorkspaces(source) {
+  return parseWorkspaces(source.getInput("cache-workspaces").trim() || ". -> target", (source.env.GITHUB_WORKSPACE ?? "").trim() || ".");
+}
 function readCacheRequest(source) {
   if (!readBooleanInput(source, "cache", false).value)
     return;
@@ -63020,7 +63023,7 @@ function readCacheRequest(source) {
     lockHash,
     envHash: hashBuildEnv(source.env)
   };
-  const workspaces = parseWorkspaces(source.getInput("cache-workspaces").trim() || ". -> target", (source.env.GITHUB_WORKSPACE ?? "").trim() || ".");
+  const workspaces = readCacheWorkspaces(source);
   const budget = parseSize(source.getInput("cache-budget"));
   for (const layer of layers) {
     const { key } = buildLayerKey(layer, {
@@ -63584,21 +63587,25 @@ function readTomlConfig(deps) {
   }
   return parseRustToolchainToml(contents);
 }
+function readManifestIfPresent(deps, dir) {
+  try {
+    return deps.readFile(join8(dir, "Cargo.toml"));
+  } catch {
+    return;
+  }
+}
 function readCargoManifest(deps, fallbackOn) {
   const workspace = deps.env.GITHUB_WORKSPACE ?? ".";
-  let contents;
+  const contents = readManifestIfPresent(deps, workspace);
+  if (contents === undefined)
+    return { source: "none" };
   try {
-    contents = deps.readFile(join8(workspace, "Cargo.toml"));
-  } catch {
-    return { manifest: { source: "none" }, present: false };
-  }
-  try {
-    return { manifest: parseCargoManifest(contents), present: true };
+    return parseCargoManifest(contents);
   } catch (error2) {
     if (fallbackOn)
       throw error2;
     deps.core.warning(`Cargo.toml could not be parsed, continuing without its MSRV data: ` + describeError(error2));
-    return { manifest: { source: "none" }, present: true };
+    return { source: "none" };
   }
 }
 function readInputs(deps) {
@@ -63614,7 +63621,7 @@ function resolveConfiguration(deps) {
   const inputs = readInputs(deps);
   const toml = readTomlConfig(deps);
   const fallback = readBooleanInput(deps.core, "msrv-fallback", false);
-  const { manifest, present: manifestPresent } = readCargoManifest(deps, fallback.value);
+  const manifest = readCargoManifest(deps, fallback.value);
   const resolved = mergeConfig(toml, inputs, fallback.value ? manifest.rustVersion : undefined);
   const channel = resolveChannel(resolved.channel);
   assertProfileAvailable(channel, resolved.profile);
@@ -63625,8 +63632,7 @@ function resolveConfiguration(deps) {
     spec: builder.build(),
     inputs,
     toml,
-    manifest,
-    manifestPresent
+    manifest
   };
 }
 function hasRustup(deps, env) {
@@ -63767,18 +63773,23 @@ async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome
     cacheHit: restored.length > 0 && restored.every((entry) => entry.result === "exact")
   };
 }
-async function checkMsrv(deps, policy, installed, manifestDir, manifestPresent) {
+async function checkMsrv(deps, policy, installed, manifestDirs) {
   if (policy === "off")
     return;
-  if (!manifestPresent)
-    return;
-  let packages;
-  try {
-    packages = parsePackageMsrv(await deps.metadata.read(manifestDir));
-  } catch (error2) {
-    deps.core.warning(`MSRV check could not run: ${describeError(error2)}`);
-    return;
+  const packages = [];
+  let anyMetadataRead = false;
+  for (const dir of manifestDirs) {
+    if (readManifestIfPresent(deps, dir) === undefined)
+      continue;
+    try {
+      packages.push(...parsePackageMsrv(await deps.metadata.read(dir)));
+      anyMetadataRead = true;
+    } catch (error2) {
+      deps.core.warning(`MSRV check could not run for ${dir}: ${describeError(error2)}`);
+    }
   }
+  if (!anyMetadataRead)
+    return;
   const verdict = evaluateMsrv(installed, packages);
   if (verdict.kind === "skipped") {
     deps.core.warning(describeVerdict(verdict));
@@ -63798,10 +63809,9 @@ async function checkMsrv(deps, policy, installed, manifestDir, manifestPresent) 
 async function run(deps) {
   try {
     deps.core.saveState("isPost", "true");
-    const cacheRequest = readCacheRequest({
-      getInput: deps.core.getInput,
-      env: deps.env
-    });
+    const cacheInputSource = { getInput: deps.core.getInput, env: deps.env };
+    const cacheRequest = readCacheRequest(cacheInputSource);
+    const cacheWorkspaces = cacheRequest?.workspaces ?? readCacheWorkspaces(cacheInputSource);
     const prunePolicy = parsePrunePolicy(deps.core.getInput("cache-prune"));
     const toolSpecs = parseToolSpecs(deps.core.getInput("cargo-tools"));
     const msrvPolicy = parseMsrvPolicy(deps.core.getInput("msrv-check"));
@@ -63854,7 +63864,7 @@ async function run(deps) {
       delay: deps.delay
     });
     const { cache, cacheHit } = await resolveCacheLifecycle(deps, cacheRequest, specCacheKey, rustupEnv.CARGO_HOME, hashToolSet(toolResolution.tools), prunePolicy);
-    const msrvEffective = await checkMsrv(deps, msrvPolicy, rustc.info.version, deps.env.GITHUB_WORKSPACE ?? ".", config.manifestPresent);
+    const msrvEffective = await checkMsrv(deps, msrvPolicy, rustc.info.version, cacheWorkspaces.map((workspace) => workspace.manifestDir));
     ensureTools(toolResolution, {
       exec: deps.exec,
       env,

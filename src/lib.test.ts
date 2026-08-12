@@ -28,6 +28,7 @@ describe("library barrel", () => {
         // cache/env.ts
         "hashBuildEnv",
         // cache/inputs.ts
+        "readCacheWorkspaces",
         "readCacheRequest",
         "buildCacheOutputs",
         // cache/keys.ts

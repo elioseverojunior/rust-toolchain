@@ -133,6 +133,14 @@ function harness(
     files?: Record<string, string>;
     metadataJson?: string;
     metadataError?: Error;
+    /**
+     * Per-`manifestDir` metadata responses, checked before the single
+     * `metadataJson` fallback above — for tests with more than one
+     * `cache-workspaces` directory, where each needs its own graph.
+     */
+    metadataByDir?: Record<string, string>;
+    /** Per-`manifestDir` metadata failures, same precedence as `metadataByDir`. */
+    metadataErrorByDir?: Record<string, Error>;
   } = {},
 ): Harness {
   const calls: ExecCall[] = [];
@@ -171,7 +179,11 @@ function harness(
         if (options.toml == null) throw new Error("ENOENT");
         return options.toml;
       }
-      const extra = options.files?.[name];
+      // Full-path match first, so a multi-`cache-workspaces` test can give
+      // two directories' `Cargo.toml` different content (or make one of them
+      // absent). Falling back to a bare basename keeps every existing
+      // single-workspace test's `files: { "Cargo.toml": ... }` unchanged.
+      const extra = options.files?.[path] ?? options.files?.[name];
       if (extra === undefined) throw new Error("ENOENT");
       return extra;
     },
@@ -241,7 +253,11 @@ function harness(
       read: (manifestDir: string) => {
         order.push("metadata");
         metadataCalls.push(manifestDir);
+        const dirError = options.metadataErrorByDir?.[manifestDir];
+        if (dirError) return Promise.reject(dirError);
         if (options.metadataError) return Promise.reject(options.metadataError);
+        const dirJson = options.metadataByDir?.[manifestDir];
+        if (dirJson !== undefined) return Promise.resolve(dirJson);
         return Promise.resolve(options.metadataJson ?? "{}");
       },
     },
@@ -2560,5 +2576,172 @@ describe("msrv-check", () => {
     const metadataIndex = h.order.indexOf("metadata");
     expect(restoreIndex).toBeGreaterThanOrEqual(0);
     expect(metadataIndex).toBeGreaterThan(restoreIndex);
+  });
+});
+
+// The gap this closes: `checkMsrv` used to read exactly one directory
+// (`GITHUB_WORKSPACE`), so a monorepo whose crates live under `crates/a`,
+// `crates/b` got no MSRV check at all -- `cargo metadata` at the repo root
+// either fails or finds nothing. `cache-workspaces` already names the
+// manifest directories a monorepo cares about, for pruning; these tests pin
+// the check onto that same list. Caching itself stays off throughout, since
+// that is the default and the realistic case: the check must be
+// monorepo-aware whether or not `cache` is enabled.
+describe("msrv-check across cache-workspaces directories", () => {
+  const MULTI_WORKSPACE = {
+    "cache-workspaces":
+      "crates/a -> crates/a/target\ncrates/b -> crates/b/target",
+  };
+  const CARGO_TOML_A = {
+    "/workspace/crates/a/Cargo.toml":
+      '[package]\nname = "a"\nversion = "0.1.0"\n',
+  };
+  const CARGO_TOML_B = {
+    "/workspace/crates/b/Cargo.toml":
+      '[package]\nname = "b"\nversion = "0.1.0"\n',
+  };
+
+  it("evaluates the maximum MSRV across every directory, even when the higher one is not first", async () => {
+    const h = harness({
+      inputs: MULTI_WORKSPACE,
+      files: { ...CARGO_TOML_A, ...CARGO_TOML_B },
+      metadataByDir: {
+        "/workspace/crates/a": JSON.stringify({
+          packages: [
+            { id: "a", name: "pkg-a", version: "1.0.0", rust_version: "1.70" },
+          ],
+        }),
+        "/workspace/crates/b": JSON.stringify({
+          packages: [
+            {
+              id: "b",
+              name: "pkg-b",
+              version: "1.0.0",
+              rust_version: "1.95.0",
+            },
+          ],
+        }),
+      },
+      release: "1.88.0",
+    });
+    await run(h.deps);
+
+    expect(h.metadataCalls.slice().sort()).toEqual([
+      "/workspace/crates/a",
+      "/workspace/crates/b",
+    ]);
+    expect(h.outputs["msrv-effective"]).toBe("1.95.0");
+    expect(
+      h.warnings.some((w) =>
+        /pkg-b 1\.0\.0 requires rustc 1\.95\.0, but 1\.88\.0 is installed/.test(
+          w,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("skips a directory with no Cargo.toml silently, and still checks the other", async () => {
+    const h = harness({
+      inputs: MULTI_WORKSPACE,
+      files: CARGO_TOML_A,
+      metadataByDir: {
+        "/workspace/crates/a": JSON.stringify({
+          packages: [
+            { id: "a", name: "pkg-a", version: "1.0.0", rust_version: "1.70" },
+          ],
+        }),
+      },
+    });
+    await run(h.deps);
+
+    expect(h.metadataCalls).toEqual(["/workspace/crates/a"]);
+    expect(h.warnings).toEqual([]);
+  });
+
+  it("returns silently, without calling metadata, when no directory has a Cargo.toml", async () => {
+    const h = harness({
+      inputs: { ...MULTI_WORKSPACE, "msrv-check": "error" },
+    });
+    await run(h.deps);
+
+    expect(h.metadataCalls).toEqual([]);
+    expect(h.warnings).toEqual([]);
+    expect(h.failures).toEqual([]);
+    expect(h.outputs["msrv-effective"]).toBe("");
+  });
+
+  it("warns naming the directory whose metadata read failed, and still evaluates the other", async () => {
+    const h = harness({
+      inputs: { ...MULTI_WORKSPACE, "msrv-check": "error" },
+      files: { ...CARGO_TOML_A, ...CARGO_TOML_B },
+      metadataErrorByDir: {
+        "/workspace/crates/a": new Error("could not find `Cargo.lock`"),
+      },
+      metadataByDir: {
+        "/workspace/crates/b": JSON.stringify({
+          packages: [
+            { id: "b", name: "pkg-b", version: "1.0.0", rust_version: "1.70" },
+          ],
+        }),
+      },
+      release: "1.88.0",
+    });
+    await run(h.deps);
+
+    expect(h.metadataCalls.slice().sort()).toEqual([
+      "/workspace/crates/a",
+      "/workspace/crates/b",
+    ]);
+    expect(
+      h.warnings.some(
+        (w) =>
+          w.includes("/workspace/crates/a") &&
+          /MSRV check could not run/.test(w),
+      ),
+    ).toBe(true);
+    expect(h.failures).toEqual([]);
+    // The directory that failed contributed nothing, but the one that
+    // succeeded still did.
+    expect(h.outputs["msrv-effective"]).toBe("1.70");
+  });
+
+  it("fails under error when the violation comes from a non-root directory", async () => {
+    const h = harness({
+      inputs: { ...MULTI_WORKSPACE, "msrv-check": "error" },
+      files: { ...CARGO_TOML_A, ...CARGO_TOML_B },
+      metadataByDir: {
+        "/workspace/crates/a": JSON.stringify({
+          packages: [
+            { id: "a", name: "pkg-a", version: "1.0.0", rust_version: "1.70" },
+          ],
+        }),
+        "/workspace/crates/b": JSON.stringify({
+          packages: [
+            {
+              id: "b",
+              name: "pkg-b",
+              version: "1.0.0",
+              rust_version: "1.95.0",
+            },
+          ],
+        }),
+      },
+      release: "1.88.0",
+    });
+    await run(h.deps);
+
+    expect(
+      h.failures.some((f) => /pkg-b 1\.0\.0 requires rustc 1\.95\.0/.test(f)),
+    ).toBe(true);
+  });
+
+  it("calls metadata.read zero times under msrv-check: off, even with several directories", async () => {
+    const h = harness({
+      inputs: { ...MULTI_WORKSPACE, "msrv-check": "off" },
+      files: { ...CARGO_TOML_A, ...CARGO_TOML_B },
+    });
+    await run(h.deps);
+
+    expect(h.metadataCalls).toEqual([]);
   });
 });
