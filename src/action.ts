@@ -245,7 +245,26 @@ function readTomlConfig(deps: ActionDeps): ToolchainTomlConfig {
   return parseRustToolchainToml(contents);
 }
 
-function readCargoManifest(deps: ActionDeps): ManifestMsrv {
+/** The outcome of attempting to read the workspace's `Cargo.toml`. */
+interface CargoManifestRead {
+  manifest: ManifestMsrv;
+  /**
+   * False only when no `Cargo.toml` exists in the workspace at all.
+   *
+   * This is the signal `checkMsrv` uses to skip silently: a warning is right
+   * when the check was *expected* to work and could not (an unreadable
+   * `cargo metadata`, a missing lockfile), and wrong when there was never
+   * anything to check. A manifest that exists but fails to parse is still
+   * `present: true` — the file `cargo metadata` would read is right there,
+   * so the check is left to try it rather than being skipped pre-emptively.
+   */
+  present: boolean;
+}
+
+function readCargoManifest(
+  deps: ActionDeps,
+  fallbackOn: boolean,
+): CargoManifestRead {
   const workspace = deps.env.GITHUB_WORKSPACE ?? ".";
   let contents: string;
   try {
@@ -253,9 +272,25 @@ function readCargoManifest(deps: ActionDeps): ManifestMsrv {
   } catch {
     // No manifest in the workspace — not every consumer of this action has
     // one at the root, and its absence is not an error.
-    return { source: "none" };
+    return { manifest: { source: "none" }, present: false };
   }
-  return parseCargoManifest(contents);
+
+  try {
+    return { manifest: parseCargoManifest(contents), present: true };
+  } catch (error) {
+    // A malformed Cargo.toml must not fail the whole action when neither
+    // MSRV feature needs it to parse. parseCargoManifest's own throw is
+    // justified only when msrv-fallback is on — its docs say so: avoiding
+    // installing a toolchain nobody asked for. With fallback off nothing
+    // downstream needed this file to parse, so warn and treat it the same as
+    // "declares nothing" rather than failing a build that never asked for it.
+    if (fallbackOn) throw error;
+    deps.core.warning(
+      `Cargo.toml could not be parsed, continuing without its MSRV data: ` +
+        describeError(error),
+    );
+    return { manifest: { source: "none" }, present: true };
+  }
 }
 
 function readInputs(deps: ActionDeps): ToolchainInputs {
@@ -280,13 +315,20 @@ interface ResolvedConfiguration {
   inputs: ToolchainInputs;
   toml: ToolchainTomlConfig;
   manifest: ManifestMsrv;
+  /** Whether a `Cargo.toml` exists at all — see `CargoManifestRead`. */
+  manifestPresent: boolean;
 }
 
 function resolveConfiguration(deps: ActionDeps): ResolvedConfiguration {
   const inputs = readInputs(deps);
   const toml = readTomlConfig(deps);
-  const manifest = readCargoManifest(deps);
+  // Read before the manifest: readCargoManifest's rethrow-vs-warn choice for
+  // a malformed Cargo.toml depends on whether msrv-fallback is on.
   const fallback = readBooleanInput(deps.core, "msrv-fallback", false);
+  const { manifest, present: manifestPresent } = readCargoManifest(
+    deps,
+    fallback.value,
+  );
   const resolved = mergeConfig(
     toml,
     inputs,
@@ -302,7 +344,13 @@ function resolveConfiguration(deps: ActionDeps): ResolvedConfiguration {
     .withComponents(...resolved.components);
   // mergeConfig always resolves one; the guard keeps the type honest.
   if (resolved.profile) builder.withProfile(resolved.profile);
-  return { spec: builder.build(), inputs, toml, manifest };
+  return {
+    spec: builder.build(),
+    inputs,
+    toml,
+    manifest,
+    manifestPresent,
+  };
 }
 
 /**
@@ -638,14 +686,23 @@ async function resolveCacheLifecycle(
  * check did not run. Never throws: a check that cannot run is reported as a
  * warning even under `error`, because inability to verify is not a violation
  * and would otherwise fail every repository without a lockfile.
+ *
+ * The one exception to "reported as a warning" is `manifestPresent: false`:
+ * with no `Cargo.toml` at all there was never anything to check, which is not
+ * the same fact as "the check was expected to work and could not" — so this
+ * returns `undefined` silently, before `cargo metadata` is ever invoked,
+ * rather than warning on every run for a consumer who never enabled either
+ * MSRV feature.
  */
 async function checkMsrv(
   deps: ActionDeps,
   policy: MsrvPolicy,
   installed: string,
   manifestDir: string,
+  manifestPresent: boolean,
 ): Promise<string | undefined> {
   if (policy === "off") return undefined;
+  if (!manifestPresent) return undefined;
 
   let packages: PackageMsrv[];
   try {
@@ -716,6 +773,11 @@ export async function run(deps: ActionDeps): Promise<void> {
     // before a toolchain is downloaded rather than after a ten-minute build.
     const prunePolicy = parsePrunePolicy(deps.core.getInput("cache-prune"));
     const toolSpecs = parseToolSpecs(deps.core.getInput("cargo-tools"));
+    // Same reason, same place: a typo like `msrv-check: eror` must fail before
+    // a toolchain is downloaded, not after — parsing it down by `checkMsrv`'s
+    // call site would cost a full install for a typo a string comparison
+    // catches instantly.
+    const msrvPolicy = parseMsrvPolicy(deps.core.getInput("msrv-check"));
 
     // Exported as early as possible: `post-if` reads this even when the job
     // fails at a later, unrelated step, long after this action returned.
@@ -805,14 +867,6 @@ export async function run(deps: ActionDeps): Promise<void> {
     deps.core.info(rustc.banner);
     applyCargoDefaults(deps, rustc.info.version);
 
-    const msrvPolicy = parseMsrvPolicy(deps.core.getInput("msrv-check"));
-    const msrvEffective = await checkMsrv(
-      deps,
-      msrvPolicy,
-      rustc.info.version,
-      deps.env.GITHUB_WORKSPACE ?? ".",
-    );
-
     const specCacheKey = generateSpecCacheKey(rustc.info.cacheKey, spec);
 
     // BEFORE the keys are derived, unavoidably: `toolSetHash` is a segment of
@@ -839,6 +893,23 @@ export async function run(deps: ActionDeps): Promise<void> {
       rustupEnv.CARGO_HOME,
       hashToolSet(toolResolution.tools),
       prunePolicy,
+    );
+
+    // AFTER the cache restore above, and that ordering is the point, not an
+    // accident of where this was easiest to add. `checkMsrv` runs
+    // `cargo metadata`, which reads `$CARGO_HOME/registry` — on a cold cache
+    // that means fetching the whole crates.io index over the network, exactly
+    // the cost the `registry` layer exists to remove. Running the check here
+    // means a restored registry layer is already on disk before metadata ever
+    // asks for it. See the design doc's Risks section: "must run after the
+    // registry layer restores or it may fetch the index." Do not move this
+    // back above `resolveCacheLifecycle`.
+    const msrvEffective = await checkMsrv(
+      deps,
+      msrvPolicy,
+      rustc.info.version,
+      deps.env.GITHUB_WORKSPACE ?? ".",
+      config.manifestPresent,
     );
 
     // AFTER the restore, and that ordering is the point (D2 of the Phase C

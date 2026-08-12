@@ -316,12 +316,19 @@ outputs:
       The highest `rust-version` across every package in the resolved
       dependency graph, or an empty string. Use this, not `msrv`, to choose a
       toolchain: the two differ whenever a dependency outruns the crate's own
-      declared floor.
+      declared floor. Empty under `msrv-check: off`, since the check that
+      computes it never ran — also empty when the check ran but could not
+      complete (no `Cargo.toml`, no lockfile, or no package in the graph
+      declares a `rust-version`), the same as `off`. Build a matrix from this
+      output only when `msrv-check` is `warn` or `error`.
 
   msrv-source:
     description: >
       Where `msrv` was read from — `cargo-toml`, `workspace-inherit`, or
-      `none`.
+      `none`. `workspace-inherit` covers two shapes: a member that opted in
+      with `rust-version.workspace = true`, and a virtual manifest (no
+      `[package]`), whose `[workspace.package]` table is the declaration
+      itself rather than something inherited.
 
   set-rustup-toolchain:
     description: >
