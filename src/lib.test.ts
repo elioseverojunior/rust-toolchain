@@ -13,7 +13,7 @@ import { resolveChannel } from "@/core";
 describe("library barrel", () => {
   // Pins the public surface: removing or renaming an export is a breaking
   // change for consumers and should fail here rather than in their build.
-  it("exposes every value export of the twenty-one library modules", () => {
+  it("exposes every value export of the twenty-two library modules", () => {
     expect(Object.keys(lib).sort()).toEqual(
       [
         // action.ts
@@ -85,6 +85,10 @@ describe("library barrel", () => {
         "describeError",
         // inputs.ts
         "readBooleanInput",
+        // msrv.ts
+        "parseVersion",
+        "compareVersions",
+        "parseMsrvPolicy",
         // outputs.ts
         "buildActionOutputs",
         "toOutputEntries",
