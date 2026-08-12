@@ -38,6 +38,7 @@ describe("library barrel", () => {
         "parseCacheLayers",
         // cache/metadata.ts
         "parsePackageSet",
+        "parsePackageMsrv",
         // cache/prune.ts
         "parsePrunePolicy",
         "readFingerprints",

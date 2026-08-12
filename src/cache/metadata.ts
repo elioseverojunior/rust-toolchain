@@ -46,6 +46,7 @@ interface RawPackage {
   id?: unknown;
   name?: unknown;
   version?: unknown;
+  rust_version?: unknown;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -142,4 +143,47 @@ export function parsePackageSet(json: string): PackageSet {
   }
 
   return { packages, workspaceMembers };
+}
+
+/** A package's declared MSRV, named so a message can say who demands it. */
+export interface PackageMsrv {
+  name: string;
+  version: string;
+  rustVersion: string;
+}
+
+/**
+ * Collects every declared `rust_version` in the resolved graph.
+ *
+ * Deliberately lenient where `parsePackageSet` is strict: that function's
+ * output decides which files a cache archives, so a half-formed entry is a
+ * real problem. This one only advises, so a malformed package costs its own
+ * contribution rather than the whole check. The JSON itself must still parse —
+ * unreadable output means the check could not run, which the caller reports
+ * differently from a violation.
+ */
+export function parsePackageMsrv(json: string): PackageMsrv[] {
+  let document: unknown;
+  try {
+    document = JSON.parse(json);
+  } catch (error) {
+    throw new Error(
+      `\`cargo metadata\` did not emit valid JSON: ${describeError(error)}`,
+      { cause: error },
+    );
+  }
+
+  const raw = isRecord(document) ? document.packages : undefined;
+  if (!Array.isArray(raw)) return [];
+
+  const found: PackageMsrv[] = [];
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue;
+    const { name, version, rust_version: rustVersion } = entry as RawPackage;
+    if (typeof name !== "string" || name === "") continue;
+    if (typeof version !== "string" || version === "") continue;
+    if (typeof rustVersion !== "string" || rustVersion === "") continue;
+    found.push({ name, version, rustVersion });
+  }
+  return found;
 }
