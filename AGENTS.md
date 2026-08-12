@@ -200,11 +200,23 @@ Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions.
 - `resolveRustupEnv` honours a caller-supplied `RUSTUP_HOME`; overlayfs runners
   need it pointed at a directory created at run time, or rustup's component
   renames fail with `EXDEV`.
+- **`rust-version` is a floor; `rust-toolchain.toml` is a pin.** `msrv-fallback`
+  therefore sits BELOW the toml in `mergeConfig`'s channel chain, and defaults
+  to `false`. Reversing either would silently move a repository that declares
+  an MSRV off `stable`, or let a floor overrule a pin the author wrote down.
+- **A `cargo metadata` MSRV check that cannot run always warns, never fails,
+  even under `msrv-check: error`.** Inability to verify is not a violation;
+  conflating them fails every repository without a lockfile. `evaluateMsrv`
+  keeps `skipped` distinct from `ok` for exactly this reason.
+- **The MSRV comes from the resolved graph, not the manifest.** cargo-binstall
+  1.21.1 declares `rust-version = 1.79` while pinning vergen 10.0.1, which
+  needs 1.95, so a manifest-only check passes and the build then fails. This is
+  why `msrv` and `msrv-effective` are separate outputs.
 
 ## Architecture
 
 - **Entrypoint (action)**: `src/index.ts` dispatches on `STATE_isPost`, wiring real dependencies into either `run()` (main phase) or `runPost()` (post phase) from `src/action.ts`. Build uses `@actions/core` for inputs, outputs, state and failures.
-- **Library API**: `src/lib.ts` is the barrel (re-exports action, builder, config, core, errors, inputs, outputs, tools, cache/budget, cache/metadata, cache/prune, cache/client, cache/env, cache/inputs, cache/keys, cache/layers, cache/fs, cache/lifecycle, cache/paths, cache/stage and cache/summary, never `index.ts`); consumers may also import any of those twenty-one modules directly.
+- **Library API**: `src/lib.ts` is the barrel (re-exports action, builder, config, core, errors, inputs, msrv, outputs, tools, cache/budget, cache/metadata, cache/prune, cache/client, cache/env, cache/inputs, cache/keys, cache/layers, cache/fs, cache/lifecycle, cache/paths, cache/stage and cache/summary, never `index.ts`); consumers may also import any of those twenty-two modules directly.
 - **Path aliases**: see the Path aliases section below — the specifier is consumer-visible.
 - **Build**: `bun run build:action`
 - **Source layout**:
@@ -227,6 +239,7 @@ Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions.
   - `src/cache/summary.ts` — `renderSummary` renders the per-layer restore/save outcome as the job summary's Markdown table — the only place a per-layer result is visible, since `cache-hit` is a single all-layers boolean
   - `src/errors.ts` — `describeError` renders a caught `unknown` as a message; extracted because the `instanceof Error` ternary was written out nine times across `action.ts`, `cache/lifecycle.ts` and `core.ts`
   - `src/cache/metadata.ts` — `parsePackageSet` reads `cargo metadata --format-version 1 --locked` into the packages a workspace still resolves to, with its own crates called out separately; `MetadataReader` is the port the real `cargo` invocation hides behind
+  - `src/msrv.ts` — everything MSRV-related: `parseVersion`/`compareVersions` compare Rust versions numerically, never lexically (`"1.9"` sorts above `"1.10"` as a string and below it as a version); `parseMsrvPolicy` reads `msrv-check` into `off`/`warn`/`error`, defaulting to `warn`; `parseCargoManifest` reads a `Cargo.toml`'s `rust-version`, resolving workspace inheritance (`rust-version.workspace = true` parses to the object `{ workspace: true }`, not a version — the one trap in the function) across the three shapes that matter: a plain `[package]`, a virtual manifest's `[workspace.package]`, and a member that opts into inheriting it; `effectiveMsrv`/`bestRequirement` take the maximum `rust-version` across the **resolved graph** `cargo metadata` returns, not any one manifest; `evaluateMsrv` compares the installed `rustc` against that maximum and returns `ok`/`skipped`/`violation`, keeping `skipped` distinct from `ok` so a check that could not run is never reported as one that passed; `describeVerdict` renders the outcome as the line a human reads in the log
   - `src/cache/prune.ts` — `parsePrunePolicy` reads `cache-prune` into `off`/`safe`/`aggressive`; `readFingerprints` recovers the hash-to-package mapping cargo records under `target/<profile>/.fingerprint/<name>-<hash>/`, which is what makes attribution authoritative rather than the filename guess `Swatinem/rust-cache` makes; `computeKeepSet` decides which files the archive carries. Nothing here deletes — the keep-set selects what is linked into the stage
   - `src/tools.ts` — everything `cargo-tools` needs: `parseToolSpecs` reads the input into `<name>@<version>` specs, rejecting anything that is not a cargo identifier before a command runs; `resolveToolVersions` turns `latest` into a concrete version through the `RegistryClient` port, retrying with backoff and degrading a failure to `UNRESOLVED_VERSION` rather than throwing; `hashToolSet` digests the resolved set into the `bin` key's final segment; `ensureTools` probes `<name> --version` and installs only what the restore did not supply. A pinned version never reaches the client, which is what makes a registry outage unable to affect it. Two things the input cannot do, both measured rather than reasoned about: **a crate whose binary is named differently is reinstalled every run** — the probe is `<crate> --version`, so `ignorefile-cli` (binaries `ign` and `ignorefile`) is never recognised and the `bin` layer cannot help it; and **`cargo-binstall` cannot be installed at all**, because installs are always `cargo install --locked` from source and its tree exceeds `CARGO_INSTALL_TIMEOUT_MS` (15 min) on all three attempts — 46m22s to `spawnSync cargo ETIMEDOUT`. Note the second is not an MSRV problem and a declared `rust-version` will not predict one: `cargo-binstall` declares 1.79 yet pins `vergen 10.0.1`, which needs 1.95, so `--locked` makes the graph the binding constraint
   - `src/inputs.ts` — `readBooleanInput` and the `InputReader` port it takes; shared by `action.ts` and `cache/inputs.ts`, so it belongs to neither
