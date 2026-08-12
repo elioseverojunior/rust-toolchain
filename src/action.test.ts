@@ -2467,7 +2467,15 @@ describe("msrv-check", () => {
   });
 
   it("does not read metadata at all when off", async () => {
+    // A manifest is present here, unlike the F2 skip-silently test below --
+    // deliberately, so this pins the `policy === "off"` guard on its own
+    // rather than the result being equally explained by `!manifestPresent`.
+    // Mutation testing caught the confound: with no Cargo.toml, the "off"
+    // check can be replaced by an always-false comparison and every
+    // assertion here still holds, because the manifest-presence guard right
+    // below it produces the identical no-op.
     const h = harness({
+      files: CARGO_TOML,
       metadataJson: GRAPH_JSON,
       release: "1.88.0",
       inputs: { "msrv-check": "off" },
