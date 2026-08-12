@@ -67,6 +67,7 @@ import {
 } from "@rust-toolchain/core";
 import { describeError } from "@rust-toolchain/errors";
 import { readBooleanInput } from "@rust-toolchain/inputs";
+import { parseCargoManifest, type ManifestMsrv } from "@rust-toolchain/msrv";
 import {
   buildActionOutputs,
   toOutputEntries,
@@ -227,6 +228,19 @@ function readTomlConfig(deps: ActionDeps): ToolchainTomlConfig {
   return parseRustToolchainToml(contents);
 }
 
+function readCargoManifest(deps: ActionDeps): ManifestMsrv {
+  const workspace = deps.env.GITHUB_WORKSPACE ?? ".";
+  let contents: string;
+  try {
+    contents = deps.readFile(join(workspace, "Cargo.toml"));
+  } catch {
+    // No manifest in the workspace — not every consumer of this action has
+    // one at the root, and its absence is not an error.
+    return { source: "none" };
+  }
+  return parseCargoManifest(contents);
+}
+
 function readInputs(deps: ActionDeps): ToolchainInputs {
   return {
     toolchain: deps.core.getInput("toolchain") || undefined,
@@ -248,12 +262,19 @@ interface ResolvedConfiguration {
   spec: ToolchainSpec;
   inputs: ToolchainInputs;
   toml: ToolchainTomlConfig;
+  manifest: ManifestMsrv;
 }
 
 function resolveConfiguration(deps: ActionDeps): ResolvedConfiguration {
   const inputs = readInputs(deps);
   const toml = readTomlConfig(deps);
-  const resolved = mergeConfig(toml, inputs);
+  const manifest = readCargoManifest(deps);
+  const fallback = readBooleanInput(deps.core, "msrv-fallback", false);
+  const resolved = mergeConfig(
+    toml,
+    inputs,
+    fallback.value ? manifest.rustVersion : undefined,
+  );
   const channel = resolveChannel(resolved.channel);
   // Checked against the resolved channel: `stable 2 releases ago` is a release,
   // whatever the input said.
@@ -264,7 +285,7 @@ function resolveConfiguration(deps: ActionDeps): ResolvedConfiguration {
     .withComponents(...resolved.components);
   // mergeConfig always resolves one; the guard keeps the type honest.
   if (resolved.profile) builder.withProfile(resolved.profile);
-  return { spec: builder.build(), inputs, toml };
+  return { spec: builder.build(), inputs, toml, manifest };
 }
 
 /**
@@ -785,10 +806,13 @@ export async function run(deps: ActionDeps): Promise<void> {
       // `ensureTools`' outcomes: a consumer reading both `cargo-tools` and the
       // bin key needs them to describe one resolution.
       tools: toolResolution.tools,
-      // MSRV awareness is not wired up yet — Task 5 only declares the output
-      // surface. Every run reports `none` until a later task reads
-      // `Cargo.toml` and the resolved dependency graph.
-      msrv: { source: "none" },
+      // `effective` is not wired up yet — that reads the resolved dependency
+      // graph, a later task's job. This is only the declared floor from
+      // Cargo.toml, plus its provenance.
+      msrv: {
+        declared: config.manifest.rustVersion,
+        source: config.manifest.source,
+      },
     });
     for (const [name, value] of toOutputEntries(outputs)) {
       deps.core.setOutput(name, value);

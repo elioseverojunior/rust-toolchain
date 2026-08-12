@@ -211,6 +211,7 @@ function assertIdentifiers(kind: string, values: string[]): string[] {
 export function mergeConfig(
   tomlConfig: ToolchainTomlConfig,
   inputs: ToolchainInputs,
+  msrvFallback?: string,
 ): ResolvedToolchain {
   // A `path` toolchain names a local directory and is mutually exclusive with
   // `channel`, so there is nothing to install. Fail loudly rather than silently
@@ -222,7 +223,11 @@ export function mergeConfig(
     );
   }
 
-  const channel = inputs.toolchain ?? tomlConfig.channel ?? "stable";
+  // `msrvFallback` sits BELOW the toml deliberately. `rust-version` is a floor
+  // and `rust-toolchain.toml` is a pin; a repository that states a pin has
+  // answered this question, and an MSRV must not overrule it.
+  const channel =
+    inputs.toolchain ?? tomlConfig.channel ?? msrvFallback ?? "stable";
 
   // Inputs lead, then the toml, deduped by first occurrence. rustup treats
   // both as sets — argv order changes nothing it does, and `generateSpecCacheKey`
