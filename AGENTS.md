@@ -177,6 +177,20 @@ Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions.
   only the global default. `set-rustup-toolchain: false` opts out for monorepos
   whose crates pin their own toolchains.
 - Every `rustup target add` / `component add` pins `--toolchain <channel>`.
+- **`hasRustup` probes with `rustup --help`, never `rustup --version`.** The
+  probe only asks whether rustup runs, but `--version` also prints the _active_
+  rustc, which makes rustup walk the override chain. It runs before
+  `RUSTUP_TOOLCHAIN` is exported, so a workspace `rust-toolchain.toml` wins
+  there and rustup **downloads that whole toolchain** — six components — to
+  print one line the action then discards, before installing the channel the
+  caller actually asked for. Nothing about the result is wrong, which is why it
+  went unnoticed: the resolved toolchain is still correct and the cost is
+  invisible. It lands on precisely the workflows this action exists for — a
+  toml overridden by an input. Verified outside the action: beside a toml
+  naming an uninstalled channel, `rustup --version` emits
+  `syncing channel updates` and `rustup --help` does not.
+  `.github/workflows/tests/act.yml` guards it by asserting the overridden
+  channel never appears in `rustup toolchain list`.
 - Commands are built as argv arrays and executed without a shell. Channel,
   targets, components and profile can come from an untrusted workspace
   `rust-toolchain.toml` — never interpolate them into a command string.
@@ -214,7 +228,7 @@ Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions.
   - `src/errors.ts` — `describeError` renders a caught `unknown` as a message; extracted because the `instanceof Error` ternary was written out nine times across `action.ts`, `cache/lifecycle.ts` and `core.ts`
   - `src/cache/metadata.ts` — `parsePackageSet` reads `cargo metadata --format-version 1 --locked` into the packages a workspace still resolves to, with its own crates called out separately; `MetadataReader` is the port the real `cargo` invocation hides behind
   - `src/cache/prune.ts` — `parsePrunePolicy` reads `cache-prune` into `off`/`safe`/`aggressive`; `readFingerprints` recovers the hash-to-package mapping cargo records under `target/<profile>/.fingerprint/<name>-<hash>/`, which is what makes attribution authoritative rather than the filename guess `Swatinem/rust-cache` makes; `computeKeepSet` decides which files the archive carries. Nothing here deletes — the keep-set selects what is linked into the stage
-  - `src/tools.ts` — everything `cargo-tools` needs: `parseToolSpecs` reads the input into `<name>@<version>` specs, rejecting anything that is not a cargo identifier before a command runs; `resolveToolVersions` turns `latest` into a concrete version through the `RegistryClient` port, retrying with backoff and degrading a failure to `UNRESOLVED_VERSION` rather than throwing; `hashToolSet` digests the resolved set into the `bin` key's final segment; `ensureTools` probes `<name> --version` and installs only what the restore did not supply. A pinned version never reaches the client, which is what makes a registry outage unable to affect it
+  - `src/tools.ts` — everything `cargo-tools` needs: `parseToolSpecs` reads the input into `<name>@<version>` specs, rejecting anything that is not a cargo identifier before a command runs; `resolveToolVersions` turns `latest` into a concrete version through the `RegistryClient` port, retrying with backoff and degrading a failure to `UNRESOLVED_VERSION` rather than throwing; `hashToolSet` digests the resolved set into the `bin` key's final segment; `ensureTools` probes `<name> --version` and installs only what the restore did not supply. A pinned version never reaches the client, which is what makes a registry outage unable to affect it. Two things the input cannot do, both measured rather than reasoned about: **a crate whose binary is named differently is reinstalled every run** — the probe is `<crate> --version`, so `ignorefile-cli` (binaries `ign` and `ignorefile`) is never recognised and the `bin` layer cannot help it; and **`cargo-binstall` cannot be installed at all**, because installs are always `cargo install --locked` from source and its tree exceeds `CARGO_INSTALL_TIMEOUT_MS` (15 min) on all three attempts — 46m22s to `spawnSync cargo ETIMEDOUT`. Note the second is not an MSRV problem and a declared `rust-version` will not predict one: `cargo-binstall` declares 1.79 yet pins `vergen 10.0.1`, which needs 1.95, so `--locked` makes the graph the binding constraint
   - `src/inputs.ts` — `readBooleanInput` and the `InputReader` port it takes; shared by `action.ts` and `cache/inputs.ts`, so it belongs to neither
   - `src/lib.ts` — the library barrel. Re-exports every other library module and deliberately **not** `index.ts`, whose import executes the action
   - `src/*.test.ts` — co-located tests; `tsconfig.src.json` includes `**/*.ts` and the root config references it, so `bun run typecheck` (`tsc --build`) type-checks them too
