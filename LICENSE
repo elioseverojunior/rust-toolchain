@@ -1,0 +1,64 @@
+rust-toolchain
+Copyright (c) RUST-TOOLCHAIN contributors
+
+This project is dual-licensed. You may use it under the terms of either
+license below, at your option:
+
+  * Apache License, Version 2.0
+    Full text: LICENSE-APACHE (a copy of LICENSES/Apache-2.0.txt)
+    Online:    https://www.apache.org/licenses/LICENSE-2.0
+
+  * MIT License
+    Full text: LICENSE-MIT (a copy of LICENSES/MIT.txt)
+    Online:    https://opensource.org/licenses/MIT
+
+You are not required to comply with both. Choose whichever you prefer.
+
+The corresponding SPDX expression, as declared in package.json, in REUSE.toml
+and in the per-file headers, is:
+
+    MIT OR Apache-2.0
+
+Why two licenses
+----------------
+
+Apache-2.0 grants everything MIT does and adds an explicit patent grant
+(section 3), which protects downstream users from patent litigation by
+contributors. MIT is shorter and more permissive about attribution. Offering
+both is the convention across the Rust ecosystem, which is the ecosystem this
+action serves, so a project already dual-licensed that way takes on nothing new
+by using it.
+
+Note this repository publishes a GitHub Action, not a crate: there is no
+package on crates.io and none on npm. What you consume is a git tag. README.md
+lists what each tag points at, and SECURITY.md which of them receive fixes.
+
+Why two copies of each license
+------------------------------
+
+LICENSES/Apache-2.0.txt and LICENSES/MIT.txt are where the REUSE Specification
+requires license texts to live, and they are what `comply lint` reads.
+LICENSE-APACHE and LICENSE-MIT at the repository root are byte-identical copies,
+kept because that is where GitHub and most tooling look. Copies rather than
+symlinks: a symlink survives git, but not every consumer of an exported archive
+or a Windows checkout resolves one.
+
+Contribution
+------------
+
+Unless you state otherwise, any contribution you intentionally submit for
+inclusion in this work, as defined in the Apache-2.0 license, shall be
+dual-licensed as above, with no additional terms or conditions.
+
+No Developer Certificate of Origin sign-off is required: no DCO bot runs on
+pull requests and no `Signed-off-by` trailer is checked. CONTRIBUTING.md has
+what is actually expected of a contribution.
+
+Per-file licensing
+------------------
+
+Every file in this repository declares its own licensing, either in an SPDX
+header or through an annotation in REUSE.toml, following the REUSE
+Specification. Run `comply lint` to verify, or consult REUSE.toml for the
+aggregate rules — its `path = ["**"]` annotation is what licenses the whole
+tree, documentation included, under the same MIT OR Apache-2.0 expression.
