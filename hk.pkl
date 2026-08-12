@@ -98,22 +98,42 @@ local linters = new Mapping<String, Step> {
         check = "bun run typecheck"
     }
 
+    // `--no-deps` on every `mise run` below, and it is load-bearing in CI.
+    //
+    // `mise.toml` declares `[deps.bun] auto = true`, and mise's own help is
+    // explicit about what that means: "Providers with `auto = true` are
+    // automatically invoked before `mise x` and `mise run` unless skipped with
+    // the --no-deps flag." So each of these steps ran an unfiltered
+    // `bun install` before its linter -- and hk runs them CONCURRENTLY, so
+    // three of those raced in the same directory.
+    //
+    // Invisible locally, because the freshness check mise applies (lockfile
+    // newer than `node_modules/`) is satisfied when both workspaces are
+    // installed, and the auto step is a no-op. CI installs only the action's
+    // workspace (`--filter rust-toolchain`), so `docs/node_modules` is absent,
+    // the check reports stale on every run, and the install is real work every
+    // time.
+    //
+    // It failed as a bare `bun exited with non-zero status: exit code 1` with
+    // no linter output at all, on whichever step lost the race -- `mermaid` on
+    // one attempt and `actionlint` on the next, from the same commit. A linter
+    // that prints nothing is not the linter failing.
     ["actionlint"] = new Step {
         glob = ".github/workflows/*.{yml,yaml}"
-        check = "mise run actionlint {{ files }}"
+        check = "mise run --no-deps actionlint {{ files }}"
     }
 
     ["markdownlint"] = new Step {
         glob = "*.md"
-        check = "mise run markdownlint {{ files }}"
-        fix = "mise run markdownlint:fix {{ files }}"
+        check = "mise run --no-deps markdownlint {{ files }}"
+        fix = "mise run --no-deps markdownlint:fix {{ files }}"
     }
 
     // markdownlint validates the fence, not the diagram inside it. A mermaid
     // syntax error otherwise surfaces only as a broken render on GitHub.
     ["mermaid"] = new Step {
         glob = "*.md"
-        check = "mise run mermaidlint {{ files }}"
+        check = "mise run --no-deps mermaidlint {{ files }}"
     }
 }
 
