@@ -555,7 +555,7 @@ All tests use Bun's built-in test runner with 100% coverage enforced by `bunfig.
 | `src/errors.test.ts`          | `describeError` — `Error` instances and arbitrary thrown values                                                                                                                                                                                                                                                                                                                         | 100%                              |
 | `src/lib.test.ts`             | Barrel surface pinned export by export, and the guard that `src/lib.ts` never re-exports `src/index.ts`; both path aliases resolve                                                                                                                                                                                                                                                      | 100%                              |
 
-Twenty-two test files cover twenty-three library modules. `src/cache/client.ts`
+Twenty-two test files cover twenty-two library modules. `src/cache/client.ts`
 declares the `CacheClient` interface and nothing else, so it compiles to no
 executable statements and never reaches the coverage report — the port exists
 precisely so the tests can drive the lifecycle without `@actions/cache`.
