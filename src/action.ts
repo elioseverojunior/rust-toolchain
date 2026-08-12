@@ -267,12 +267,29 @@ function resolveConfiguration(deps: ActionDeps): ResolvedConfiguration {
   return { spec: builder.build(), inputs, toml };
 }
 
-/** True when a working `rustup` is already on PATH. */
+/**
+ * True when a working `rustup` is already on PATH.
+ *
+ * `--help`, not `--version`, and the difference is not cosmetic. `rustup
+ * --version` also prints the *active* rustc version, which makes rustup walk
+ * the override chain — and this probe runs in the workspace before
+ * `RUSTUP_TOOLCHAIN` is exported, so a `rust-toolchain.toml` wins there at
+ * precedence 4. rustup then DOWNLOADS that toolchain, six components of it,
+ * only to print one line; the action installs the caller's channel immediately
+ * afterwards and uses that instead. The waste lands on exactly the workflows
+ * this action exists for — a toml overridden by an input — and is invisible,
+ * because the resolved toolchain is still correct.
+ *
+ * `--help` answers the one question asked here (does rustup run?) and resolves
+ * nothing. Verified outside the action: beside a toml naming an uninstalled
+ * channel, `rustup --version` emits "syncing channel updates" and `rustup
+ * --help` does not.
+ */
 function hasRustup(
   deps: ActionDeps,
   env: Record<string, string | undefined>,
 ): boolean {
-  const probe = deps.exec("rustup", ["--version"], {
+  const probe = deps.exec("rustup", ["--help"], {
     env,
     timeoutMs: RUSTC_TIMEOUT_MS,
     capture: true,
