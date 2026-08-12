@@ -63453,7 +63453,7 @@ function resolveConfiguration(deps) {
   return { spec: builder.build(), inputs, toml };
 }
 function hasRustup(deps, env) {
-  const probe = deps.exec("rustup", ["--version"], {
+  const probe = deps.exec("rustup", ["--help"], {
     env,
     timeoutMs: RUSTC_TIMEOUT_MS,
     capture: true

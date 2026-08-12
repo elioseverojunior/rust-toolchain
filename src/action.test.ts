@@ -470,8 +470,31 @@ describe("rustup bootstrap", () => {
     expect(h.paths).toEqual([]);
   });
 
+  // `rustup --version` does not just print rustup's version: it also reports
+  // the *active* rustc, which makes rustup resolve the override chain. This
+  // probe runs in the workspace before RUSTUP_TOOLCHAIN is exported, so a
+  // `rust-toolchain.toml` wins there and rustup DOWNLOADS that toolchain —
+  // six components — purely to print a line, then the action installs the
+  // channel the caller actually asked for and uses that instead.
+  //
+  // Observed under act with toml 1.97 and `toolchain: 1.88`:
+  //   info: syncing channel updates for 1.97-x86_64-unknown-linux-gnu
+  //   info: downloading 6 components
+  //   info: syncing channel updates for 1.88-x86_64-unknown-linux-gnu
+  // and confirmed outside the action: `rustup --version` beside a toml
+  // triggers the download while `rustup --help` does not.
+  it("probes for rustup without resolving a toolchain", async () => {
+    const h = harness({
+      toml: '[toolchain]\nchannel = "1.97"\n',
+      inputs: { toolchain: "1.88" },
+    });
+    await run(h.deps);
+    const probe = h.calls.find((c) => c.file === "rustup");
+    expect(probe?.args).toEqual(["--help"]);
+  });
+
   it("downloads and runs rustup-init on POSIX runners", async () => {
-    const h = harness({ execResults: { "--version": [NOT_INSTALLED] } });
+    const h = harness({ execResults: { "--help": [NOT_INSTALLED] } });
     await run(h.deps);
     const curl = h.calls.find((c) => c.file === "curl");
     expect(curl?.args).toContain("https://sh.rustup.rs");
@@ -485,7 +508,7 @@ describe("rustup bootstrap", () => {
   });
 
   it("puts the new cargo bin directory on PATH", async () => {
-    const h = harness({ execResults: { "--version": [NOT_INSTALLED] } });
+    const h = harness({ execResults: { "--help": [NOT_INSTALLED] } });
     await run(h.deps);
     expect(h.paths).toEqual(["/home/runner/.cargo/bin"]);
   });
@@ -493,7 +516,7 @@ describe("rustup bootstrap", () => {
   it("uses the Windows installer on Windows runners", async () => {
     const h = harness({
       platform: "win32",
-      execResults: { "--version": [NOT_INSTALLED] },
+      execResults: { "--help": [NOT_INSTALLED] },
       env: {
         USERPROFILE: "C:\\Users\\runneradmin",
         RUNNER_TEMP: "C:\\temp",
@@ -516,7 +539,7 @@ describe("rustup bootstrap", () => {
   it("reports a bootstrap whose download fails", async () => {
     const h = harness({
       execResults: {
-        "--version": [NOT_INSTALLED],
+        "--help": [NOT_INSTALLED],
         "--proto =https": [{ status: 7 }],
       },
     });
@@ -528,7 +551,7 @@ describe("rustup bootstrap", () => {
   it("reports a rustup-init that fails to run", async () => {
     const h = harness({
       execResults: {
-        "--version": [NOT_INSTALLED],
+        "--help": [NOT_INSTALLED],
         "/tmp/runner/rustup-init.sh --default-toolchain": [{ status: 1 }],
       },
     });
@@ -2198,16 +2221,13 @@ describe("cargo tools", () => {
     const h = harness({
       inputs: withTools("cargo-nextest"),
       env: cacheEnv,
-      // The harness keys its queue on the first two argv words, so
-      // `rustup --version` and `cargo-nextest --version` share the key
-      // "--version" and drain it in call order. The first entry answers
-      // rustup; the second is the probe that has to find the tool present,
-      // which is the whole premise of the fallback being exercised here.
+      // The harness keys its queue on the first two argv words, so "--version"
+      // now belongs to the tool probes alone — rustup is detected with
+      // `--help`, precisely so it cannot resolve a toolchain. This single entry
+      // is that probe finding the tool present, which is the whole premise of
+      // the fallback being exercised here.
       execResults: {
-        "--version": [
-          { status: 0, stdout: "rustup 1.28.0" },
-          { status: 0, stdout: "cargo-nextest 0.9.99" },
-        ],
+        "--version": [{ status: 0, stdout: "cargo-nextest 0.9.99" }],
       },
     });
     await run(h.deps);
