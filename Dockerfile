@@ -1,9 +1,9 @@
+# syntax=docker/dockerfile:1
+# check=experimental=all
+
 # SPDX-FileCopyrightText: RUST-TOOLCHAIN contributors
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
-
-# syntax=docker/dockerfile:1
-# check=experimental=all
 
 FROM docker.io/library/rust:trixie
 
