@@ -6,8 +6,9 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # MSRV Awareness — Design
 
-Status: proposed
+Status: implemented
 Date: 2026-08-12
+Implemented: 2026-08-12
 
 ## Summary
 

@@ -42,6 +42,8 @@ jobs:
             # Binaries, not crate names — `ignorefile-cli` installs `ign` and
             # `ignorefile`.
             tool-bins: "comply ignorefile ign"
+            msrv-check: ""
+            msrv-expected: ""
             toml: |
               [toolchain]
               channel = "1.97"
@@ -65,12 +67,32 @@ jobs:
             # about its locked dependency graph, so check the graph.
             cargo-tools: ""
             tool-bins: ""
+            msrv-check: ""
+            msrv-expected: ""
             toml: |
               [toolchain]
               channel = "1.97"
               targets = []
               components = []
               profile = "default"
+
+          - name: "msrv check against the workspace graph"
+            toolchain: "1.88"
+            targets: ""
+            components: ""
+            profile: ""
+            expected: "1.88"
+            unexpected: ""
+            cargo-tools: ""
+            tool-bins: ""
+            msrv-check: "warn"
+            # This repository has no Cargo.toml, so the check cannot run and
+            # must warn rather than fail — the degradation path, which is the
+            # half most likely to regress unnoticed.
+            msrv-expected: ""
+            toml: |
+              [toolchain]
+              channel = "1.88"
 
     steps:
       - name: Checkout
@@ -116,6 +138,7 @@ jobs:
           cache-key-hash: ${{ hashFiles('bun.lock') }}
           cache-key-suffix: act
           cargo-tools: ${{ matrix.cargo-tools }}
+          msrv-check: ${{ matrix.msrv-check }}
 
       - name: Verify Cache Output
         shell: bash
@@ -176,6 +199,30 @@ jobs:
           fi
           if [[ -z "${{ steps.rust-toolchain.outputs.name }}" ]]; then
             echo "name is empty"
+            exit 1
+          fi
+
+      - name: Verify MSRV Outputs
+        if: matrix.msrv-check != ''
+        shell: bash
+        env:
+          MSRV: ${{ steps.rust-toolchain.outputs.msrv }}
+          MSRV_EFFECTIVE: ${{ steps.rust-toolchain.outputs.msrv-effective }}
+          MSRV_SOURCE: ${{ steps.rust-toolchain.outputs.msrv-source }}
+          EXPECTED: ${{ matrix.msrv-expected }}
+        run: |
+          echo "msrv:           $MSRV"
+          echo "msrv-effective: $MSRV_EFFECTIVE"
+          echo "msrv-source:    $MSRV_SOURCE"
+
+          if [[ "$MSRV" != "$EXPECTED" ]]; then
+            echo "msrv is '$MSRV', expected '$EXPECTED'"
+            exit 1
+          fi
+          # The check cannot run here, so the source must say so rather than
+          # inventing a value.
+          if [[ -z "$EXPECTED" && "$MSRV_SOURCE" != "none" ]]; then
+            echo "msrv-source is '$MSRV_SOURCE', expected 'none'"
             exit 1
           fi
 
