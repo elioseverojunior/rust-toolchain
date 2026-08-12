@@ -20,6 +20,17 @@ name: act
 # asserted to be a cold miss — on a second invocation it will legitimately hit.
 # Only the warm job asserts, because only that assertion is stable.
 #
+# Also the one place `msrv-check` runs against a REAL resolved dependency
+# graph — every other coverage of it (`msrv.test.ts`, `action.test.ts`,
+# `tests/act.yml`) is either pure functions or a fake `MetadataReader`. The
+# design doc records that gap explicitly under Testing and it stayed open
+# through the MSRV feature's whole implementation, so it is closed here
+# rather than in `tests/act.yml`: this file already runs a real `cargo`
+# against a real registry, which a real dependency graph needs, and
+# `checkMsrv` always reads `$GITHUB_WORKSPACE/Cargo.toml` regardless of
+# `cache-workspaces` — a recorded, deliberate scope limit — so the probe
+# manifest below lives at the checkout root, not under `act-probe/`.
+#
 # Run with: mise run act -t act-cache
 
 on: push
@@ -61,6 +72,40 @@ jobs:
           profile = "minimal"
           EOF
 
+      # Root, not act-probe/: checkMsrv always resolves
+      # `$GITHUB_WORKSPACE/Cargo.toml` and runs `cargo metadata` there, so a
+      # manifest under act-probe/ would never be seen (cache-workspaces has no
+      # bearing on the MSRV check — a recorded, deliberate scope limit).
+      #
+      # rust-version 1.74 is comfortably below both the "1.90" channel above
+      # and cfg-if's own MSRV, so this graph is expected to satisfy the check
+      # -- the happy path the design doc lists as untested end to end.
+      # msrv-check: error below makes that self-enforcing: if crates.io drift
+      # ever raised the real requirement past 1.90, this job would fail loudly
+      # instead of a passing assertion quietly meaning nothing.
+      - name: Write Root Cargo.toml For The MSRV Check
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          cat > Cargo.toml <<'EOF'
+          [package]
+          name = "act-cache-msrv-probe"
+          version = "0.0.0"
+          edition = "2021"
+          rust-version = "1.74"
+
+          [dependencies]
+          cfg-if = "1"
+          EOF
+
+          # `cargo metadata --locked`, which checkMsrv runs internally,
+          # refuses to resolve without an existing, up-to-date Cargo.lock.
+          # Generated here with the image's pre-installed toolchain -- see
+          # "Prepare Isolated Rustup Home" above -- since the action has not
+          # run yet and RUSTUP_TOOLCHAIN is still unset.
+          cargo generate-lockfile
+
       # `hexyl` is pinned deliberately. It is unambiguously a binary crate whose
       # binary name matches its crate name — `ensureTools` probes
       # `<crate> --version`, so a crate like `ripgrep`, whose binary is `rg`,
@@ -78,6 +123,39 @@ jobs:
           cache-key-suffix: act-cache
           cache-workspaces: act-probe -> act-probe/target
           cargo-tools: hexyl@0.17.0
+          msrv-check: error
+
+      # Proves the MSRV check ran against the REAL graph `cargo metadata` just
+      # resolved, not a fake `MetadataReader` — the gap the design doc's
+      # Testing section left open. `msrv-effective` is asserted non-empty
+      # rather than to an exact value: cfg-if's own declared MSRV, if any, can
+      # change upstream, and the point here is that the check ran and found
+      # *something* in a real graph, not pinning a moving external number.
+      - name: Verify MSRV Against A Real Dependency Graph
+        shell: bash
+        env:
+          MSRV: ${{ steps.rust-toolchain.outputs.msrv }}
+          MSRV_EFFECTIVE: ${{ steps.rust-toolchain.outputs.msrv-effective }}
+          MSRV_SOURCE: ${{ steps.rust-toolchain.outputs.msrv-source }}
+        run: |
+          set -eo pipefail
+
+          echo "msrv:           $MSRV"
+          echo "msrv-effective: $MSRV_EFFECTIVE"
+          echo "msrv-source:    $MSRV_SOURCE"
+
+          if [[ "$MSRV" != "1.74" ]]; then
+            echo "::error::msrv is '$MSRV', expected '1.74' from the root Cargo.toml"
+            exit 1
+          fi
+          if [[ "$MSRV_SOURCE" != "cargo-toml" ]]; then
+            echo "::error::msrv-source is '$MSRV_SOURCE', expected 'cargo-toml'"
+            exit 1
+          fi
+          if [[ -z "$MSRV_EFFECTIVE" ]]; then
+            echo "::error::msrv-effective is empty; the check against the real graph did not run"
+            exit 1
+          fi
 
       # A real crate, so there is something for the post step to save. Without
       # one the build layer resolves to nothing, `saveCache` refuses an empty
@@ -97,6 +175,14 @@ jobs:
           name = "act-probe"
           version = "0.0.0"
           edition = "2021"
+
+          # Detaches this from any ancestor workspace. Cargo walks up from a
+          # manifest with no [workspace]/package.workspace of its own looking
+          # for one; since the checkout root NOW also carries a Cargo.toml
+          # (the MSRV probe below), an empty [workspace] here is what makes
+          # act-probe unambiguously its own single-crate workspace regardless
+          # of what that root manifest declares.
+          [workspace]
 
           [dependencies]
           cfg-if = "1"
@@ -188,6 +274,29 @@ jobs:
           profile = "minimal"
           EOF
 
+      # Byte-identical to the seed job's, and regenerated here rather than
+      # restored: this job's checkout is fresh, and the registry LAYER
+      # restoring is exactly the condition this step exists to run under —
+      # see the file-level comment above for why this job proves the check
+      # works warm as well as cold.
+      - name: Write Root Cargo.toml For The MSRV Check
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          cat > Cargo.toml <<'EOF'
+          [package]
+          name = "act-cache-msrv-probe"
+          version = "0.0.0"
+          edition = "2021"
+          rust-version = "1.74"
+
+          [dependencies]
+          cfg-if = "1"
+          EOF
+
+          cargo generate-lockfile
+
       # Same suffix, same lock hash, same workspace mapping as the seed job, so
       # this restores exactly what that job's post step saved. The probe crate
       # is deliberately NOT recreated: restoring is what has to put
@@ -202,6 +311,35 @@ jobs:
           cache-key-suffix: act-cache
           cache-workspaces: act-probe -> act-probe/target
           cargo-tools: hexyl@0.17.0
+          msrv-check: error
+
+      # Same assertions as the seed job's — see there for why msrv-effective
+      # is checked for presence rather than an exact value.
+      - name: Verify MSRV Against A Real Dependency Graph
+        shell: bash
+        env:
+          MSRV: ${{ steps.rust-toolchain.outputs.msrv }}
+          MSRV_EFFECTIVE: ${{ steps.rust-toolchain.outputs.msrv-effective }}
+          MSRV_SOURCE: ${{ steps.rust-toolchain.outputs.msrv-source }}
+        run: |
+          set -eo pipefail
+
+          echo "msrv:           $MSRV"
+          echo "msrv-effective: $MSRV_EFFECTIVE"
+          echo "msrv-source:    $MSRV_SOURCE"
+
+          if [[ "$MSRV" != "1.74" ]]; then
+            echo "::error::msrv is '$MSRV', expected '1.74' from the root Cargo.toml"
+            exit 1
+          fi
+          if [[ "$MSRV_SOURCE" != "cargo-toml" ]]; then
+            echo "::error::msrv-source is '$MSRV_SOURCE', expected 'cargo-toml'"
+            exit 1
+          fi
+          if [[ -z "$MSRV_EFFECTIVE" ]]; then
+            echo "::error::msrv-effective is empty; the check against the real graph did not run"
+            exit 1
+          fi
 
       # DELIBERATELY WEAKER THAN `cicd.yml`'s `e2e-warm`, WHICH ASSERTS
       # `cache-hit == 'true'`. Do not reconcile the two by weakening that one.
