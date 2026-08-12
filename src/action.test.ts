@@ -63,6 +63,7 @@ interface Harness {
   restores: RestoreCall[];
   saves: SaveCall[];
   registryCalls: string[];
+  metadataCalls: string[];
   stageFs: StageFs & { linked: string[]; moved: string[]; removed: string[] };
 }
 
@@ -123,6 +124,8 @@ function harness(
     restoreResult?: (key: string) => string | undefined;
     toolVersions?: Record<string, string>;
     files?: Record<string, string>;
+    metadataJson?: string;
+    metadataError?: Error;
   } = {},
 ): Harness {
   const calls: ExecCall[] = [];
@@ -138,6 +141,7 @@ function harness(
   const restores: RestoreCall[] = [];
   const saves: SaveCall[] = [];
   const registryCalls: string[] = [];
+  const metadataCalls: string[] = [];
   const queues = options.execResults ?? {};
 
   const stageFs = fakeStageFs();
@@ -224,6 +228,13 @@ function harness(
         saves.push({ paths: savePaths, key });
       },
     },
+    metadata: {
+      read: (manifestDir: string) => {
+        metadataCalls.push(manifestDir);
+        if (options.metadataError) return Promise.reject(options.metadataError);
+        return Promise.resolve(options.metadataJson ?? "{}");
+      },
+    },
   };
 
   return {
@@ -241,6 +252,7 @@ function harness(
     restores,
     saves,
     registryCalls,
+    metadataCalls,
     stageFs,
   };
 }
@@ -2320,5 +2332,95 @@ describe("msrv-fallback", () => {
     );
     expect(install?.args).toContain("stable");
     expect(h.outputs["msrv-source"]).toBe("none");
+  });
+});
+
+const GRAPH_JSON = JSON.stringify({
+  packages: [
+    {
+      id: "a",
+      name: "cargo-binstall",
+      version: "1.21.1",
+      rust_version: "1.79",
+    },
+    { id: "b", name: "vergen", version: "10.0.1", rust_version: "1.95.0" },
+  ],
+});
+
+describe("msrv-check", () => {
+  it("warns by default when the graph outruns the installed toolchain", async () => {
+    const h = harness({ metadataJson: GRAPH_JSON, release: "1.88.0" });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(
+      h.warnings.some((w) =>
+        /vergen 10\.0\.1 requires rustc 1\.95\.0, but 1\.88\.0 is installed/.test(
+          w,
+        ),
+      ),
+    ).toBe(true);
+    expect(h.outputs["msrv-effective"]).toBe("1.95.0");
+  });
+
+  it("fails the step under error", async () => {
+    const h = harness({
+      metadataJson: GRAPH_JSON,
+      release: "1.88.0",
+      inputs: { "msrv-check": "error" },
+    });
+    await run(h.deps);
+
+    expect(h.failures.some((f) => /vergen 10\.0\.1 requires/.test(f))).toBe(
+      true,
+    );
+  });
+
+  it("stays silent when the toolchain satisfies the graph", async () => {
+    const h = harness({ metadataJson: GRAPH_JSON, release: "1.97.1" });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(h.warnings.some((w) => /requires rustc/.test(w))).toBe(false);
+    expect(h.outputs["msrv-effective"]).toBe("1.95.0");
+  });
+
+  it("does not read metadata at all when off", async () => {
+    const h = harness({
+      metadataJson: GRAPH_JSON,
+      release: "1.88.0",
+      inputs: { "msrv-check": "off" },
+    });
+    await run(h.deps);
+
+    expect(h.metadataCalls).toEqual([]);
+    expect(h.outputs["msrv-effective"]).toBe("");
+  });
+
+  // Inability to verify is not a violation, so it warns even under `error`.
+  it("warns and succeeds under error when metadata cannot run", async () => {
+    const h = harness({
+      metadataError: new Error("could not find `Cargo.toml`"),
+      inputs: { "msrv-check": "error" },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(h.warnings.some((w) => /MSRV check could not run/.test(w))).toBe(
+      true,
+    );
+  });
+
+  it("warns when the graph declares nothing", async () => {
+    const h = harness({
+      metadataJson: JSON.stringify({ packages: [] }),
+      inputs: { "msrv-check": "error" },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(
+      h.warnings.some((w) => /no package in the graph declares/.test(w)),
+    ).toBe(true);
   });
 });

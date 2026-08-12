@@ -36,6 +36,11 @@ import { nodeStageFs, nodeStatFs, walkFiles } from "@rust-toolchain/cache/fs";
  * that into every test process. `metadata` shells out to `cargo`, and
  * `registry` calls crates.io.
  *
+ * `metadata` is handed to **both** `run` and `runPost` — the main phase reads
+ * it for the MSRV check, the post phase reads it again to compute a pruned
+ * layer's keep-set. It is not post-phase-only, whatever an older version of
+ * this comment said.
+ *
  * The `node:fs` adapters used to be here too, and that was a mistake: they
  * have no network and no vendored SDK, so they were exempt by proximity
  * rather than for a reason. Their only description was a hand-written test
@@ -190,6 +195,7 @@ if (process.env.STATE_isPost === "true") {
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     cache: client,
     registry,
+    metadata,
     stageFs: nodeStageFs,
   });
 }

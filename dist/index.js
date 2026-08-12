@@ -63161,6 +63161,31 @@ function parsePackageSet(json) {
   }
   return { packages, workspaceMembers };
 }
+function parsePackageMsrv(json) {
+  let document2;
+  try {
+    document2 = JSON.parse(json);
+  } catch (error2) {
+    throw new Error(`\`cargo metadata\` did not emit valid JSON: ${describeError(error2)}`, { cause: error2 });
+  }
+  const raw = isRecord(document2) ? document2.packages : undefined;
+  if (!Array.isArray(raw))
+    return [];
+  const found = [];
+  for (const entry of raw) {
+    if (!isRecord(entry))
+      continue;
+    const { name, version: version3, rust_version: rustVersion } = entry;
+    if (typeof name !== "string" || name === "")
+      continue;
+    if (typeof version3 !== "string" || version3 === "")
+      continue;
+    if (typeof rustVersion !== "string" || rustVersion === "")
+      continue;
+    found.push({ name, version: version3, rustVersion });
+  }
+  return found;
+}
 
 // src/cache/prune.ts
 var POLICIES = {
@@ -63333,6 +63358,38 @@ function renderSummary(restored, saved) {
 }
 
 // src/msrv.ts
+var VERSION = /^(\d+)\.(\d+)(?:\.(\d+))?(?:[-+].*)?$/;
+function parseVersion(value) {
+  const match2 = value.trim().match(VERSION);
+  if (!match2)
+    return;
+  return {
+    major: Number(match2[1]),
+    minor: Number(match2[2]),
+    patch: match2[3] === undefined ? 0 : Number(match2[3])
+  };
+}
+function compareVersions(a, b) {
+  if (a.major !== b.major)
+    return a.major - b.major;
+  if (a.minor !== b.minor)
+    return a.minor - b.minor;
+  return a.patch - b.patch;
+}
+var POLICIES2 = {
+  off: true,
+  warn: true,
+  error: true
+};
+var DEFAULT_POLICY2 = "warn";
+function parseMsrvPolicy(value) {
+  const normalised = value.trim().toLowerCase();
+  if (normalised === "")
+    return DEFAULT_POLICY2;
+  if (Object.hasOwn(POLICIES2, normalised))
+    return normalised;
+  throw new Error(`\`msrv-check\` is \`${value.trim()}\`, which is not a policy. ` + `Valid values are off, warn, error.`);
+}
 var NONE = { source: "none" };
 var isRecord2 = (value) => typeof value === "object" && value !== null;
 function declaredVersion(table) {
@@ -63370,6 +63427,53 @@ function parseCargoManifest(contents) {
     return { rustVersion: workspaceVersion, source: "workspace-inherit" };
   }
   return NONE;
+}
+function bestRequirement(packages) {
+  let best;
+  for (const entry of packages) {
+    const parsed = parseVersion(entry.rustVersion);
+    if (!parsed)
+      continue;
+    if (best && compareVersions(parsed, best.parsed) <= 0)
+      continue;
+    best = {
+      parsed,
+      requirement: {
+        version: entry.rustVersion,
+        package: `${entry.name} ${entry.version}`
+      }
+    };
+  }
+  return best;
+}
+function evaluateMsrv(installed, packages) {
+  const current = parseVersion(installed);
+  if (!current) {
+    return {
+      kind: "skipped",
+      reason: "the installed rustc version could not be read"
+    };
+  }
+  const best = bestRequirement(packages);
+  if (!best) {
+    return {
+      kind: "skipped",
+      reason: "no package in the graph declares a rust-version"
+    };
+  }
+  if (compareVersions(current, best.parsed) < 0) {
+    return { kind: "violation", installed, required: best.requirement };
+  }
+  return { kind: "ok", required: best.requirement };
+}
+function describeVerdict(verdict) {
+  if (verdict.kind === "violation") {
+    return `${verdict.required.package} requires rustc ${verdict.required.version}, ` + `but ${verdict.installed} is installed.`;
+  }
+  if (verdict.kind === "skipped") {
+    return `MSRV check skipped: ${verdict.reason}.`;
+  }
+  return "The installed toolchain satisfies every declared rust-version.";
 }
 
 // src/outputs.ts
@@ -63648,6 +63752,32 @@ async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome
     cacheHit: restored.length > 0 && restored.every((entry) => entry.result === "exact")
   };
 }
+async function checkMsrv(deps, policy, installed, manifestDir) {
+  if (policy === "off")
+    return;
+  let packages;
+  try {
+    packages = parsePackageMsrv(await deps.metadata.read(manifestDir));
+  } catch (error2) {
+    deps.core.warning(`MSRV check could not run: ${describeError(error2)}`);
+    return;
+  }
+  const verdict = evaluateMsrv(installed, packages);
+  if (verdict.kind === "skipped") {
+    deps.core.warning(describeVerdict(verdict));
+    return;
+  }
+  if (verdict.kind === "ok") {
+    deps.core.info(describeVerdict(verdict));
+    return verdict.required.version;
+  }
+  if (policy === "error") {
+    deps.core.setFailed(describeVerdict(verdict));
+  } else {
+    deps.core.warning(describeVerdict(verdict));
+  }
+  return verdict.required.version;
+}
 async function run(deps) {
   try {
     deps.core.saveState("isPost", "true");
@@ -63698,6 +63828,8 @@ async function run(deps) {
     const rustc = readRustcVersion(deps, env);
     deps.core.info(rustc.banner);
     applyCargoDefaults(deps, rustc.info.version);
+    const msrvPolicy = parseMsrvPolicy(deps.core.getInput("msrv-check"));
+    const msrvEffective = await checkMsrv(deps, msrvPolicy, rustc.info.version, deps.env.GITHUB_WORKSPACE ?? ".");
     const specCacheKey = generateSpecCacheKey(rustc.info.cacheKey, spec);
     const toolResolution = await resolveToolVersions(toolSpecs, {
       client: deps.registry,
@@ -63728,7 +63860,8 @@ async function run(deps) {
       tools: toolResolution.tools,
       msrv: {
         declared: config.manifest.rustVersion,
-        source: config.manifest.source
+        source: config.manifest.source,
+        effective: msrvEffective
       }
     });
     for (const [name, value] of toOutputEntries(outputs)) {
@@ -64025,6 +64158,7 @@ if (process.env.STATE_isPost === "true") {
     delay: (ms) => new Promise((resolve3) => setTimeout(resolve3, ms)),
     cache: client,
     registry,
+    metadata: metadata2,
     stageFs: nodeStageFs
   });
 }
