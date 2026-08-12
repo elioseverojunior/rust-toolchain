@@ -64,6 +64,13 @@ interface Harness {
   saves: SaveCall[];
   registryCalls: string[];
   metadataCalls: string[];
+  /**
+   * A single ordered log across `cache.restore` and `metadata.read`, so a
+   * test can pin that one runs before the other. `restores`/`metadataCalls`
+   * above each record their own calls but not their order relative to each
+   * other, which is exactly the fact F1 depends on.
+   */
+  order: string[];
   stageFs: StageFs & { linked: string[]; moved: string[]; removed: string[] };
 }
 
@@ -142,6 +149,7 @@ function harness(
   const saves: SaveCall[] = [];
   const registryCalls: string[] = [];
   const metadataCalls: string[] = [];
+  const order: string[] = [];
   const queues = options.execResults ?? {};
 
   const stageFs = fakeStageFs();
@@ -221,6 +229,7 @@ function harness(
     },
     cache: {
       restore: async (restorePaths, key, restoreKeys) => {
+        order.push(`restore:${key}`);
         restores.push({ paths: restorePaths, key, restoreKeys });
         return options.restoreResult?.(key);
       },
@@ -230,6 +239,7 @@ function harness(
     },
     metadata: {
       read: (manifestDir: string) => {
+        order.push("metadata");
         metadataCalls.push(manifestDir);
         if (options.metadataError) return Promise.reject(options.metadataError);
         return Promise.resolve(options.metadataJson ?? "{}");
@@ -253,6 +263,7 @@ function harness(
     saves,
     registryCalls,
     metadataCalls,
+    order,
     stageFs,
   };
 }
@@ -2335,6 +2346,59 @@ describe("msrv-fallback", () => {
   });
 });
 
+// F7: parseCargoManifest's throw is justified only when msrv-fallback needs
+// the file to resolve a channel. With the flag off, nothing downstream reads
+// the manifest, so a TOML error in it must not fail an action that never
+// asked for its content.
+describe("a malformed Cargo.toml", () => {
+  const badToml = "[package";
+
+  it("fails the action when msrv-fallback is on", async () => {
+    const h = harness({
+      toml: null,
+      inputs: { "msrv-fallback": "true" },
+      files: { "Cargo.toml": badToml },
+    });
+    await run(h.deps);
+
+    expect(h.failures[0]).toMatch(/Cargo\.toml is not valid TOML/);
+    expect(h.calls).toEqual([]);
+  });
+
+  it("warns and continues when msrv-fallback is off", async () => {
+    const h = harness({
+      toml: null,
+      files: { "Cargo.toml": badToml },
+    });
+    await run(h.deps);
+
+    expect(h.failures).toEqual([]);
+    expect(
+      h.warnings.some((w) => /Cargo\.toml could not be parsed/.test(w)),
+    ).toBe(true);
+    // Treated as "declares nothing" rather than left half-resolved.
+    expect(h.outputs["msrv"]).toBe("");
+    expect(h.outputs["msrv-source"]).toBe("none");
+    const install = h.calls.find(
+      (c) => c.file === "rustup" && c.args[0] === "toolchain",
+    );
+    expect(install?.args).toContain("stable");
+  });
+
+  it("still runs the MSRV check, since the manifest is present", async () => {
+    const h = harness({
+      toml: null,
+      files: { "Cargo.toml": badToml },
+      metadataJson: GRAPH_JSON,
+      release: "1.88.0",
+    });
+    await run(h.deps);
+
+    expect(h.metadataCalls).toHaveLength(1);
+    expect(h.outputs["msrv-effective"]).toBe("1.95.0");
+  });
+});
+
 const GRAPH_JSON = JSON.stringify({
   packages: [
     {
@@ -2347,9 +2411,21 @@ const GRAPH_JSON = JSON.stringify({
   ],
 });
 
+// A manifest is present in every case below, unless the test's whole point is
+// its absence: checkMsrv skips silently — before calling metadata at all —
+// when there is no Cargo.toml (F2), so any test that expects `metadata.read`
+// to run needs one.
+const CARGO_TOML = {
+  "Cargo.toml": '[package]\nname = "x"\nversion = "0.1.0"\n',
+};
+
 describe("msrv-check", () => {
   it("warns by default when the graph outruns the installed toolchain", async () => {
-    const h = harness({ metadataJson: GRAPH_JSON, release: "1.88.0" });
+    const h = harness({
+      files: CARGO_TOML,
+      metadataJson: GRAPH_JSON,
+      release: "1.88.0",
+    });
     await run(h.deps);
 
     expect(h.failures).toEqual([]);
@@ -2365,6 +2441,7 @@ describe("msrv-check", () => {
 
   it("fails the step under error", async () => {
     const h = harness({
+      files: CARGO_TOML,
       metadataJson: GRAPH_JSON,
       release: "1.88.0",
       inputs: { "msrv-check": "error" },
@@ -2377,7 +2454,11 @@ describe("msrv-check", () => {
   });
 
   it("stays silent when the toolchain satisfies the graph", async () => {
-    const h = harness({ metadataJson: GRAPH_JSON, release: "1.97.1" });
+    const h = harness({
+      files: CARGO_TOML,
+      metadataJson: GRAPH_JSON,
+      release: "1.97.1",
+    });
     await run(h.deps);
 
     expect(h.failures).toEqual([]);
@@ -2397,14 +2478,38 @@ describe("msrv-check", () => {
     expect(h.outputs["msrv-effective"]).toBe("");
   });
 
-  // Inability to verify is not a violation, so it warns even under `error`.
-  it("warns and succeeds under error when metadata cannot run", async () => {
+  // F2: an absent Cargo.toml is not the same fact as "the check was expected
+  // to work and could not" -- there was never anything to check, so this must
+  // stay silent even under `error`, and it must never pay for the
+  // `cargo metadata` round trip in the first place.
+  it("skips silently, without ever calling metadata, when there is no Cargo.toml", async () => {
     const h = harness({
+      // Queued so the test would still see the OLD warning if the fix
+      // regressed and `metadata.read` were called anyway.
       metadataError: new Error("could not find `Cargo.toml`"),
       inputs: { "msrv-check": "error" },
     });
     await run(h.deps);
 
+    expect(h.metadataCalls).toEqual([]);
+    expect(h.failures).toEqual([]);
+    expect(h.warnings).toEqual([]);
+    expect(h.outputs["msrv-effective"]).toBe("");
+  });
+
+  // Inability to verify is not a violation, so it warns even under `error` --
+  // for every cannot-run cause OTHER than "no Cargo.toml at all" (F2 above).
+  // A manifest is present here (unlike that test) so the check is expected to
+  // run, and `metadata.read` is what fails it -- e.g. no lockfile.
+  it("warns and succeeds under error when metadata cannot run", async () => {
+    const h = harness({
+      files: CARGO_TOML,
+      metadataError: new Error("could not find `Cargo.lock`"),
+      inputs: { "msrv-check": "error" },
+    });
+    await run(h.deps);
+
+    expect(h.metadataCalls).toHaveLength(1);
     expect(h.failures).toEqual([]);
     expect(h.warnings.some((w) => /MSRV check could not run/.test(w))).toBe(
       true,
@@ -2413,6 +2518,7 @@ describe("msrv-check", () => {
 
   it("warns when the graph declares nothing", async () => {
     const h = harness({
+      files: CARGO_TOML,
       metadataJson: JSON.stringify({ packages: [] }),
       inputs: { "msrv-check": "error" },
     });
@@ -2422,5 +2528,29 @@ describe("msrv-check", () => {
     expect(
       h.warnings.some((w) => /no package in the graph declares/.test(w)),
     ).toBe(true);
+  });
+
+  // F1: `checkMsrv` must run after the cache restore or every default `warn`
+  // run pays for fetching the registry index on a cold `$CARGO_HOME/registry`
+  // -- exactly the network cost the `registry` layer exists to remove.
+  it("restores the registry layer before running the MSRV check", async () => {
+    const h = harness({
+      files: CARGO_TOML,
+      metadataJson: GRAPH_JSON,
+      env: cacheEnv,
+      inputs: {
+        cache: "true",
+        "cache-key-hash": "a1b2c3",
+        "msrv-check": "warn",
+      },
+    });
+    await run(h.deps);
+
+    const restoreIndex = h.order.findIndex((entry) =>
+      entry.startsWith("restore:"),
+    );
+    const metadataIndex = h.order.indexOf("metadata");
+    expect(restoreIndex).toBeGreaterThanOrEqual(0);
+    expect(metadataIndex).toBeGreaterThan(restoreIndex);
   });
 });

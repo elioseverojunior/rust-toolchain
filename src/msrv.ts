@@ -143,8 +143,14 @@ export function parseCargoManifest(contents: string): ManifestMsrv {
   // member the workspace value ONLY when it writes
   // `rust-version.workspace = true`; a `[package]` that simply omits the key
   // has no MSRV, even with `[workspace.package]` sitting in the same file.
-  // A virtual manifest is the other case — no `[package]` at all, so the
-  // workspace table IS the declaration rather than something inherited.
+  //
+  // `workspace-inherit` is the source reported for BOTH of the shapes that
+  // reach here: a member that opted in with `rust-version.workspace = true`,
+  // where the value really is inherited from the root; and a virtual
+  // manifest, which has no `[package]` at all, so the workspace table IS the
+  // declaration rather than something inherited from anywhere. The two are
+  // conflated deliberately — `msrv-source` is a published output, and adding
+  // a third name is a wider, versioned change that this fix does not make.
   //
   // Falling back to the workspace value unconditionally would report an MSRV
   // the crate does not have, and under `msrv-fallback: true` would install a

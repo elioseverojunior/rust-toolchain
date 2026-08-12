@@ -204,10 +204,13 @@ Full reasoning in `docs/content/ARCHITECTURE.md` → Key Design Decisions.
   therefore sits BELOW the toml in `mergeConfig`'s channel chain, and defaults
   to `false`. Reversing either would silently move a repository that declares
   an MSRV off `stable`, or let a floor overrule a pin the author wrote down.
-- **A `cargo metadata` MSRV check that cannot run always warns, never fails,
-  even under `msrv-check: error`.** Inability to verify is not a violation;
-  conflating them fails every repository without a lockfile. `evaluateMsrv`
-  keeps `skipped` distinct from `ok` for exactly this reason.
+- **A `cargo metadata` MSRV check that cannot run never fails, even under
+  `msrv-check: error`.** It warns for every cannot-run cause except one: a
+  missing `Cargo.toml` skips silently instead, because there was never
+  anything to check — a warning there would land on every run for a consumer
+  who enabled neither MSRV feature. Inability to verify is not a violation;
+  conflating any of these with one fails every repository without a lockfile.
+  `evaluateMsrv` keeps `skipped` distinct from `ok` for exactly this reason.
 - **The MSRV comes from the resolved graph, not the manifest.** cargo-binstall
   1.21.1 declares `rust-version = 1.79` while pinning vergen 10.0.1, which
   needs 1.95, so a manifest-only check passes and the build then fails. This is

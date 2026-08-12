@@ -63582,15 +63582,22 @@ function readTomlConfig(deps) {
   }
   return parseRustToolchainToml(contents);
 }
-function readCargoManifest(deps) {
+function readCargoManifest(deps, fallbackOn) {
   const workspace = deps.env.GITHUB_WORKSPACE ?? ".";
   let contents;
   try {
     contents = deps.readFile(join8(workspace, "Cargo.toml"));
   } catch {
-    return { source: "none" };
+    return { manifest: { source: "none" }, present: false };
   }
-  return parseCargoManifest(contents);
+  try {
+    return { manifest: parseCargoManifest(contents), present: true };
+  } catch (error2) {
+    if (fallbackOn)
+      throw error2;
+    deps.core.warning(`Cargo.toml could not be parsed, continuing without its MSRV data: ` + describeError(error2));
+    return { manifest: { source: "none" }, present: true };
+  }
 }
 function readInputs(deps) {
   return {
@@ -63604,15 +63611,21 @@ function readInputs(deps) {
 function resolveConfiguration(deps) {
   const inputs = readInputs(deps);
   const toml = readTomlConfig(deps);
-  const manifest = readCargoManifest(deps);
   const fallback = readBooleanInput(deps.core, "msrv-fallback", false);
+  const { manifest, present: manifestPresent } = readCargoManifest(deps, fallback.value);
   const resolved = mergeConfig(toml, inputs, fallback.value ? manifest.rustVersion : undefined);
   const channel = resolveChannel(resolved.channel);
   assertProfileAvailable(channel, resolved.profile);
   const builder = new ToolchainSpecBuilder().withChannel(channel).withTargets(...resolved.targets).withComponents(...resolved.components);
   if (resolved.profile)
     builder.withProfile(resolved.profile);
-  return { spec: builder.build(), inputs, toml, manifest };
+  return {
+    spec: builder.build(),
+    inputs,
+    toml,
+    manifest,
+    manifestPresent
+  };
 }
 function hasRustup(deps, env) {
   const probe = deps.exec("rustup", ["--help"], {
@@ -63752,8 +63765,10 @@ async function resolveCacheLifecycle(deps, cacheRequest, specCacheKey, cargoHome
     cacheHit: restored.length > 0 && restored.every((entry) => entry.result === "exact")
   };
 }
-async function checkMsrv(deps, policy, installed, manifestDir) {
+async function checkMsrv(deps, policy, installed, manifestDir, manifestPresent) {
   if (policy === "off")
+    return;
+  if (!manifestPresent)
     return;
   let packages;
   try {
@@ -63787,6 +63802,7 @@ async function run(deps) {
     });
     const prunePolicy = parsePrunePolicy(deps.core.getInput("cache-prune"));
     const toolSpecs = parseToolSpecs(deps.core.getInput("cargo-tools"));
+    const msrvPolicy = parseMsrvPolicy(deps.core.getInput("msrv-check"));
     const cacheOnFailure = readBooleanInput(deps.core, "cache-on-failure", false);
     deps.core.exportVariable("RUST_TOOLCHAIN_CACHE_ON_FAILURE", String(cacheOnFailure.value));
     const config = resolveConfiguration(deps);
@@ -63828,8 +63844,6 @@ async function run(deps) {
     const rustc = readRustcVersion(deps, env);
     deps.core.info(rustc.banner);
     applyCargoDefaults(deps, rustc.info.version);
-    const msrvPolicy = parseMsrvPolicy(deps.core.getInput("msrv-check"));
-    const msrvEffective = await checkMsrv(deps, msrvPolicy, rustc.info.version, deps.env.GITHUB_WORKSPACE ?? ".");
     const specCacheKey = generateSpecCacheKey(rustc.info.cacheKey, spec);
     const toolResolution = await resolveToolVersions(toolSpecs, {
       client: deps.registry,
@@ -63838,6 +63852,7 @@ async function run(deps) {
       delay: deps.delay
     });
     const { cache, cacheHit } = await resolveCacheLifecycle(deps, cacheRequest, specCacheKey, rustupEnv.CARGO_HOME, hashToolSet(toolResolution.tools), prunePolicy);
+    const msrvEffective = await checkMsrv(deps, msrvPolicy, rustc.info.version, deps.env.GITHUB_WORKSPACE ?? ".", config.manifestPresent);
     ensureTools(toolResolution, {
       exec: deps.exec,
       env,

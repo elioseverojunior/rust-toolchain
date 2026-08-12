@@ -25,3 +25,6 @@ node_modules/
 # Local claude-mem scratch buffer — gitignored, not project source.
 # ESLint (`ignores`) and rumdl (`exclude`) already skip it.
 .remember/
+
+# Superpowers
+/**/.superpowers/sdd

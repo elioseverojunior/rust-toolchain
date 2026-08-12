@@ -44,6 +44,7 @@ jobs:
             tool-bins: "comply ignorefile ign"
             msrv-check: ""
             msrv-expected: ""
+            msrv-effective-expected: ""
             toml: |
               [toolchain]
               channel = "1.97"
@@ -69,6 +70,7 @@ jobs:
             tool-bins: ""
             msrv-check: ""
             msrv-expected: ""
+            msrv-effective-expected: ""
             toml: |
               [toolchain]
               channel = "1.97"
@@ -86,10 +88,35 @@ jobs:
             cargo-tools: ""
             tool-bins: ""
             msrv-check: "warn"
-            # This repository has no Cargo.toml, so the check cannot run and
-            # must warn rather than fail — the degradation path, which is the
-            # half most likely to regress unnoticed.
+            # This repository has no Cargo.toml, so there is nothing to check
+            # and the check must skip SILENTLY rather than warn or fail — the
+            # degradation path most likely to regress unnoticed. `msrv-source`
+            # stays "none" and `msrv-effective` stays empty, the same as the
+            # check never having run at all.
             msrv-expected: ""
+            msrv-effective-expected: ""
+            toml: |
+              [toolchain]
+              channel = "1.88"
+
+          - name: "msrv-check error never fails without a Cargo.toml"
+            toolchain: "1.88"
+            targets: ""
+            components: ""
+            profile: ""
+            expected: "1.88"
+            unexpected: ""
+            cargo-tools: ""
+            tool-bins: ""
+            msrv-check: "error"
+            # AGENTS.md's sharpest MSRV invariant: a check that cannot run
+            # never fails the build, even under `error` — and this repository
+            # has no Cargo.toml, so under `error` is exactly where a
+            # regression would be worst, failing every consumer without one.
+            # The job passing at all is the assertion; msrv/msrv-effective
+            # stay empty because there was nothing to check.
+            msrv-expected: ""
+            msrv-effective-expected: ""
             toml: |
               [toolchain]
               channel = "1.88"
@@ -210,6 +237,7 @@ jobs:
           MSRV_EFFECTIVE: ${{ steps.rust-toolchain.outputs.msrv-effective }}
           MSRV_SOURCE: ${{ steps.rust-toolchain.outputs.msrv-source }}
           EXPECTED: ${{ matrix.msrv-expected }}
+          EFFECTIVE_EXPECTED: ${{ matrix.msrv-effective-expected }}
         run: |
           echo "msrv:           $MSRV"
           echo "msrv-effective: $MSRV_EFFECTIVE"
@@ -223,6 +251,14 @@ jobs:
           # inventing a value.
           if [[ -z "$EXPECTED" && "$MSRV_SOURCE" != "none" ]]; then
             echo "msrv-source is '$MSRV_SOURCE', expected 'none'"
+            exit 1
+          fi
+          # msrv-effective is the only output that reflects whether the check
+          # actually RAN and degraded, as opposed to never having run at all
+          # (no msrv-check, or no Cargo.toml to check against) — msrv and
+          # msrv-source alone cannot tell those two apart.
+          if [[ "$MSRV_EFFECTIVE" != "$EFFECTIVE_EXPECTED" ]]; then
+            echo "msrv-effective is '$MSRV_EFFECTIVE', expected '$EFFECTIVE_EXPECTED'"
             exit 1
           fi
 
