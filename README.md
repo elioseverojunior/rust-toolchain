@@ -38,7 +38,7 @@ One action, driven by the `rust-toolchain.toml` you already committed, that inst
 _every later step_, and publishes what it resolved as typed outputs instead of leaving you to guess.
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v0.1
+- uses: elioseverojunior/rust-toolchain@v0.5
 ```
 
 That single line reads `rust-toolchain.toml`, installs the channel, targets, components and profile it
@@ -124,19 +124,37 @@ Rust action ecosystem.
 
 ## Versioning
 
-Releases follow SemVer, and floating tags track them:
+Releases follow SemVer. Each one publishes **four** tags — three of which are retargeted to it, and
+one of which is fixed forever:
 
-| Reference       | Points at                  | Use when                                                  |
-| --------------- | -------------------------- | --------------------------------------------------------- |
-| `@v0.1`         | Newest `0.1.x` release     | **Recommended** — picks up fixes, never a breaking change |
-| `@v0.1.0-17`    | One exact release, forever | You want byte-identical behaviour across every run        |
-| `@<commit-sha>` | One exact commit           | Your supply-chain policy requires SHA pinning             |
-| `@main`         | Unreleased work            | Never, in CI you care about                               |
+| Reference       | Points at                          | Use when                                                     |
+| --------------- | ---------------------------------- | ------------------------------------------------------------ |
+| `@v0`           | Newest release, whatever the minor | Never, before 1.0 — see below, this one _will_ break you     |
+| `@v0.5`         | Newest `0.5.x` release             | **Recommended** — picks up fixes, never a breaking change    |
+| `@v0.5.0`       | Newest build of `0.5.0`            | You are tracking a patch through its rebuilds, which is rare |
+| `@v0.5.0-11`    | One exact release, fixed forever   | You want byte-identical behaviour across every run           |
+| `@<commit-sha>` | One exact commit                   | Your supply-chain policy requires SHA pinning                |
+| `@main`         | Unreleased work                    | Never, in CI you care about                                  |
 
-**There is deliberately no `@v1`.** The action is pre-1.0, so `0.1` is the compatibility boundary — in
-SemVer's `0.x` range the minor behaves as the major. If you arrived from `dtolnay/rust-toolchain@v1`
-and reached for `@v1` out of habit, use `@v0.1`. When 1.0 ships, `@v1` becomes the recommended float
-and `@v0.1` keeps working.
+The minor in these examples is the newest at the time of writing; check
+[Releases](https://github.com/elioseverojunior/rust-toolchain/releases) for the current one. Only the
+last three rows are stable references — the first three are moved by every release, which is the point
+of them.
+
+**`@v0` is the trap, not the safe default.** It is the habit `@v1` teaches on post-1.0 actions, and
+before 1.0 it means the opposite of what it means there. The action is pre-1.0, so the **minor** is the
+compatibility boundary — in SemVer's `0.x` range the minor behaves as the major — and `@v0` therefore
+floats straight across breaking changes. It is published for completeness and because it becomes the
+right answer at 1.0, not because it is the one to use now.
+
+**There is deliberately no `@v1`.** If you arrived from `dtolnay/rust-toolchain@v1` and reached for
+`@v1` out of habit, use `@v0.5`. When 1.0 ships, `@v1` becomes the recommended float and `@v0.5` keeps
+working.
+
+> **Copying a pin out of an old README or blog post?** Check it against the list above. Every tag this
+> project has ever published still resolves, so a stale `@v0.1` does not fail — it silently gives you a
+> months-old action that behaves nothing like the current one. A reference that no longer exists is the
+> easy case; one that still works is not.
 
 ## Roadmap
 
@@ -178,7 +196,7 @@ are still published for a workflow that wants to wire its own `actions/cache` st
 ## Quick Start
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v0.1
+- uses: elioseverojunior/rust-toolchain@v0.5
 ```
 
 Without any inputs, the action reads `rust-toolchain.toml` in the workspace root.
@@ -187,7 +205,7 @@ If the file doesn't exist, defaults to `stable`.
 ### With Overrides
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v0.1
+- uses: elioseverojunior/rust-toolchain@v0.5
   with:
     toolchain: nightly
     targets: wasm32-unknown-unknown, aarch64-apple-darwin
@@ -200,7 +218,7 @@ If the file doesn't exist, defaults to `stable`.
 Components can be specified as comma-separated, space-separated, or newline-separated:
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v0.1
+- uses: elioseverojunior/rust-toolchain@v0.5
   with:
     components: |
       clippy
@@ -211,7 +229,7 @@ Components can be specified as comma-separated, space-separated, or newline-sepa
 Or inline:
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v0.1
+- uses: elioseverojunior/rust-toolchain@v0.5
   with:
     components: "clippy rustfmt llvm-tools"
 ```
@@ -221,7 +239,7 @@ Or inline:
 Set the Rust profile via input (overrides `rust-toolchain.toml`):
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v0.1
+- uses: elioseverojunior/rust-toolchain@v0.5
   with:
     profile: minimal
 ```
@@ -301,7 +319,7 @@ This action is a `node24` action.
 ## Usage
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v0.1
+- uses: elioseverojunior/rust-toolchain@v0.5
   with:
     toolchain:
     # Rust toolchain channel. Supports literal channels (stable, nightly, beta), versioned channels (1.89.0), expressive formats (stable 6 months ago, stable minus 3 releases), and <major.minor> series (1.62), which rustup resolves to the newest patch in that series. When omitted, reads from rust-toolchain.toml.
@@ -402,7 +420,7 @@ Every value the action settled on is published back, so a later step never has
 to re-derive what was installed.
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v0.1
+- uses: elioseverojunior/rust-toolchain@v0.5
   id: rust
   with:
     target: wasm32-unknown-unknown
@@ -443,7 +461,7 @@ jobs:
       config: ${{ steps.rust.outputs.json }}
     steps:
       - uses: actions/checkout@v5
-      - uses: elioseverojunior/rust-toolchain@v0.1
+      - uses: elioseverojunior/rust-toolchain@v0.5
         id: rust
 
   build:
@@ -504,7 +522,7 @@ Set `cache: true` and the action runs the whole lifecycle itself — no
 `actions/cache` step, no `Swatinem/rust-cache`:
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v0.1
+- uses: elioseverojunior/rust-toolchain@v0.5
   with:
     toolchain: stable
     cache: true
@@ -574,7 +592,7 @@ duplication.
 
 ```yaml
 - id: rust
-  uses: elioseverojunior/rust-toolchain@v0.1
+  uses: elioseverojunior/rust-toolchain@v0.5
   with:
     toolchain: stable
     cache: true
@@ -666,7 +684,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v5
-  - uses: elioseverojunior/rust-toolchain@v0.1
+  - uses: elioseverojunior/rust-toolchain@v0.5
     with:
       cache: true
       cache-key-hash: ${{ hashFiles('**/Cargo.lock') }}
@@ -907,7 +925,7 @@ this action never read. If your crates pin their own toolchains, opt out so each
 `rust-toolchain.toml` keeps applying to its own directory:
 
 ```yaml
-- uses: elioseverojunior/rust-toolchain@v0.1
+- uses: elioseverojunior/rust-toolchain@v0.5
   with:
     toolchain: stable
     set-rustup-toolchain: false
