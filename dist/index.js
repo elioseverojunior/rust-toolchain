@@ -61823,6 +61823,8 @@ function binPaths(cargoHome) {
   const bin = `${cargoHome}/bin`;
   return [
     `${bin}/**`,
+    `${cargoHome}/.crates.toml`,
+    `${cargoHome}/.crates2.json`,
     ...RUSTUP_SHIMS.flatMap((shim) => [
       `!${bin}/${shim}`,
       `!${bin}/${shim}.exe`

@@ -209,11 +209,34 @@ export const RUSTUP_SHIMS = [
  * Nothing on disk is touched, so a failed save leaves the working tree intact.
  * Forward-slash joined on every platform, deliberately not `path.join`: a
  * backslash is an escape character in a glob on POSIX.
+ *
+ * The last two entries are cargo's install ledger, and they are the difference
+ * between a warm `bin` cache being usable and being a trap. They sit at
+ * `$CARGO_HOME/`, one level ABOVE `bin/`, so the glob above cannot reach them.
+ * Cargo records there which package installed which binary, from which source
+ * and revision; restore the binaries without it and cargo finds files it has no
+ * record of. Measured against cargo 1.97.1, the two cases differ completely:
+ *
+ *   with the ledger:    Ignored package `x` is already installed  -> exit 0
+ *   without the ledger: error: binary `x` already exists in destination -> 101
+ *
+ * So a consumer's own `cargo install` step — for anything `cargo-tools` cannot
+ * express, such as a `--git --rev` build — succeeds as a no-op on a cache hit
+ * with the ledger, and hard-fails on every run after the first without it. The
+ * usual workaround, `--force`, rebuilds from source every run and thereby
+ * discards the exact saving this layer exists to provide.
  */
 export function binPaths(cargoHome: string): string[] {
   const bin = `${cargoHome}/bin`;
   return [
     `${bin}/**`,
+    // Grouped with the include above, not appended at the end: the two
+    // directory negations must remain the LAST entries, because they are what
+    // strips directories from tar's manifest and makes every negation before
+    // them take effect. These two are plain file paths outside `bin/`, so no
+    // negation here can match them either way.
+    `${cargoHome}/.crates.toml`,
+    `${cargoHome}/.crates2.json`,
     ...RUSTUP_SHIMS.flatMap((shim) => [
       `!${bin}/${shim}`,
       `!${bin}/${shim}.exe`,
