@@ -557,6 +557,38 @@ jobs:
           PY
           cat e2e-probe/Cargo.toml
 
+          # Rebuild, and this is load-bearing rather than tidiness. Editing
+          # Cargo.toml alone leaves Cargo.lock still listing itoa, and the post
+          # step runs `cargo metadata --format-version 1 --locked`, which then
+          # refuses outright: "cannot update the lock file ... because --locked
+          # was passed to prevent this", exit 101 with EMPTY stdout. The action
+          # reads that as an unusable package set and does the correct, safe
+          # thing -- stages the whole tree instead of a keep-set -- so itoa
+          # survived and the warm job's assertion failed on all three runners.
+          # The bug was the fixture, not the pruning.
+          #
+          # `--locked` is deliberate in the action: a lockfile that would have
+          # to be updated is exactly when the resolved set is a guess, and
+          # pruning on a guess drops artifacts a later build needs.
+          #
+          # Rebuilding is also what makes this fixture REALISTIC. A real job
+          # that drops a dependency compiles afterwards, which updates the lock
+          # and leaves the now-orphaned artifacts behind in target/ -- cargo
+          # never collects them. That residue is the entire thing pruning
+          # exists to remove, so building it is what gives the assertion below
+          # something true to find.
+          cargo build --manifest-path e2e-probe/Cargo.toml
+
+          echo "itoa artifacts still on disk after the rebuild (pruning must drop these):"
+          find e2e-probe/target -name 'libitoa-*' | head -5
+          find e2e-probe/target -name 'libitoa-*' | grep -q . \
+            || { echo "::error::the rebuild removed itoa's artifacts, so the pruning assertion would be vacuous"; exit 1; }
+
+          echo "cargo metadata --locked must now succeed, or the action cannot prune at all:"
+          cargo metadata --manifest-path e2e-probe/Cargo.toml --format-version 1 --locked \
+            > /dev/null \
+            || { echo "::error::cargo metadata --locked still fails; the action will stage everything and the assertion below would be vacuous"; exit 1; }
+
       - name: Plant Bin-Layer Evidence
         shell: bash
         run: |

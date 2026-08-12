@@ -64,12 +64,40 @@ const client = {
  * A wrong package set would prune artifacts a later build needs.
  */
 const metadata = {
-  read: async (manifestDir: string): Promise<string> =>
-    spawnSync("cargo", ["metadata", "--format-version", "1", "--locked"], {
-      cwd: manifestDir,
-      encoding: "utf-8",
-      maxBuffer: 64 * 1024 * 1024,
-    }).stdout ?? "",
+  read: async (manifestDir: string): Promise<string> => {
+    const result = spawnSync(
+      "cargo",
+      ["metadata", "--format-version", "1", "--locked"],
+      { cwd: manifestDir, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
+    );
+
+    // A failure is REPORTED rather than returned as "". The previous form was
+    // `.stdout ?? ""`, which collapsed every distinct failure -- cargo missing
+    // from PATH, a manifest that does not parse, a lockfile cargo refuses to
+    // update -- into an empty string, and the empty string then surfaced as
+    // "`cargo metadata` did not emit valid JSON: Unexpected end of JSON
+    // input". That message is true and useless: it describes the symptom of
+    // the reader's own fallback, not the cause, and it names JSON when nothing
+    // ever tried to produce any.
+    //
+    // It cost a real diagnosis. The E2E fixture dropped a dependency from
+    // Cargo.toml without rebuilding, so `--locked` exited 101 with "cannot
+    // update the lock file", every layer silently staged its whole tree, and
+    // the only evidence was a complaint about JSON.
+    //
+    // The policy above this does not change: the caller still catches, warns,
+    // and stages everything. Only the sentence it can print gets better.
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      const stderr = (result.stderr ?? "").trim();
+      const detail =
+        stderr === "" ? "no stderr" : (stderr.split("\n")[0] ?? "");
+      throw new Error(
+        `\`cargo metadata --locked\` exited ${result.status} in ${manifestDir}: ${detail}`,
+      );
+    }
+    return result.stdout ?? "";
+  },
 };
 
 /**
