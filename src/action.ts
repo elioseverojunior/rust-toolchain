@@ -97,6 +97,17 @@ export interface ExecResult {
   /** Exit code, or `null` when the process never started. */
   status: number | null;
   stdout?: string;
+  /**
+   * Captured stderr, and only ever populated under `capture`.
+   *
+   * An uncaptured command inherits both streams, so its stderr has already
+   * reached the log by the time this returns and there is nothing here to
+   * carry. A captured one has had its stderr withheld from the log on purpose
+   * (see `ExecOptions.capture`), which is exactly why the text has to survive
+   * in the result: the caller is now the only thing that can decide whether
+   * anyone should see it.
+   */
+  stderr?: string;
   /** Set when the process could not be spawned at all (e.g. ENOENT). */
   error?: Error;
 }
@@ -104,7 +115,17 @@ export interface ExecResult {
 export interface ExecOptions {
   env: Record<string, string | undefined>;
   timeoutMs: number;
-  /** Capture stdout instead of streaming it to the job log. */
+  /**
+   * Capture both streams instead of letting them reach the job log.
+   *
+   * Every use of this is a *question* the action asks and then interprets —
+   * `rustc --version --verbose`, `rustup --help`, `<tool> --version` — never a
+   * command whose progress a reader wants to watch. Withholding stderr matters
+   * as much as capturing stdout, because a question that comes back the wrong
+   * way is not a failure: `cargo-binstall --version` exits 2 complaining that
+   * `--version <VERSION>` needs a value, and inheriting that puts `error:` in
+   * the log of a run that succeeded, attributed to nothing.
+   */
   capture?: boolean;
 }
 
@@ -226,7 +247,15 @@ function readRustcVersion(
     throw new Error(`rustc could not run: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    throw new Error(`rustc --version failed with exit code ${result.status}`);
+    // The captured stderr, appended when there is any. This is the only
+    // captured command whose failure is fatal, so it is the only place the
+    // withheld text is still worth showing — and without it the message is
+    // an exit code and nothing else.
+    const detail = result.stderr?.trim();
+    throw new Error(
+      `rustc --version failed with exit code ${result.status}` +
+        (detail ? `: ${detail}` : ""),
+    );
   }
 
   const banner = result.stdout ?? "";

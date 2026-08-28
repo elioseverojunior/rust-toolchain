@@ -9,6 +9,7 @@ import type {
   RegistryClient,
   ResolveDeps,
   ResolvedTool,
+  ToolExecOptions,
   ToolExecResult,
   ToolSpec,
 } from "@/tools";
@@ -523,11 +524,23 @@ interface ExecCall {
  */
 const runner = (
   answers: Record<string, ToolExecResult[]> = {},
-): EnsureDeps & { calls: ExecCall[]; pauses: number[] } => {
+): EnsureDeps & {
+  calls: ExecCall[];
+  /**
+   * The options each call was made with, kept beside `calls` rather than
+   * folded into it: `capture` is invisible in the returned value, so every
+   * existing assertion on the argv would have to grow a field it does not
+   * care about to let one test see it.
+   */
+  opts: ToolExecOptions[];
+  pauses: number[];
+} => {
   const calls: ExecCall[] = [];
+  const opts: ToolExecOptions[] = [];
   const pauses: number[] = [];
   return {
     calls,
+    opts,
     pauses,
     env: {},
     attempts: 3,
@@ -538,8 +551,9 @@ const runner = (
     },
     log: { info: (): void => {}, warning: (): void => {} },
     binRestoredExactly: false,
-    exec: (file, args): ToolExecResult => {
+    exec: (file, args, options): ToolExecResult => {
       calls.push({ file, args });
+      opts.push(options);
       return answers[file]?.shift() ?? { status: 0, stdout: "" };
     },
   };
@@ -635,17 +649,110 @@ describe("ensureTools", () => {
     expect(outcomes[0]?.action).toBe("installed");
   });
 
-  // The real case this distinction exists for. `cargo-binstall`'s clap parser
-  // defines `--version <VERSION>` as the crate version to install, shadowing
-  // the conventional flag, so the probe exits non-zero with
-  // "a value is required for '--version <VERSION>'". Read as "absent", that
-  // rebuilds it from source on every job and discards the `bin` layer that had
-  // just restored it — three minutes of `cargo install` per run.
+  // The real case, and it is not muteness. `cargo-binstall`'s clap parser
+  // defines `--version <VERSION>` as the crate version to INSTALL, shadowing
+  // the conventional flag entirely, so `cargo-binstall --version` exits 2 with
+  // "a value is required for '--version <VERSION>'". `-V` is untouched and
+  // answers `1.21.1` (verified against 1.21.1 on disk). Asking it is what
+  // keeps the tool off the install path in EVERY cache state rather than only
+  // when `bin` happened to hit exactly — and `cargo install cargo-binstall`
+  // does not finish: three 15-minute attempts to a 46m22s ETIMEDOUT, measured.
+  it("falls back to -V when --version names no version", () => {
+    const deps = runner({
+      "cargo-binstall": [
+        { status: 2, stdout: "" },
+        { status: 0, stdout: "1.21.1\n" },
+      ],
+    });
+
+    const outcomes = ensureTools(
+      resolution([{ name: "cargo-binstall", version: "1.21.1" }]),
+      deps,
+    );
+
+    expect(outcomes).toEqual([
+      { name: "cargo-binstall", version: "1.21.1", action: "kept" },
+    ]);
+    // The whole point: no exact `bin` hit was needed. A tool that names its
+    // own version is kept on that evidence alone, warm cache or cold.
+    expect(deps.binRestoredExactly).toBe(false);
+    expect(deps.calls).toEqual([
+      { file: "cargo-binstall", args: ["--version"] },
+      { file: "cargo-binstall", args: ["-V"] },
+    ]);
+  });
+
+  // The fallback is driven by "named no version", never by the exit code alone:
+  // a tool can answer `--version` happily and still print nothing a version can
+  // be read from. Answering with no `stdout` field at all asks that at its
+  // sharpest — `spawnSync` leaves it undefined when a stream produced nothing —
+  // so this pins the `?? ""` guard in the same breath.
+  it("falls back to -V when --version exits zero but says nothing", () => {
+    const deps = runner({
+      "cargo-binstall": [{ status: 0 }, { status: 0, stdout: "1.21.1\n" }],
+    });
+
+    const outcomes = ensureTools(
+      resolution([{ name: "cargo-binstall", version: "1.21.1" }]),
+      deps,
+    );
+
+    expect(outcomes[0]?.action).toBe("kept");
+    expect(deps.calls).toEqual([
+      { file: "cargo-binstall", args: ["--version"] },
+      { file: "cargo-binstall", args: ["-V"] },
+    ]);
+  });
+
+  // A flag that exits non-zero was the wrong question, and whatever it printed
+  // is not the answer to a different one. `cargo-binstall`'s own failure text
+  // is the reason to care: usage output carries version-shaped strings, and
+  // believing one would report the tool as being at a version it never named.
+  // Read with no exact `bin` hit, so "believed" and "mute" have visibly
+  // different outcomes rather than both landing on `kept`.
+  it("does not read a version from a probe that exited non-zero", () => {
+    const deps = runner({
+      "cargo-deny": [
+        { status: 1, stdout: "cargo-deny 0.16.1" },
+        { status: 1, stdout: "cargo-deny 0.16.1" },
+      ],
+    });
+
+    const outcomes = ensureTools(
+      resolution([{ name: "cargo-deny", version: "0.16.1" }]),
+      deps,
+    );
+
+    expect(outcomes[0]?.action).toBe("installed");
+  });
+
+  // `capture` is the half of the probe that keeps a wrong question out of the
+  // job log, and it changes nothing about the value that comes back — which is
+  // exactly why it needs an assertion of its own. Without it `spawnSync`
+  // inherits stderr, and `cargo-binstall --version` publishes
+  // `error: a value is required for '--version <VERSION>'` into a run that
+  // succeeded, attributed to nothing.
+  it("captures the output of every probe rather than letting it reach the log", () => {
+    const deps = runner({
+      "cargo-binstall": [
+        { status: 2, stdout: "" },
+        { status: 0, stdout: "1.21.1" },
+      ],
+    });
+
+    ensureTools(
+      resolution([{ name: "cargo-binstall", version: "1.21.1" }]),
+      deps,
+    );
+
+    expect(deps.opts.map((options) => options.capture)).toEqual([true, true]);
+  });
+
   it("keeps a mute binary when the bin layer hit exactly", () => {
     const deps = runner({
       "cargo-binstall": [
         { status: 2, stdout: "" },
-        { status: 0, stdout: "" },
+        { status: 2, stdout: "" },
       ],
     });
     deps.binRestoredExactly = true;
@@ -658,15 +765,24 @@ describe("ensureTools", () => {
     expect(outcomes).toEqual([
       { name: "cargo-binstall", version: "1.21.1", action: "kept" },
     ]);
-    // Nothing but the probe ran: no `cargo install` at all.
-    expect(deps.calls.map((c) => c.file)).toEqual(["cargo-binstall"]);
+    // Both probes ran and neither answered; nothing else did. No
+    // `cargo install` at all.
+    expect(deps.calls).toEqual([
+      { file: "cargo-binstall", args: ["--version"] },
+      { file: "cargo-binstall", args: ["-V"] },
+    ]);
   });
 
   // Without an exact hit the ladder may have restored an older tool set, so a
-  // binary that will not name its version proves nothing and a pinned version
-  // would be silently wrong.
+  // binary that will not name its version through EITHER flag proves nothing
+  // and a pinned version would be silently wrong.
   it("installs a mute binary when the bin layer did not hit exactly", () => {
-    const deps = runner({ "cargo-binstall": [{ status: 2, stdout: "" }] });
+    const deps = runner({
+      "cargo-binstall": [
+        { status: 2, stdout: "" },
+        { status: 2, stdout: "" },
+      ],
+    });
 
     const outcomes = ensureTools(
       resolution([{ name: "cargo-binstall", version: "1.21.1" }]),
@@ -674,7 +790,11 @@ describe("ensureTools", () => {
     );
 
     expect(outcomes[0]?.action).toBe("installed");
-    expect(deps.calls.map((c) => c.file)).toEqual(["cargo-binstall", "cargo"]);
+    expect(deps.calls.map((c) => c.file)).toEqual([
+      "cargo-binstall",
+      "cargo-binstall",
+      "cargo",
+    ]);
   });
 
   // The `version === undefined` conjunct, the other half nothing pinned. An

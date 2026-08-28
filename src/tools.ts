@@ -297,11 +297,20 @@ export interface ToolExecOptions {
 /**
  * Everything `ensureTools` touches outside itself.
  *
- * The exec signature is structurally identical to `ActionDeps`'s and is
- * redeclared rather than imported on purpose: `src/action.ts` imports this
- * module, so taking its type would be a cycle. Same reasoning as `InputReader`
- * in `src/inputs.ts`, and the same reason `ResolveDeps` takes its retry policy
- * as values rather than reading `action.ts`'s constants.
+ * The exec signature is redeclared rather than imported on purpose:
+ * `src/action.ts` imports this module, so taking its type would be a cycle.
+ * Same reasoning as `InputReader` in `src/inputs.ts`, and the same reason
+ * `ResolveDeps` takes its retry policy as values rather than reading
+ * `action.ts`'s constants.
+ *
+ * Compatible with `ActionDeps`'s rather than identical to it, and the gap is
+ * deliberate: `ExecResult` carries a captured `stderr` and `ToolExecResult`
+ * does not, because nothing here has any use for it. A probe's stderr is the
+ * noise this module exists to interpret away — `cargo-binstall --version`
+ * complaining that `--version <VERSION>` wants a value says only that the flag
+ * was the wrong question, which `VERSION_FLAGS` answers by asking another one.
+ * Return-type covariance means the richer function still satisfies this, so
+ * `action.ts` hands over the same `exec` unchanged.
  *
  * `sleep` is synchronous here where `ResolveDeps.delay` is not, and the
  * difference is not an oversight: installs run through `spawnSync`, one at a
@@ -354,28 +363,57 @@ export function parseToolVersion(output: string): string | undefined {
  * `present` and `version` are deliberately separate. Collapsing them into one
  * `string | undefined` conflates "the binary is not there" with "the binary is
  * there and will not tell me", and the two demand opposite responses: the
- * first has to install, the second usually must not. `cargo-binstall` is the
- * case that forces the distinction — its clap parser defines
- * `--version <VERSION>` as the crate version to install, shadowing the
- * conventional flag entirely, so `cargo-binstall --version` exits non-zero
- * with `a value is required for '--version <VERSION>'`. Read as "absent", that
- * rebuilds it from source on every job, discarding the `bin` layer that had
- * just restored it.
+ * first has to install, the second usually must not.
+ *
+ * The muteness half is a much narrower claim than it looks, and `cargo-binstall`
+ * is the reason to say so: it was the case that forced this distinction, and it
+ * is not actually mute. See `VERSION_FLAGS`.
  */
 type ToolProbe = { present: false } | { present: true; version?: string };
 
+/**
+ * The flags a tool is asked its version through, in the order they are tried.
+ *
+ * `--version` alone is not enough, and `cargo-binstall` is the proof: its clap
+ * parser defines `--version <VERSION>` as the crate version to INSTALL, which
+ * shadows the conventional flag entirely, so `cargo-binstall --version` exits 2
+ * with `a value is required for '--version <VERSION>'` — while `-V`, untouched,
+ * answers `1.21.1`. A tool that redefines the long flag is not a tool that
+ * refuses to name itself, and reading it as one is expensive twice over: the
+ * error text lands in the job log of a run that succeeded, and without an exact
+ * `bin` hit to ride on the tool is handed to `cargo install`, which for
+ * `cargo-binstall` does not finish — three 15-minute attempts to a 46m22s
+ * `ETIMEDOUT`, measured.
+ *
+ * Order is load-bearing in both directions. `--version` goes first because
+ * nearly every tool answers it, so the common case still costs exactly one
+ * spawn and the second flag is never reached. `-V` goes second, never first,
+ * because a single letter is scarce enough that a tool may well have spent it
+ * on something of its own; asking it only after the long form came back empty
+ * confines any such surprise to tools that had already told us nothing.
+ */
+const VERSION_FLAGS = ["--version", "-V"] as const;
+
 /** Asks an installed tool its version, distinguishing absent from mute. */
 function probeTool(name: string, deps: EnsureDeps): ToolProbe {
-  const result = deps.exec(name, ["--version"], {
-    env: deps.env,
-    timeoutMs: deps.timeoutMs,
-    capture: true,
-  });
-  // A spawn error is the only evidence that the binary is not there at all.
-  // Anything that ran — whatever it exited with — is installed.
-  if (result.error) return { present: false };
-  if (result.status !== 0) return { present: true };
-  return { present: true, version: parseToolVersion(result.stdout ?? "") };
+  for (const flag of VERSION_FLAGS) {
+    const result = deps.exec(name, [flag], {
+      env: deps.env,
+      timeoutMs: deps.timeoutMs,
+      capture: true,
+    });
+    // A spawn error is the only evidence that the binary is not there at all,
+    // and it settles the question outright: there is no binary left to ask a
+    // second flag of, so the remaining probes are skipped rather than spent.
+    if (result.error) return { present: false };
+    // Anything that ran — whatever it exited with — is installed. A non-zero
+    // exit only means this particular flag was the wrong question.
+    if (result.status !== 0) continue;
+    const version = parseToolVersion(result.stdout ?? "");
+    if (version !== undefined) return { present: true, version };
+  }
+  // Ran, and named no version through any flag we know to ask.
+  return { present: true };
 }
 
 /**
@@ -468,10 +506,10 @@ export function ensureTools(
       return { name: tool.name, version: tool.version, action: "kept" };
     }
 
-    // Present, ran, and reported nothing a version could be read from. An
-    // exact `bin` restore already proves it is the binary this tool set
+    // Present, ran, and named no version through any flag in `VERSION_FLAGS`.
+    // An exact `bin` restore already proves it is the binary this tool set
     // resolved to, so reinstalling would spend minutes rebuilding what the
-    // cache just supplied — which is exactly what `cargo-binstall` did.
+    // cache just supplied.
     if (probe.present && version === undefined && deps.binRestoredExactly) {
       deps.log.info(
         `${tool.name}: restored from an exact bin cache hit and does not ` +

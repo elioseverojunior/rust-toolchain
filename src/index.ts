@@ -159,12 +159,21 @@ if (process.env.STATE_isPost === "true") {
       const result = spawnSync(file, args, {
         env: opts.env,
         timeout: opts.timeoutMs,
-        stdio: opts.capture ? ["ignore", "pipe", "inherit"] : "inherit",
+        // Both streams, not just stdout. `capture` marks a question the action
+        // asks and then interprets, and inheriting stderr published the
+        // child's complaint about a question it did not like straight into the
+        // job log, unattributed and looking like a failure —
+        // `cargo-binstall --version` exits 2 with
+        // `error: a value is required for '--version <VERSION>'`, which read
+        // as an error in a run that succeeded. The text is carried back in
+        // `stderr` instead, for the caller to surface if it matters.
+        stdio: opts.capture ? ["ignore", "pipe", "pipe"] : "inherit",
         encoding: "utf-8",
       });
       return {
         status: result.status,
         stdout: result.stdout ?? undefined,
+        stderr: result.stderr ?? undefined,
         error: result.error,
       };
     },

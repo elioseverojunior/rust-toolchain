@@ -62917,17 +62917,23 @@ function hashToolSet(tools) {
 function parseToolVersion(output) {
   return /(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)/.exec(output)?.[1];
 }
+var VERSION_FLAGS = ["--version", "-V"];
 function probeTool(name, deps) {
-  const result = deps.exec(name, ["--version"], {
-    env: deps.env,
-    timeoutMs: deps.timeoutMs,
-    capture: true
-  });
-  if (result.error)
-    return { present: false };
-  if (result.status !== 0)
-    return { present: true };
-  return { present: true, version: parseToolVersion(result.stdout ?? "") };
+  for (const flag of VERSION_FLAGS) {
+    const result = deps.exec(name, [flag], {
+      env: deps.env,
+      timeoutMs: deps.timeoutMs,
+      capture: true
+    });
+    if (result.error)
+      return { present: false };
+    if (result.status !== 0)
+      continue;
+    const version3 = parseToolVersion(result.stdout ?? "");
+    if (version3 !== undefined)
+      return { present: true, version: version3 };
+  }
+  return { present: true };
 }
 function installTool(tool, deps) {
   const args = [
@@ -63580,7 +63586,8 @@ function readRustcVersion(deps, env) {
     throw new Error(`rustc could not run: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    throw new Error(`rustc --version failed with exit code ${result.status}`);
+    const detail = result.stderr?.trim();
+    throw new Error(`rustc --version failed with exit code ${result.status}` + (detail ? `: ${detail}` : ""));
   }
   const banner = result.stdout ?? "";
   return { info: parseRustcVersion(banner), banner };
@@ -64184,12 +64191,13 @@ if (process.env.STATE_isPost === "true") {
       const result = spawnSync(file, args, {
         env: opts.env,
         timeout: opts.timeoutMs,
-        stdio: opts.capture ? ["ignore", "pipe", "inherit"] : "inherit",
+        stdio: opts.capture ? ["ignore", "pipe", "pipe"] : "inherit",
         encoding: "utf-8"
       });
       return {
         status: result.status,
         stdout: result.stdout ?? undefined,
+        stderr: result.stderr ?? undefined,
         error: result.error
       };
     },
