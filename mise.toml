@@ -24,7 +24,7 @@ quiet = true
 # Node version is read from package.json engines field via idiomatic_version_file
 # bun and gh are provisioned by mise directly
 actionlint = { version = "latest" }
-bun = { version = "1.3" }
+bun = { version = "1.4" }
 gh = { version = "latest" }
 gitleaks = { version = "latest" }
 
@@ -41,8 +41,8 @@ gitleaks = { version = "latest" }
 
 [env]
 ARCH = "{{exec(command='uname -m')}}"
-GITHUB_TOKEN = "{{env.GITHUB_TOKEN | default(value='')}}"
-PROJECT_NAME = "{{exec(command='basename $PWD')}}"
+PROJECT_NAME = "{{exec(command='basename $(git config --get remote.origin.url) .git || {{ config_root }}')}}"
+_.file = ".env"
 
 [hooks]
 enter = { task = "setup" }
@@ -154,6 +154,29 @@ run = "mise run update-actions-pins --write --apply-major"
 alias = ["hk:check"]
 description = "Run every hk lint over the whole repo -- exactly the CI Lint job"
 run = "hk check --all"
+
+[tasks."hk:fix"]
+alias = ["hkf", "hk:fix:all"]
+description = "Run every hk step in FIX mode over the whole repo"
+run = '''
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+# `hk fix` runs the `fix` hook, which is `complete` = linters + tests. That is a
+# wider set than `hk check` (linters only), so this both repairs the fixable
+# steps and runs the suite. Steps with no `fix` command -- gitleaks, typecheck,
+# actionlint -- still only report; fixing those is on you.
+#
+# --all is what makes this operate on the whole repo rather than on staged
+# files, matching `mise run hk`. Without it hk falls back to the git index and
+# would silently skip everything not staged.
+hk fix --all "$@"
+'''
+shell = "bash -c"
+usage = '''
+flag "-v --verbose" help="Print each hk step as it runs"
+'''
 
 # === Testing ===
 [tasks.test]
