@@ -449,6 +449,29 @@ describe("run", () => {
     expect(h.failures[0]).toMatch(/rustc/);
   });
 
+  // A captured command no longer inherits stderr: a probe's complaint has no
+  // business in the log of a run that succeeded. That makes this the one place
+  // a captured failure is fatal, so it has to carry the text itself — without
+  // it the leak fix would trade a noisy log for a mute one, and "failed with
+  // exit code 3" is not a diagnosis of anything.
+  it("reports rustc's own stderr when it exits non-zero", async () => {
+    const h = harness({
+      execResults: {
+        "--version --verbose": [
+          {
+            status: 3,
+            stdout: "",
+            stderr: "error: toolchain 'nightly-2020-01-01' is not installed",
+          },
+        ],
+      },
+    });
+    await run(h.deps);
+    expect(h.failures[0]).toContain(
+      "toolchain 'nightly-2020-01-01' is not installed",
+    );
+  });
+
   it("reads channel and targets from rust-toolchain.toml", async () => {
     const h = harness({
       toml: `[toolchain]\nchannel = "1.89.0"\ntargets = ["wasm32-unknown-unknown"]`,
