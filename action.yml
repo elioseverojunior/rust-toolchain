@@ -134,10 +134,20 @@ inputs:
   cargo-tools:
     description: >
       Cargo-installed tools to make available, comma, space or newline
-      separated. Each entry is `<name>` or `<name>@<version>`, where the
-      version may be `latest`; a bare name means `latest`. A tool already
-      present at the requested version is left alone, so a restored `bin`
-      cache layer makes most runs install nothing.
+      separated. Each entry is `<name>`, `<name>@<version>` or
+      `<name>@<version>:<binary>`, where the version may be `latest`; a bare
+      name means `latest`. A tool already present at the requested version is
+      left alone, so a restored `bin` cache layer makes most runs install
+      nothing.
+      The optional `:<binary>` suffix names the executable to check for when
+      the crate does not install one named after itself — `ignorefile-cli`
+      ships `ign` and `ignorefile`, so without
+      `ignorefile-cli@0.1.0:ign` the check finds nothing, treats the tool as
+      absent and rebuilds it from source on every run even on a `bin` cache
+      hit. It redirects that check and nothing else: the crate name is still
+      what gets installed, and both the `cargo-tools` output and the `bin`
+      cache key are unchanged by it, so adding the suffix to an existing
+      workflow still hits the entry that workflow already has.
       A pinned version never contacts crates.io, which is what keeps a
       registry outage from affecting it. An unpinned one is resolved there,
       and if that fails the action falls back to a binary of the same name

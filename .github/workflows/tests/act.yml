@@ -38,7 +38,14 @@ jobs:
             # `ignorefile-cli`, not `ignorefile`: the latter is the library half
             # of the same project and ships no binary, so `cargo install` exits
             # with "there is nothing to install".
-            cargo-tools: "comply@0.1.1, ignorefile-cli@0.1.0"
+            #
+            # `:ign` is the point of this entry, not decoration. Without it the
+            # probe asks `ignorefile-cli --version`, spawn-errors, reads the
+            # tool as absent and rebuilds it from source on every run — 10.9s of
+            # a 33.7s action, on top of an exact `bin` hit that had already put
+            # both binaries on disk. `comply` needs no suffix: its binary is
+            # named after its crate, which is why the suffix is optional.
+            cargo-tools: "comply@0.1.1, ignorefile-cli@0.1.0:ign"
             # Binaries, not crate names — `ignorefile-cli` installs `ign` and
             # `ignorefile`.
             tool-bins: "comply ignorefile ign"
@@ -357,10 +364,16 @@ jobs:
         if: matrix.cargo-tools != ''
         shell: bash
         # Asserts the *binaries*, not the crate names. They diverge here:
-        # `ignorefile-cli` installs `ign` and `ignorefile`, which also means the
-        # action's `<name> --version` probe can never find it under its own
-        # crate name and will reinstall it on every run — the `bin` layer cannot
-        # help a tool it is unable to recognise.
+        # `ignorefile-cli` installs `ign` and `ignorefile`, which is why its
+        # entry carries the `:ign` suffix — without one the action's
+        # `<name> --version` probe can never find it under its own crate name
+        # and reinstalls it every run, since the `bin` layer cannot help a tool
+        # it is unable to recognise.
+        #
+        # The output is checked to have NOT grown the suffix. It is a probe
+        # hint, not part of what was installed, and consumers hash this output
+        # to reproduce the `bin` cache key — so leaking `:ign` here would put
+        # the two permanently out of step.
         env:
           RESOLVED: ${{ steps.rust-toolchain.outputs.cargo-tools }}
           TOOL_BINS: ${{ matrix.tool-bins }}
@@ -381,6 +394,14 @@ jobs:
           # throwing, so a registry outage would otherwise pass silently here.
           if [[ "$RESOLVED" == *UNRESOLVED_VERSION* ]]; then
             echo "a tool version never resolved: $RESOLVED"
+            exit 1
+          fi
+
+          # The `:<binary>` suffix redirects the probe and must not reach the
+          # published set. A unit test pins the same thing, but only this one
+          # sees the value that actually crossed the action boundary.
+          if [[ "$RESOLVED" == *:* ]]; then
+            echo "::error::cargo-tools output leaked a probe binary: $RESOLVED"
             exit 1
           fi
 

@@ -18,6 +18,22 @@ import { describeError } from "@rust-toolchain/errors";
 export interface ToolSpec {
   name: string;
   version: string;
+  /**
+   * The binary to probe, when it is not named after the crate.
+   *
+   * `ensureTools` asks `<name> --version` whether a tool is already installed,
+   * and a spawn error is the only evidence it accepts that the tool is absent.
+   * That reading is wrong for a crate whose binaries carry other names —
+   * `ignorefile-cli` ships `ign` and `ignorefile` — so the probe spawn-errors,
+   * the tool reads as absent, and it is rebuilt from source on every run on top
+   * of an exact `bin` cache hit that had already restored it.
+   *
+   * Optional because the crate name is the right default for almost every
+   * crate, and deliberately absent rather than defaulted to the name: an unset
+   * field says "nothing was declared", which is what keeps the fallback in one
+   * place at the probe rather than smeared across the parser and resolver too.
+   */
+  bin?: string;
 }
 
 /** What a bare name resolves to, and the only non-version `version` value. */
@@ -59,33 +75,47 @@ export function parseToolSpecs(value: string): ToolSpec[] {
 }
 
 /**
- * Splits one `<name>[@<version>]` entry.
+ * Splits one `<name>[@<version>][:<binary>]` entry.
  *
  * Split on the FIRST `@`, so a second one stays in the version where the
  * identifier check rejects it. Splitting on the last would read
  * `cargo-deny@0.16.1@2.0` as the plausible-looking name `cargo-deny@0.16.1`.
+ * The `:` split follows the same rule for the same reason, and runs first so
+ * the `@` search never sees the suffix — which is what makes
+ * `ignorefile-cli:ign@0.1.0` fail naming the binary, rather than silently
+ * parsing as a crate called `ignorefile-cli` with no version.
  */
 function toSpec(entry: string): ToolSpec {
-  const at = entry.indexOf("@");
-  const name = at === -1 ? entry : entry.slice(0, at);
-  const version = at === -1 ? LATEST : entry.slice(at + 1);
+  const colon = entry.indexOf(":");
+  const crate = colon === -1 ? entry : entry.slice(0, colon);
+  const bin = colon === -1 ? undefined : entry.slice(colon + 1);
+
+  const at = crate.indexOf("@");
+  const name = at === -1 ? crate : crate.slice(0, at);
+  const version = at === -1 ? LATEST : crate.slice(at + 1);
 
   assertIdentifier("name", name, entry);
   assertIdentifier("version", version, entry);
 
-  return { name, version };
+  // Returned without the key rather than with an undefined one, so "no binary
+  // was declared" is the absence of a field everywhere downstream.
+  if (bin === undefined) return { name, version };
+
+  assertIdentifier("binary", bin, entry);
+  return { name, version, bin };
 }
 
 function assertIdentifier(
-  kind: "name" | "version",
+  kind: "name" | "version" | "binary",
   value: string,
   entry: string,
 ): void {
   if (isRustupIdentifier(value)) return;
   throw new Error(
     `"${value}" is not a valid cargo tool ${kind}, in \`cargo-tools\` entry ` +
-      `"${entry}". Entries look like \`<name>\` or \`<name>@<version>\`, ` +
-      "where both halves are letters, digits, dots, underscores and dashes.",
+      `"${entry}". Entries look like \`<name>\`, \`<name>@<version>\` or ` +
+      "`<name>@<version>:<binary>`, where every part is letters, digits, " +
+      "dots, underscores and dashes.",
   );
 }
 
@@ -104,6 +134,8 @@ export interface RegistryClient {
 export interface ResolvedTool {
   name: string;
   version: string;
+  /** The declared probe target, carried through from `ToolSpec.bin`. */
+  bin?: string;
 }
 
 /** A tool the registry could not answer for, and why. */
@@ -188,17 +220,22 @@ export async function resolveToolVersions(
 }
 
 async function resolveOne(spec: ToolSpec, deps: ResolveDeps): Promise<Outcome> {
+  // Spread rather than rebuilt field by field: a resolved tool IS the spec with
+  // a concrete version, and every path out of here has to carry `bin` through.
+  // Naming the fields instead would make dropping it on one of the three a
+  // one-line omission that no type error catches, since `bin` is optional.
+  //
   // A pinned version is already concrete. Returning before touching the client
   // is what makes a registry outage unable to affect a pinned tool at all.
   if (spec.version !== LATEST) {
-    return { tool: { name: spec.name, version: spec.version } };
+    return { tool: { ...spec } };
   }
 
   let reason = "";
   for (let attempt = 1; attempt <= deps.attempts; attempt++) {
     try {
       const version = await deps.client.latestVersion(spec.name);
-      return { tool: { name: spec.name, version } };
+      return { tool: { ...spec, version } };
     } catch (error) {
       // The last failure is the one reported: an intermittent first error is
       // less use than whatever the registry said when it finally gave up.
@@ -210,7 +247,7 @@ async function resolveOne(spec: ToolSpec, deps: ResolveDeps): Promise<Outcome> {
   }
 
   return {
-    tool: { name: spec.name, version: UNRESOLVED_VERSION },
+    tool: { ...spec, version: UNRESOLVED_VERSION },
     failure: { name: spec.name, reason },
   };
 }
@@ -400,7 +437,11 @@ export function ensureTools(
   const unresolved = new Set(resolution.unresolved.map((tool) => tool.name));
 
   return resolution.tools.map((tool) => {
-    const probe = probeTool(tool.name, deps);
+    // The declared binary if there is one, the crate name otherwise. This
+    // fallback is the ONLY place the default lives: `cargo install` still takes
+    // `tool.name`, and the outputs and the `bin` cache key still read
+    // `name@version`, so a declared binary redirects the probe and nothing else.
+    const probe = probeTool(tool.bin ?? tool.name, deps);
     // Narrowed once: `version` is only meaningful when the binary is present,
     // and reading it through the union at each use would not type-check.
     const version = probe.present ? probe.version : undefined;
