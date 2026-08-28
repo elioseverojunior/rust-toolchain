@@ -48,6 +48,40 @@ describe("parseToolSpecs", () => {
     ]);
   });
 
+  // `ignorefile-cli` installs binaries named `ign` and `ignorefile`, so probing
+  // the crate name finds nothing, reads as absent, and rebuilds from source on
+  // every run — even on top of an exact `bin` hit that had just put both
+  // binaries on disk. Measured at 10.9s of a 33.7s action on
+  // rustup-toolchain-tests run 31744249910. Declaring the binary is what lets
+  // the probe see what the cache restored.
+  it("reads a declared binary name", () => {
+    expect(parseToolSpecs("ignorefile-cli@0.1.0:ign")).toEqual([
+      { name: "ignorefile-cli", version: "0.1.0", bin: "ign" },
+    ]);
+  });
+
+  // Every part is independently optional, so the suffix does not force a pin.
+  it("accepts a declared binary without a version", () => {
+    expect(parseToolSpecs("ignorefile-cli:ign")).toEqual([
+      { name: "ignorefile-cli", version: "latest", bin: "ign" },
+    ]);
+  });
+
+  // The probe target defaults to the crate name, which is right for the
+  // overwhelming majority of crates and is why the suffix is optional at all.
+  //
+  // `toStrictEqual`, not `toEqual`: the key must be ABSENT, not present and
+  // undefined. `toEqual` reads those as the same object, and mutation testing
+  // found the gap — deleting `toSpec`'s early return survives, because the
+  // fallthrough then validates the string "undefined" (which matches the
+  // identifier class) and returns `bin: undefined`. Nothing downstream can
+  // currently tell the difference, so this is the only place that can.
+  it("leaves the binary unset when none is declared", () => {
+    expect(parseToolSpecs("cargo-deny@0.16.1")).toStrictEqual([
+      { name: "cargo-deny", version: "0.16.1" },
+    ]);
+  });
+
   // The same separator grammar as `targets` and `components`, so a workflow
   // can write the list however reads best.
   it.each([
@@ -111,6 +145,36 @@ describe("parseToolSpecs", () => {
         /not a valid cargo tool version/,
       );
     });
+
+    it("rejects a trailing : with no binary", () => {
+      expect(() => parseToolSpecs("cargo-deny@0.16.1:")).toThrow(
+        /not a valid cargo tool binary/,
+      );
+    });
+
+    // Split on the FIRST `:`, the same rule the `@` split follows, so a second
+    // one stays in the binary where the identifier class rejects it.
+    it("rejects an entry with more than one :", () => {
+      expect(() => parseToolSpecs("ignorefile-cli@0.1.0:ign:extra")).toThrow(
+        /not a valid cargo tool binary/,
+      );
+    });
+
+    // The version binds to the crate, never to the binary, so the suffix comes
+    // last. Writing it the other way round is a mistake worth naming precisely.
+    it("rejects a binary written before the version", () => {
+      expect(() => parseToolSpecs("ignorefile-cli:ign@0.1.0")).toThrow(
+        /not a valid cargo tool binary/,
+      );
+    });
+
+    // The binary reaches the probe as argv, so it earns the same guard the
+    // name and version get rather than being trusted for being a hint.
+    it("rejects a binary carrying shell syntax", () => {
+      expect(() => parseToolSpecs("ignorefile-cli@0.1.0:ign;id")).toThrow(
+        /not a valid cargo tool binary/,
+      );
+    });
   });
 
   // Two pinned versions of one tool cannot both be installed, and picking one
@@ -125,6 +189,15 @@ describe("parseToolSpecs", () => {
     expect(() => parseToolSpecs("cargo-deny,cargo-deny")).toThrow(
       /more than once/,
     );
+  });
+
+  // Deduplication keys on the crate, not on the whole entry. Two `:` suffixes
+  // no more make two installs possible than two versions do — cargo installs a
+  // crate once, whichever of its binaries you name.
+  it("rejects a duplicate crate even when the binaries differ", () => {
+    expect(() =>
+      parseToolSpecs("ignorefile-cli:ign,ignorefile-cli:ignorefile"),
+    ).toThrow(/more than once/);
   });
 });
 
@@ -190,6 +263,33 @@ describe("resolveToolVersions", () => {
     );
     expect(result.tools).toEqual([{ name: "cargo-deny", version: "0.16.1" }]);
     expect(result.unresolved).toEqual([]);
+    expect(client.calls).toEqual([]);
+  });
+
+  // The binary is a probe hint, not a resolution input, so it has to survive
+  // both ways out of `resolveOne` — the pinned early return as well as the
+  // lookup. Dropping it on either path silently restores the rebuild-every-run
+  // behaviour the suffix exists to remove.
+  it("carries a declared binary through a registry lookup", async () => {
+    const client = registry({ "ignorefile-cli": ["0.1.0"] });
+    const result = await resolveToolVersions(
+      [{ name: "ignorefile-cli", version: "latest", bin: "ign" }],
+      deps(client),
+    );
+    expect(result.tools).toEqual([
+      { name: "ignorefile-cli", version: "0.1.0", bin: "ign" },
+    ]);
+  });
+
+  it("carries a declared binary through a pinned version", async () => {
+    const client = registry({});
+    const result = await resolveToolVersions(
+      [{ name: "ignorefile-cli", version: "0.1.0", bin: "ign" }],
+      deps(client),
+    );
+    expect(result.tools).toEqual([
+      { name: "ignorefile-cli", version: "0.1.0", bin: "ign" },
+    ]);
     expect(client.calls).toEqual([]);
   });
 
@@ -372,6 +472,17 @@ describe("hashToolSet", () => {
     );
   });
 
+  // A declared binary changes nothing about what gets installed, so it must not
+  // change the key. If it did, adding `:ign` to an existing workflow would miss
+  // the very entry the suffix exists to make usable — paying one full rebuild
+  // to stop paying full rebuilds, and splitting the cache between the two
+  // spellings of one request forever after.
+  it("ignores a declared binary", () => {
+    expect(
+      hashToolSet([{ name: "ignorefile-cli", version: "0.1.0", bin: "ign" }]),
+    ).toBe(hashToolSet([tool("ignorefile-cli", "0.1.0")]));
+  });
+
   // Never special-cased to the empty string. `joinKeySegments` drops an empty
   // segment, so a tools-less job's `bin` key would collapse to
   // `bin-<os>-<arch>` while its widest restore rung stayed `bin-<os>-<arch>-` —
@@ -463,6 +574,52 @@ describe("ensureTools", () => {
     // distinction between "absent" and "present but mute" that this module
     // exists to draw is a statement about how that exact flag behaves.
     expect(deps.calls).toEqual([{ file: "cargo-deny", args: ["--version"] }]);
+  });
+
+  // The whole point of the suffix. `ignorefile-cli` ships `ign` and
+  // `ignorefile`, so probing the crate name spawn-errors, reads as absent, and
+  // reinstalls from source on top of an exact `bin` hit that had already put
+  // both binaries on disk. Note this needs no `binRestoredExactly`: a binary
+  // that names its version is kept on that evidence alone.
+  it("probes the declared binary rather than the crate name", () => {
+    const deps = runner({ ign: [{ status: 0, stdout: "ign 0.1.0" }] });
+
+    const outcomes = ensureTools(
+      resolution([{ name: "ignorefile-cli", version: "0.1.0", bin: "ign" }]),
+      deps,
+    );
+
+    expect(outcomes).toEqual([
+      { name: "ignorefile-cli", version: "0.1.0", action: "kept" },
+    ]);
+    expect(deps.calls).toEqual([{ file: "ign", args: ["--version"] }]);
+  });
+
+  // The suffix redirects the probe and nothing else: cargo installs a crate,
+  // and there is no `cargo install ign` to be had.
+  it("installs the crate name when the declared binary is absent", () => {
+    const deps = runner({ ign: [absent] });
+
+    const outcomes = ensureTools(
+      resolution([{ name: "ignorefile-cli", version: "0.1.0", bin: "ign" }]),
+      deps,
+    );
+
+    expect(outcomes[0]?.action).toBe("installed");
+    expect(deps.calls).toEqual([
+      { file: "ign", args: ["--version"] },
+      {
+        file: "cargo",
+        args: [
+          "install",
+          "ignorefile-cli",
+          "--version",
+          "0.1.0",
+          "--locked",
+          "--force",
+        ],
+      },
+    ]);
   });
 
   // Exact comparison, not containment: 0.16.1 is a substring of 0.16.10, and

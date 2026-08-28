@@ -416,6 +416,20 @@ describe("cargo-tools output", () => {
     expect(buildActionOutputs(args())["cargo-tools"]).toEqual([]);
   });
 
+  // A `ResolvedTool` may carry a declared probe binary, which is an input hint
+  // and not part of what was installed. The output is a published contract of
+  // `name@version` that consumers hash to reproduce the `bin` cache key, so the
+  // hint must not reach it — the same exclusion `hashToolSet` makes, pinned
+  // separately here because the two formats are deliberately independent.
+  it("omits a declared probe binary from the published entry", () => {
+    const outputs = buildActionOutputs(
+      args({
+        tools: [{ name: "ignorefile-cli", version: "0.1.0", bin: "ign" }],
+      }),
+    );
+    expect(outputs["cargo-tools"]).toEqual(["ignorefile-cli@0.1.0"]);
+  });
+
   // The list keeps the order the caller wrote, unlike the cache key, which
   // sorts before hashing so that reordering the input still hits the same
   // entry. Pinning both halves here because the two formats look alike and
