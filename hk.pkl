@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-amends "package://github.com/jdx/hk/releases/download/v1.54.0/hk@1.54.0#/Config.pkl"
-import "package://github.com/jdx/hk/releases/download/v1.54.0/hk@1.54.0#/Builtins.pkl"
+amends "package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1#/Builtins.pkl"
 
 local linters = new Mapping<String, Step> {
     ["check-added-large-files"] = new Step {
@@ -137,30 +137,38 @@ local linters = new Mapping<String, Step> {
     }
 }
 
-local tests = new Mapping<String, Step> {
+// `deps` is deliberately NOT a step here. `bun run deps` is
+// `npm-check-updates -u --target minor && bun install`, which REWRITES
+// `package.json` and `bun.lock` rather than inspecting them, and a step with no
+// `glob` matches every commit — so wiring it in bumped every dependency on a
+// README-only commit. A check-only step still runs in a `fix` hook (verified),
+// so declaring it with `check` rather than `fix` does not hold it back. A
+// dependency bump is a deliberate act with its own commit; run `bun run deps`
+// by hand.
+local bun = new Mapping<String, Step> {
     ["test"] = new Step {
-        glob = "*.ts"
         check = "bun run test"
     }
-}
-
-local builds = new Mapping<String, Step> {
+    // `stage` is load-bearing, not a nicety. hk re-stages a fix step's edits to
+    // the files it was HANDED, which is why eslint and prettier land in the
+    // commit; it does not stage collateral output, and `dist/index.js` is
+    // collateral — the glob matches `*.ts`, the bundle is not one of them.
+    // Without this the commit carries the OLD bundle while the working tree
+    // holds the new one, which is exactly what the CI Build job fails on
+    // (`git diff --exit-code dist/`). Verified against hk 1.51.0: with the key
+    // the commit captured the regenerated bundle, without it the commit kept
+    // the stale bytes and left `dist/` dirty afterwards.
     ["build"] = new Step {
         glob = "*.ts"
-        check = "bun run build"
+        stage = List("dist/**")
+        fix = "bun run build"
     }
 }
 
-local complete = (linters.toMap() + tests.toMap()).toMapping()
+local complete = (linters.toMap() + bun.toMap()).toMapping()
 
 hooks {
     ["pre-commit"] {
-        fix = true
-        stash = "git"
-        steps = linters
-    }
-
-    ["pre-commit:all"] {
         fix = true
         stash = "git"
         steps = complete
@@ -183,5 +191,11 @@ hooks {
         }
     }
 
+    // Empty on purpose. `pre-commit` already gates everything before the commit
+    // is sealed, and a post-commit step cannot fail one that has already
+    // happened. With `fix = true` it was actively harmful: hk leaves a
+    // post-commit fix UNSTAGED (verified), so every commit ended with a dirty
+    // tree, and the suite plus the bundle were rebuilt a second time per commit
+    // for a result nothing could act on.
     ["post-commit"] {}
 }
