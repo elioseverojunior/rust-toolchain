@@ -131,7 +131,7 @@ jobs:
           bun-version-file: "docs/.bun-version"
 
       - name: Setup Mise
-        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           install: false
 
@@ -223,7 +223,7 @@ jobs:
 
       - name: Deploy
         id: deploy
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
       # `github.repository` is the STRING "owner/repo", not an object, so
       # `github.repository.name` resolves to empty. `github.event.repository.name`
