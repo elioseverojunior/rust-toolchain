@@ -34,14 +34,14 @@
     "@docusaurus/module-type-aliases": "^3.10.2",
     "@docusaurus/tsconfig": "^3.10.2",
     "@docusaurus/types": "^3.10.2",
-    "@types/bun": "^1.4.0",
-    "@types/node": "^24.13.3",
+    "@types/bun": "^1.4.2",
+    "@types/node": "^26.5.1",
     "@types/react": "^19.2.18",
-    "mermaid": "^11.17.2",
-    "typescript": "^6.0.3"
+    "mermaid": "^12.0.0",
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "trustedDependencies": [
     "@swc/core",
